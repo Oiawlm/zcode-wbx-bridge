@@ -3,3 +3,6 @@
 
 node_modules/
 *.log
+
+# 内部文件（规划、执行提示词、冻结清单），绝不入库
+internal/

@@ -22,7 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '3.0.0';
+export const WBX_VERSION = '4.0.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -391,11 +391,17 @@ export function killTree(child) {
 export async function waitKills() { await Promise.allSettled([...pendingKills]); }
 export async function exitWith(code) { await waitKills(); process.exit(code); }
 
-export function spawnNode(args, { env, timeoutMs } = {}) {
+export function spawnNode(args, { env, timeoutMs, stdin } = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, args, { env: env || process.env, windowsHide: true, cwd: RUNTIME_ROOT });
     let stdout = '', stderr = '', timedOut = false, settled = false;
     const timer = timeoutMs ? setTimeout(() => { timedOut = true; killTree(child); }, timeoutMs) : null;
+    if (stdin != null) {
+      // v4 stdin 通道：超长提示词经 stdin 传入，绕过命令行长度上限（CLI -p 无位置参数时读 stdin）
+      child.stdin.on('error', () => { /* EPIPE 等忽略，主进程退出码会反映失败 */ });
+      child.stdin.write(stdin);
+      child.stdin.end();
+    }
     child.stdout.on('data', (b) => { stdout += b.toString('utf8'); });
     child.stderr.on('data', (b) => { stderr += b.toString('utf8'); });
     child.on('error', (err) => {
@@ -499,8 +505,12 @@ function normalizeResult(j) {
 export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000 }) {
   const laneKey = IDENTITIES[lane] ? lane : 'cn';
   const mdl = resolveModel(model);
+  // v4：超长提示词（>12k 字符）改走 stdin 通道（-p 不带位置参数），绕过命令行长度上限；
+  // 短提示词保持 v3 位置参数路径不变（对外行为零回退）
+  const useStdin = prompt.length > 12000;
   const args = [
-    resolveCliPath(), '-p', prompt,
+    resolveCliPath(), '-p',
+    ...(useStdin ? [] : [prompt]),
     '--model', mdl,
     '--tools', '',                       // 纯 LLM 无工具模式（对标桌面版 Quick 模式）
     '--output-format', 'json',
@@ -510,7 +520,7 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000 
   if (effort) args.push('--effort', effort);
 
   const t0 = Date.now();
-  const r = await spawnNode(args, { env: baseEnv(laneKey), timeoutMs });
+  const r = await spawnNode(args, { env: baseEnv(laneKey), timeoutMs, stdin: useStdin ? prompt : null });
   const durationMs = Date.now() - t0;
   const stdout = ansiStrip(r.stdout || '');
   const stderr = ansiStrip(r.stderr || '');
@@ -1114,23 +1124,25 @@ export function userBlockText(bridgeScriptPath) {
     USER_BLOCK_BEGIN,
     '## wbx 外部算力桥（全局主动分派）',
     '',
-    `本机装有 wbx 桥（入口 "${bridgeScriptPath}"）：把「相互独立、纯文本进出、单轮可完成」的子任务`,
-    '并行分派给 WorkBuddy 账号下的 DeepSeek V4.1 Flash（国际版免费 / 国内版近免费）。任何项目可用：',
+    `本机装有 wbx 桥（入口 "${bridgeScriptPath}"）：把「相互独立、自包含、单轮可完成」的子任务`,
+    '并行分派给 WorkBuddy 账号下的 DeepSeek V4.1 Flash（国际版免费 / 国内版近免费）。任何项目可用。',
+    '自包含（v4）：全部输入可由你打包进提示词（材料先行）、输出可独立校验即可外包——含代码模块编写：',
     '',
     '```bash',
     `${wbx} doctor                     # 先自检；凭证红 -> 提示用户 login，任务自己做`,
     `${wbx} ask --file <p.txt>           # 单条（--as ai|cn 指定 lane，默认路由见 config，失败自动回退）`,
-    `${wbx} fanout --file <tasks.json>   # 并行批量（结果落 ~/.wbx/jobs/<jobId>/）`,
+    `${wbx} fanout --file <tasks.json>   # 并行批量（任务可用 files:[路径] 拼材料；结果落 ~/.wbx/jobs/<jobId>/）`,
     '```',
     '',
     '主动分派时机（无需用户明说「外包/并行」）：',
     '- 需要并行调研/对比 >= 2 个对象（竞品、库、工具、软件）→ 每对象一个 worker 任务，要求带来源清单',
     '- 批量文本：翻译、摘要、改写、变体生成、结构化抽取、分类打标',
-    '- 接口清晰、可独立验证的代码模块，其中无上下文依赖的部分（主会话负责接口定义、集成、审查）',
+    '- 代码实现：接口清晰、材料可贴、可独立验证的模块（如一个文件拆五部分、外包两三部分）',
+    '  → 你定义接口契约，材料先行分派，负责集成与审查；产物必须审查/运行后才进交付物',
     '',
-    '规则：worker 提示词用「角色+任务+材料+输出硬约束+无工具声明」模板（详见桥 SKILL.md）；',
+    '规则：worker 提示词用「角色+任务+材料+输出硬约束+无工具声明」模板（详见桥 PROMPTS.md，含代码模板 T1）；',
     '结果必须校验后使用；涉密/隐私/凭证绝不外包；doctor FAIL、连续 >= 2 失败或限流 -> 停止外包，',
-    '改由自己完成并如实告知用户。完整文档/卸载：桥项目文件夹内 WBX.md、PLAN.md、UNINSTALL.md。',
+    '改由自己完成并如实告知用户。完整文档/卸载：桥项目文件夹内 WBX.md、UNINSTALL.md。',
     USER_BLOCK_END,
   ].join('\n');
 }

@@ -116,8 +116,8 @@ async function cmdAsk(opts) {
   else if (opts.stdin) prompt = await readStdin();
   if (!prompt || !prompt.trim()) die('缺少提示词：用 --file <path>、--text "<prompt>" 或 --stdin 提供');
 
-  if (prompt.length > 25000) {
-    console.error(`[WARN] 提示词 ${prompt.length} 字符，接近 Windows 命令行上限（约 32k），建议拆分或改用 --file`);
+  if (prompt.length > 12000) {
+    console.error(`[INFO] 提示词 ${prompt.length} 字符：超 12k 自动改走 stdin 通道（v4，无命令行长度限制）；材料过长会增加耗时与费用，建议按需裁剪`);
   }
 
   try {
@@ -150,9 +150,9 @@ async function cmdFanout(opts) {
   const tasksPath = path.resolve(opts.file);
   let raw;
   try { raw = JSON.parse(await fsp.readFile(tasksPath, 'utf8')); } catch (e) { die(`读取/解析 tasks.json 失败：${e.message}`); }
-  if (!Array.isArray(raw) || !raw.length) die('tasks.json 必须是非空数组：[{id, prompt|file, as?, model?, effort?}]');
+  if (!Array.isArray(raw) || !raw.length) die('tasks.json 必须是非空数组：[{id, prompt|file, as?, model?, effort?, files?}]');
 
-  // file 字段支持（相对 tasks.json 所在目录）
+  // file 字段支持（相对 tasks.json 所在目录）；v4 files 字段：材料文件拼接进提示词
   const tasksIn = [];
   for (let i = 0; i < raw.length; i++) {
     const t = raw[i] || {};
@@ -160,6 +160,18 @@ async function cmdFanout(opts) {
     if (!prompt && typeof t.file === 'string') {
       try { prompt = await fsp.readFile(path.resolve(path.dirname(tasksPath), t.file), 'utf8'); }
       catch (e) { die(`任务 ${i}（${t.id ?? '?'}）读取 file 失败：${e.message}`); }
+    }
+    if (Array.isArray(t.files) && t.files.length) {
+      if (!prompt) die(`任务 ${i}（${t.id ?? '?'}）的 files 必须与 prompt 或 file 搭配（files 只追加材料）`);
+      const parts = [];
+      for (const f of t.files) {
+        if (typeof f !== 'string') die(`任务 ${i}（${t.id ?? '?'}）的 files 数组元素必须是字符串`);
+        try {
+          const c = await fsp.readFile(path.resolve(path.dirname(tasksPath), f), 'utf8');
+          parts.push(`----- 文件 ${f} 开始 -----\n${c}\n----- 文件 ${f} 结束 -----`);
+        } catch (e) { die(`任务 ${i}（${t.id ?? '?'}）读取 files[${f}] 失败：${e.message}`); }
+      }
+      prompt = `${prompt}\n\n【输入材料·文件】\n${parts.join('\n\n')}`;
     }
     tasksIn.push({ id: t.id, prompt, as: t.as ?? null, model: t.model ?? null, effort: t.effort ?? null });
   }
@@ -434,7 +446,7 @@ function parseArgs(argv) {
   return opts;
 }
 
-const HELP = `wbx — ZCode <-> WorkBuddy (CodeBuddy CLI) 联动桥（v${WBX_VERSION} 可观测+全局化+可视化+可分发）
+const HELP = `wbx — ZCode <-> WorkBuddy (CodeBuddy CLI) 联动桥（v${WBX_VERSION} 能力外包：自包含任务 + 代码模块 + stdin 长材料）
 
 lane：ai = 国际版 WorkBuddy AI（deepseek-v4.1-flash x0.00 免费）
       cn = 国内版 WorkBuddy（x0.03 近免费）
@@ -447,7 +459,7 @@ lane：ai = 国际版 WorkBuddy AI（deepseek-v4.1-flash x0.00 免费）
                      [--wait 300] [--no-open] [--force]
   node wbx.mjs ask     --file t.txt | --text "..."  单次调用（落盘为 job）；stdout=结果，stderr=用量/lane
                      [--as ai|cn] [--model M] [--effort low] [--timeout 300] [--json] [--stdin]
-  node wbx.mjs fanout  --file tasks.json            并发池批量执行；结果写 <运行时根>/jobs/<jobId>/
+  node wbx.mjs fanout  --file tasks.json            并发池批量执行；任务可用 files:[路径] 拼材料；结果写 <运行时根>/jobs/<jobId>/
                      [--lanes ai,cn] [--parallel 2] [--timeout 300] [--retry 1]
   node wbx.mjs models  [--as cn|ai] [--probe "m1,m2"]   探测模型可用性并列出产品配置中的模型
   node wbx.mjs config  list | get <key> | set <key> <value>

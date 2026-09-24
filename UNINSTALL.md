@@ -1,9 +1,12 @@
-# UNINSTALL — wbx 联动桥卸载手册（v3：双 lane + 全局形态 + UI + 分发）
+# UNINSTALL — wbx 联动桥卸载手册（v4：能力外包；兼容 v2/v3 全部形态）
 
 > 原则：v3 起桥有两种形态——**项目形态**（一切都在项目文件夹内，删目录即净）与
 > **全局形态**（`wbx self-install` 之后：`~/.zcode/` 四处 + `~/.wbx/` 运行时）。
 > 全局形态用 `wbx self-uninstall` 一键还原。两个桌面版 App（WorkBuddy 国内版 /
 > WorkBuddy AI 国际版）**从头到尾没有被写入过任何文件**，不受影响。
+> v4 说明：新增物只有仓库内 `.zcode/skills/wb-bridge/PROMPTS.md`（worker 提示词模板库）
+> 与全局形态同名副本（self-install 自动带上/覆盖，self-uninstall 随目录整体删除）；
+> v4 的 fanout `files` 字段与长提示词 stdin 通道不产生任何新的磁盘产物，无需额外清理。
 
 ## 〇、全局形态卸载（装过 self-install 才需要）
 
@@ -17,8 +20,8 @@ node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" self-uninstall --purge  #
 
 | 位置 | 内容 |
 |---|---|
-| `~/.zcode/wbx-bridge/` | 桥本体（scripts 四模块 + SKILL.md + examples + docs 副本） |
-| `~/.zcode/skills/wb-bridge/` | 用户级 skill（遮蔽同名项目级 skill） |
+| `~/.zcode/wbx-bridge/` | 桥本体（scripts 四模块 + SKILL.md + PROMPTS.md + examples + docs 副本） |
+| `~/.zcode/skills/wb-bridge/` | 用户级 skill（SKILL.md + PROMPTS.md，遮蔽同名项目级 skill） |
 | `~/.zcode/commands/wbx.md` | `/wbx` 斜杠命令 |
 | `~/.zcode/AGENTS.md` | `<!-- wbx:begin/end -->` 标记块（文件只剩它时连文件删除，其余内容保留） |
 | `~/.wbx/` | 运行时：sessions/product **凭证**、config.json、jobs/ 历史（仅 `--purge` 删） |
@@ -70,7 +73,7 @@ v3 的 `self-uninstall` 会顺带做同一件事，无需重复执行。
 
 - `wbx ui` 启动的是一个**前台 node 进程**（仅监听 127.0.0.1:7788）：关掉终端 / Ctrl+C 即退，
   **无常驻服务、无开机自启、无后台进程**；卸载不需要任何额外操作。
-- `wbx export-bundle` 生成的 zip（默认在 `~/Desktop/wbx-bridge-v3-*.zip`）是**零凭证**分发包
+- `wbx export-bundle` 生成的 zip（默认在 `~/Desktop/wbx-bridge-v4-*.zip`）是**零凭证**分发包
   （导出时逐成员比对本地 accessToken 做过断言），可随手删除或外发。
 - 在别处用分包装过的机器：在那台机器上运行 `node scripts\wbx.mjs self-uninstall [--purge]`。
 

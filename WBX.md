@@ -1,6 +1,9 @@
-# WBX — ZCode ↔ WorkBuddy AI 联动桥（v3：可观测 + 全局化 + 可视化 + 可分发）
+# WBX — ZCode ↔ WorkBuddy AI 联动桥（v4：能力外包）
 
-> **v3**：job 可观测（ask 也落盘 + `history` 回放）、用户级全局安装（任何项目 + `/wbx` 命令 +
+> **v4**：定位重写——外包对象从「文本杂活」扩展为**自包含任务**（含代码模块编写），核心交付
+> 提示词工程体系（[PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md)）、fanout `files` 材料拼接、
+> 长提示词 stdin 通道（解除 ~25k 命令行长度限制）。
+> v3：job 可观测（ask 也落盘 + `history` 回放）、用户级全局安装（任何项目 + `/wbx` 命令 +
 > `~/.wbx/` 全局运行时）、本地 Web UI（`wbx ui`）、分发打包（`export-bundle`）。
 > v2：双 lane + 主动分派。卸载见 [UNINSTALL.md](UNINSTALL.md)。
 >
@@ -10,8 +13,10 @@
 
 ## 这是什么
 
-在 ZCode 会话里，把**相互独立、纯文本进出、单轮可完成**的子任务（多对象调研/翻译/摘要/改写/
-批量生成/结构化抽取）并行分派给 WorkBuddy 账号下的 `deepseek-v4.1-flash` 执行。
+在 ZCode 会话里，把**相互独立、自包含、单轮可完成**的子任务并行分派给 WorkBuddy 账号下的
+`deepseek-v4.1-flash` 执行。**自包含**（v4 新公理）：任务的全部输入（含代码上下文）可由编排器
+（ZCode）打包进提示词、输出可独立校验，即可外包——包括**代码模块编写**（ZCode 负责接口定义、
+集成与审查），不限于文本杂活。典型任务：多对象调研、翻译、摘要、结构化抽取、代码模块实现。
 v2 起为**双 lane**，并配主动分派层（SKILL.md + AGENTS.md），ZCode 会话无需用户提示即可分派。
 
 ```
@@ -222,7 +227,7 @@ tasks.json 格式与示例：`.zcode/skills/wb-bridge/examples/tasks.example.jso
 | `wbx doctor [--no-probe]` | 自检向导：node / CLI（自动扫描+写回）/ 模板缓存 / 两 lane 凭证+模型探测；exit 0 = 至少一个 lane 可用 |
 | `wbx login [--identity cn\|ai] [--wait 300] [--no-open] [--force]` | SSO 登录（默认 cn 微信扫码；ai 输出 state 修补锦囊 URL） |
 | `wbx ask --file p.txt \| --text "…" [--as ai\|cn] [--model M] [--effort low] [--timeout 300] [--json]` | 单次调用（落盘 job）；默认路由按 config；失败自动回退另一 lane；stdout=结果、stderr=lane/用量 |
-| `wbx fanout --file t.json [--lanes ai,cn] [--parallel 2] [--timeout 300] [--retry 1]` | 双 lane 并发池（落盘 job）；`--parallel`=每 lane 并发（默认取 config）；任务级 `as` 可绑定 lane；summary.md 标注 lane 与 `ai→cn` 回退 |
+| `wbx fanout --file t.json [--lanes ai,cn] [--parallel 2] [--timeout 300] [--retry 1]` | 双 lane 并发池（落盘 job）；`--parallel`=每 lane 并发（默认取 config）；任务级 `as` 可绑定 lane、`files:[路径]` 拼材料（v4）；summary.md 标注 lane 与 `ai→cn` 回退 |
 | `wbx models [--as cn\|ai] [--probe "id1,id2"]` | 探测模型 + 列产品配置全部模型 |
 | `wbx config list\|get <key>\|set <key> <value>` | 运行时配置：default-lane / disabled-lanes / parallel-per-lane / model / cli-path |
 | `wbx history [--last N]` / `wbx history <jobId> [--task <id>]` | 历史列表 / 完整回放双向对话（含旧 tasks/ 与项目形态时期 jobs/ 只读兼容） |
@@ -242,7 +247,7 @@ tasks.json 格式与示例：`.zcode/skills/wb-bridge/examples/tasks.example.jso
 | doctor 某 lane「凭证」[SKIP] | 未登录 → `wbx login --identity <lane>`；凭证红 = token 过期（约 55 天）→ 重新 login |
 | ask/fanout 报 429/quota/限流 | 免费额度或限流 → 降并发（`--parallel 1`）、稍后再试；仍不行则放弃外包 |
 | fanout 大量 timeout | 网络/服务波动 → 提高 `--timeout` 或减小并发 |
-| 单任务提示词超长（>25k 字符） | 命令行上限约 32k → 拆分任务，或材料先行精简 |
+| 单任务提示词超长 | v4 起 >12k 字符自动走 stdin 通道（实测 60k+ 字符可用），无命令行长度限制；材料仍建议按 20k 裁剪准则控制成本 |
 | 模型输出质量差 | 检查 worker 提示词是否给了硬输出约束；必要时 `--effort medium` |
 | 国际版 login 永远 pending | state 丢失 bug → 用命令输出里的锦囊 A/B URL；详见上文「国际版登录的已知 bug 与锦囊」 |
 | `Cannot find module ...wbx.mjs` | 命令用了相对路径但当前目录不在项目根 → 先 `cd /d "<项目根目录>"` 再运行，或用绝对路径：`node "<项目根目录>\.zcode\skills\wb-bridge\scripts\wbx.mjs" <子命令>`（路径含空格必须加引号） |
@@ -358,3 +363,135 @@ tasks.json 格式与示例：`.zcode/skills/wb-bridge/examples/tasks.example.jso
   （真实异机由用户自测）。
 - **遗留小项**：v2 `.wbx/tasks/` 与项目形态 `.wbx/jobs/` 为只读历史保留（不迁移不删除）；
   UI 的 fanout 构建、历史翻页为当前单页实现，超大量 job 时性能未做优化（本地场景够用）。
+
+## v4 章：能力外包（定位重写 + 提示词工程 + 代码任务分派）
+
+### v4 定位变更说明
+
+v1–v3 的对外口径把外包范围限定为「翻译/摘要/调研这类文本杂活」，这低估了 deepseek-v4.1-flash
+的实际能力。v4 定案（用户决策）：**该模型本身能力很强，可以承担包括编写代码模块在内的一切
+适合外包的工作**。v4 不换模型、不加模型分档、不动成本结构，改的是三件事：
+
+1. **公理升级**：外包判定从「轻量文本活」改为「**自包含任务**」——全部输入（含代码上下文）
+   可由编排器打包进提示词、输出可独立校验，即可外包。worker 无工具的安全边界不变，
+   「让它读文件」的正确实现 = ZCode 先读文件、把内容贴进提示词材料区（材料先行）。
+2. **提示词工程体系**：新增 [PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md)（入库发布物，
+   由 SKILL.md 引用），核心是代码模块编写模板（接口契约 + 材料区 + 硬输出约束），
+   并升级翻译/摘要/调研/结构化抽取/文案变体五个既有模板。
+3. **分派准则重写**：AGENTS.md/SKILL.md 的「适合分派」加入**代码实现环节**（一段工作拆成
+   接口清晰的模块，其中无上下文依赖的部分外包，ZCode 负责接口定义、集成与审查）；
+   「不适合」从「多轮依赖上下文的编码任务」改为「需要探索式多轮交互的任务」。
+   铁律全部保留：派发结果不派发步骤、每文件单一写者、材料先行、结果必校验、
+   连续 ≥2 失败或限流即停止外包。
+
+### 调研记录（2026-09-24，Phase 0 实测）
+
+**lane 健康度**：`wbx models` 双 lane `deepseek-v4.1-flash` 探测均可用——ai 13.2s（tokens 6503/2）、
+cn 5.4s。不换模型，仅确认健康。
+
+**调研 A：DeepSeek 官方提示词指南/提示库**（真实 URL 已核实）：
+
+| 资源 | URL | 要点 |
+|---|---|---|
+| 官方提示库（中文） | https://api-docs.deepseek.com/zh-cn/prompt-library | 13 个条目：代码生成、代码解释、代码改写、内容分类、结构化输出、中英翻译专家、角色扮演×2、散文/诗歌、文案大纲、宣传标语、模型提示词生成 |
+| 思考模式指南 | https://api-docs.deepseek.com/zh-cn/guides/thinking_mode | 思考默认开、effort 默认 high；档位 minimal…max；思维链经 `reasoning_content` 返回，不进上下文；复杂推理开思考、简单任务关（省时） |
+| JSON 输出指南 | https://api-docs.deepseek.com/zh-cn/guides/json_mode | prompt 里必须含 "json" 字样并给出目标 JSON 格式样例；防截断需合理 max_tokens |
+| WorkBuddy/CodeBuddy 集成页 | https://api-docs.deepseek.com/zh-cn/quick_start/agent_integrations/workbuddy | 官方将 WorkBuddy/CodeBuddy 列为第三方 Agent 工具（经 API 接入），与本项目认知一致 |
+| 文档站全量页清单 | https://api-docs.deepseek.com/sitemap.xml | 当前官方文档已无独立「提示工程」指南页，提示库为主要官方样例来源 |
+
+官方样例对本桥模板的直接启发（PROMPTS.md 已吸收）：
+
+- **代码生成**条目：官方 USER 提示词就是一句直接的任务指令（「请帮我用 HTML 生成一个五子棋游戏，
+  所有代码都保存在一个 HTML 中」）——直接说清产物形态与边界，不绕弯；
+  样例输出为带语言围栏的完整代码 + 代码说明。
+- **结构化输出**条目：SYSTEM 里给完整 JSON 骨架 + 每字段一行语义说明（「没有请填 null」）——
+  与本桥「输出 JSON 对象、不确定用 UNKNOWN/null 占位」的硬约束写法一致，v4 模板保留字段级说明。
+- **中英翻译专家**条目：角色定义 + 信达雅标准 + 「调整语气和风格、考虑文化内涵」——
+  v4 翻译模板吸收信达雅表述。
+- **json_mode 指南**：提示词里必须出现 "json" 字样并给格式样例——本桥 JSON 抽取模板
+  的样例骨架写法有官方依据。
+
+**调研 B：CodeBuddy CLI 能力边界**（本机 CLI `--help` 原文 + 实测；codebuddy.ai 文档站
+在本网络下 WebFetch/IAB 均超时或空白，未能引用其页面，以下以本地 CLI 的自述帮助为准）：
+
+| 问题 | 结论 | 证据 |
+|---|---|---|
+| `-p` 支持文件/stdin 提示词？ | **支持 stdin**：`-p` 不带位置参数时从 stdin 读提示词。实测 60,159 字符提示词（≈40.9k input tokens）经 stdin 成功返回（13.1s，ai lane，答案正确）；无 `--prompt-file` 类选项（只有 system prompt 有 `--system-prompt-file`） | `--input-format`（text/stream-json，仅 --print 模式）+ 两组实测 |
+| `--tools` 只读子集？ | 存在：`""` 全关 / `"default"` 全开 / 逗号分隔白名单（如 `"Read"`）。**仅评估不启用**——本桥安全边界 = worker 零工具（`--tools ""`）不变；开放只读工具会让 worker 触到用户文件系统，收益（省贴材料）不抵边界后撤 | CLI `--help` 原文：`Restrict which built-in tools ... Use "" to disable all, "default" for all, or comma-separated tool names like "Bash,Edit,Read"` |
+| `--effort` 档位语义 | `minimal / low / medium / high / xhigh / max` 六档；官方 thinking 指南说明 effort 默认 high、思考模式适合复杂推理、简单任务可调低省时 | CLI `--help` 原文 + DeepSeek thinking_mode 指南 |
+
+### 桥改动决策（Phase 2 白名单，实施前记录理由）
+
+v4 原则：`scripts/*.mjs` 零改动，仅允许以下两处小改（均为「明确收益且小改动」才做）：
+
+1. **fanout 任务级 `files` 字段**（改 `wbx.mjs` cmdFanout，≈14 行）——理由：代码外包的
+   材料先行场景里，ZCode 已把相关文件路径写进 tasks.json 更自然（`"files": ["src/api.ts"]`），
+   桥读文件按「文件开始/结束」段落拼进提示词材料区，省去 ZCode 手工拼串；
+   相对路径基于 tasks.json 所在目录（与既有 `file` 字段一致）。
+2. **长提示词 stdin 通道**（改 `wbx-core.mjs` spawnNode/askOnce，≈14 行）——理由：调研 B
+   实测 stdin 可传 60k+ 字符；v3 的 ~25k 命令行长度上限使「贴完整代码上下文」经常被迫裁剪。
+   实现：提示词 > 12000 字符时改走 stdin（`-p` 无位置参数 + stdin 写入），≤ 12000 保持
+   v3 位置参数路径**逐字节不变**——既有行为零回退，仅解锁原先会失败的超长任务。
+
+未做（不满足「明确收益且小改动」）：`--tools` 只读子集接入（安全边界不变原则）、
+UI 侧 `files` 支持（UI 会话无 tasks.json 目录语境，先 CLI-only）。
+
+**配套机械改动**（非行为变更，随上述两项一并实施并记录）：`wbx-setup.mjs` 的
+self-install / export-bundle / `/wbx` 命令模板纳入 PROMPTS.md（否则全局形态与分发包缺新发布物，
+v4 验收标准 5 无法达成）与 /wbx 适用判定的 v4 措辞；`WBX_VERSION` 3.0.0 → 4.0.0；
+ask 的「接近命令行上限」警告改为「超 12k 自动走 stdin」提示（原警告针对已解除的限制，属过时文案）。
+
+### v4 回归测试（2026-09-25，改桥后全命令）
+
+| 项 | 结果 |
+|---|---|
+| 4 个脚本 `node --check` | 通过 |
+| `doctor --no-probe` / `doctor` | 双 lane 凭证绿，版本 v4.0.0 |
+| `models`（ai/cn 探测） | 均可用（Phase 0 实测 13.2s / 5.4s） |
+| `ask` 短提示词（v3 位置参数路径） | OK 11.1s（tokens 6504/2） |
+| `ask` 30,476 字符（新 stdin 路径） | OK 33.2s（tokens 25012/15），答案正确 |
+| `fanout` 2 任务（含 `files` 字段拼接） | 2/2 成功；材料按「文件开始/结束」段落拼入 tasks-input.json，模型据材料答对 |
+| `config set/get` 回环（default-lane cn→auto） | 通过 |
+| `history --last` / `history <jobId> --task` | 列表与双向回放正常（含 files 拼接后的完整 prompt） |
+| `export-bundle` | 11 文件（新增 PROMPTS.md），零凭证断言通过 |
+| `ui` 冒烟（/api/status、/api/history） | 正常（版本 4.0.0，全局形态识别正确） |
+
+### v4 记录（实测附录）
+
+**Phase 5.1 demo 端到端（2026-09-25，真实代码外包）**
+
+demo 项目 `%TEMP%\wbx-v4-demo\`（不入库）：日志统计小工具 logsum 拆 5 模块——
+ZCode 写接口契约（CONTRACT.md）+ 风格样例（lib/slugify.js）+ 编排层
+（lib/summarize.js 聚合、cli.js IO）；3 个纯函数模块用 PROMPTS.md T1 模板外包：
+
+| 任务 | lane | 材料方式 | 耗时 | tokens in/out | 尝试 |
+|---|---|---|---|---|---|
+| mod-parse-duration | ai | 提示词内联材料 | 16.1s | 6947/1442 | 1 |
+| mod-format-bytes | cn | **`files` 字段**（桥拼 slugify.js + CONTRACT.md） | 12.5s | 7461/1817 | 1 |
+| mod-parse-log-line | ai | **`files` 字段** | 15.7s | 7461/1239 | 1 |
+
+fanout 3/3 成功（并行墙钟 ≈16s），tokens 合计 21869/4498，零重试零回退。
+
+**质量评估（审查发现与修复）**：三份产物**零返工**——风格与样例一致（use strict/JSDoc/双引号/
+2 空格）、契约验收标准逐条通过、无编造 API。亮点：worker 对契约未覆盖的行为不猜不编，
+全部用 `// TODO(原因)` 显式标注（空白字符处理、Infinity、TB 封顶、日期取值合法性、空 message），
+正是 T1 模板「不确定处 TODO 占位、绝不编造」的预期行为。集成即通过：test.js 断言
+（外包 3 模块契约验收 19 条 + ZCode 模块 2 条 + CLI 端到端 3 条）全过，`node cli.js sample.log`
+输出正确（有效行 7/8、ERROR=2、错误样例）。**结论：接口契约 + 材料先行 + 硬输出约束的
+组合下，flash 的代码模块一次成活率高，v4 定位（能力外包）成立。**
+
+**Phase 5.2 主动分派验证（静态部分）**
+
+触发面五处实测含 v4 代码意图（`编写或并行编写代码模块/纯函数/组件/测试用例`、`代码实现环节`）：
+项目 AGENTS.md「代码实现环节」条目、项目级 SKILL.md frontmatter、用户级 skill（实际生效、
+遮蔽项目级）frontmatter、用户级 skill 目录 PROMPTS.md、`/wbx` 命令模板 v4 判定。
+交互式新会话话术实测（「帮我写一个 X 小工具，能并行的部分就并行」）需开第二个 ZCode 会话，
+本执行窗口无法进行——留给用户验证（与 v3 的 /wbx 交互确认同一处理方式）。
+
+**全局形态同步（Phase 3.3）**
+
+`self-install` 幂等重跑两次（中途更新用户块模板后再跑一次）：`~/.zcode/wbx-bridge/`
+v4.0.0（scripts + examples + PROMPTS.md + docs）、用户级 skill SKILL.md + PROMPTS.md、
+`/wbx` 命令 v4 文案、`~/.zcode/AGENTS.md` 标记块刷新为 v4 公理（自包含、含代码实现时机）、
+`~/.wbx/` 凭证原样未动（ai/cn 双绿）。清理了一个 v3 时期遗留的过时 PLAN.md 全局副本
+（现项目内 PLAN.md 已移入 internal/，不再随装）。

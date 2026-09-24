@@ -130,7 +130,7 @@ export function wbxCommandText() {
     '请按 wb-bridge 技能的流程处理上面的任务（这是用户要的一键分派触发器）：',
     '',
     '1. 先自检：运行 `' + `node "${gscript}" doctor` + '`；有任一 lane 可用即继续，两个 lane 都不可用则由你自己完成任务并说明原因。',
-    '2. 判断任务是否适合分派（相互独立、纯文本进出、单轮可完成、不涉密）。适合则按技能里的 worker 提示词模板（角色+任务+材料+输出硬约束+无工具声明）构造任务。',
+    '2. 判断任务是否适合分派（相互独立、自包含可单轮完成、不涉密——v4 起含代码模块编写：接口清晰、材料可贴、输出可校验）。适合则按技能里引用的 PROMPTS.md 模板（角色+任务+材料+输出硬约束+无工具声明）构造任务。',
     '3. 单条子任务用 ask，可拆分的多条用 fanout（任务写成 tasks.json）分派到外部算力；结果落 ~/.wbx/jobs/<jobId>/。',
     '4. 校验结果后汇总输出给用户；标注信息来自模型已有知识、可能过时。',
     '5. doctor FAIL、连续 >= 2 个任务失败或限流 → 停止外包，如实告知用户，剩余任务由你自己完成。',
@@ -249,22 +249,24 @@ export async function selfInstall({ adopt = false, keepProject = true } = {}) {
   }
   let skillCopied = false, examplesCopied = false, docsCopied = false;
   try { await copyDir(path.join(srcSkillDir, 'examples'), path.join(GLOBAL_BRIDGE_DIR, 'examples')); examplesCopied = true; } catch { /* 无 examples */ }
+  const promptsCopied = await copyIfExists(path.join(srcSkillDir, 'PROMPTS.md'), path.join(GLOBAL_BRIDGE_DIR, 'PROMPTS.md'));
   const docFiles = ['WBX.md', 'PLAN.md', 'UNINSTALL.md'];
   const copiedDocs = [];
   for (const d of docFiles) {
     if (await copyIfExists(path.join(PROJECT_ROOT, d), path.join(GLOBAL_BRIDGE_DIR, d))) copiedDocs.push(d);
   }
   docsCopied = copiedDocs.length > 0;
-  report.push(`桥本体 -> ${GLOBAL_BRIDGE_DIR}（scripts: ${copiedScripts.join(', ')}${examplesCopied ? ' + examples' : ''}${docsCopied ? ' + docs: ' + copiedDocs.join(', ') : ''}）`);
+  report.push(`桥本体 -> ${GLOBAL_BRIDGE_DIR}（scripts: ${copiedScripts.join(', ')}${examplesCopied ? ' + examples' : ''}${promptsCopied ? ' + PROMPTS.md' : ''}${docsCopied ? ' + docs: ' + copiedDocs.join(', ') : ''}）`);
 
-  // 2. 用户级 skill（绝对路径版）
+  // 2. 用户级 skill（绝对路径版；PROMPTS.md 原样随附，供 SKILL.md 相对引用）
   const srcSkill = path.join(srcSkillDir, 'SKILL.md');
   if (!fs.existsSync(srcSkill)) throw new Error(`桥源不完整：缺 ${srcSkill}`);
   const userSkillDir = path.join(HOME, '.zcode', 'skills', 'wb-bridge');
   await fsp.mkdir(userSkillDir, { recursive: true });
   await fsp.writeFile(path.join(userSkillDir, 'SKILL.md'), globalSkillText(await fsp.readFile(srcSkill, 'utf8')), 'utf8');
+  await copyIfExists(path.join(srcSkillDir, 'PROMPTS.md'), path.join(userSkillDir, 'PROMPTS.md'));
   skillCopied = true;
-  report.push(`用户级 skill -> ${path.join(userSkillDir, 'SKILL.md')}（同名遮蔽项目级 skill，内容一致）`);
+  report.push(`用户级 skill -> ${path.join(userSkillDir, 'SKILL.md')}${fs.existsSync(path.join(userSkillDir, 'PROMPTS.md')) ? ' + PROMPTS.md' : ''}（同名遮蔽项目级 skill，内容一致）`);
 
   // 3. 用户级斜杠命令 /wbx
   const cmdDir = path.join(HOME, '.zcode', 'commands');
@@ -355,7 +357,7 @@ export async function selfUninstall({ purge = false } = {}) {
 function collectBundleEntries() {
   const entries = [];
   const add = (name, data) => entries.push({ name, data });
-  const root = 'wbx-bridge-v3/';
+  const root = 'wbx-bridge-v4/';
   // 根入口 stub（安装命令可写 node wbx.mjs self-install）
   add(`${root}wbx.mjs`, '#!/usr/bin/env node\n// 分发包根入口：转发到 scripts/wbx.mjs（真正入口在同目录 scripts/ 下）\nimport("./scripts/wbx.mjs");\n');
   // scripts/
@@ -363,8 +365,9 @@ function collectBundleEntries() {
     const p = path.join(SCRIPT_DIR, f);
     if (fs.existsSync(p)) add(`${root}scripts/${f}`, fs.readFileSync(p));
   }
-  // SKILL.md
+  // SKILL.md + PROMPTS.md（v4 worker 提示词模板库）
   add(`${root}SKILL.md`, fs.readFileSync(path.join(path.dirname(SCRIPT_DIR), 'SKILL.md')));
+  add(`${root}PROMPTS.md`, fs.readFileSync(path.join(path.dirname(SCRIPT_DIR), 'PROMPTS.md')));
   // examples/
   const exDir = path.join(path.dirname(SCRIPT_DIR), 'examples');
   if (fs.existsSync(exDir)) {
@@ -416,7 +419,7 @@ export async function exportBundle({ out = null } = {}) {
   const knownTokens = assertBundleClean(entries);
   const d = new Date();
   const p2 = (n) => String(n).padStart(2, '0');
-  const zipName = `wbx-bridge-v3-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}.zip`;
+  const zipName = `wbx-bridge-v4-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}.zip`;
   let outFile;
   if (out) {
     out = path.resolve(out);

@@ -20,5 +20,17 @@
     "as": "cn",
     "effort": "low",
     "prompt": "你是一名信息抽取助手。任务：从下面的文本中抽取人名与城市。\n你没有任何工具，不能联网、不能读写文件，仅凭下面给定的材料作答。\n\n【输入材料】\n张三在北京大学念书，周末常去天津看朋友；李四在上海一家外企工作，下个月要调往深圳分公司；王五刚从杭州搬到成都。\n\n【输出要求】\n- 只输出一个 JSON 对象，格式 {\"people\":[...],\"cities\":[...]}\n- 不要输出任何解释、前后缀或 Markdown 代码围栏\n- 人名用中文全名，城市去重"
+  },
+  {
+    "id": "code-parse-duration",
+    "as": "ai",
+    "effort": "medium",
+    "prompt": "你是一名 Node.js (CommonJS) 资深工程师。任务：实现 lib/parse-duration.js 这一个文件。\n你没有任何工具，不能联网、不能读写文件、不能执行代码，仅凭下面的契约与材料作答。\n\n【接口契约】\n- 文件：lib/parse-duration.js\n- 导出：module.exports = function parseDuration(input) ，输入 string，输出 number（毫秒）或 null\n- 调用约定：同步纯函数；无法解析时返回 null，绝不抛异常；空串/非字符串返回 null\n- 依赖：仅 Node 内置模块（本模块实际不需要任何 require）\n- 验收标准：\n  1. parseDuration(\"1h30m\") === 5400000\n  2. parseDuration(\"500ms\") === 500\n  3. parseDuration(\"2d\") === 172800000\n  4. parseDuration(\"1.5h\") === 5400000\n  5. parseDuration(\"\") === null；parseDuration(\"abc\") === null\n  6. 支持单位：ms、s、m、h、d（大小写不敏感），可连写（如 \"1h30m20s\"），可含小数\n\n【输入材料】\n同项目 lib/slugify.js（风格样例，导出与 JSDoc 风格照此）：\n----- 文件 lib/slugify.js 开始 -----\n\"use strict\";\n\n/**\n * 把任意文本转成 URL 安全的 slug。\n * @param {string} input\n * @returns {string|null} 无法处理时返回 null\n */\nmodule.exports = function slugify(input) {\n  if (typeof input !== \"string\" || !input.trim()) return null;\n  return input.trim().toLowerCase().replace(/[^a-z0-9]+/g, \"-\").replace(/^-+|-+$/g, \"\");\n};\n----- 文件 lib/slugify.js 结束 -----\n\n【输出要求】\n- 只输出一份完整代码，包在 ```js 围栏中，无任何解释、前后缀或客套话\n- 代码完整可解析：无省略体，使用 \"use strict\" 与 JSDoc，风格与样例一致\n- 遇到材料未覆盖的细节：用 // TODO(原因) 标注，绝不编造"
+  },
+  {
+    "id": "code-with-files-field",
+    "effort": "medium",
+    "files": ["lib/slugify.js", "types.ts"],
+    "prompt": "你是一名 Node.js (CommonJS) 资深工程师。任务：实现 lib/format-bytes.js 这一个文件。\n你没有任何工具，不能联网、不能读写文件、不能执行代码，仅凭下面的契约与材料作答。\n\n【接口契约】\n- 导出：module.exports = function formatBytes(n) ，输入 number，输出 string（如 1536 -> \"1.5 KB\"）\n- 非法输入（负数、NaN、非数字）返回 null\n\n【输出要求】\n- 只输出一份完整代码，包在 ```js 围栏中，无解释前后缀；风格与【输入材料·文件】中的样例一致\n- 未覆盖细节用 // TODO(原因) 标注，绝不编造\n（v4 说明：本任务演示 files 字段——桥会把 lib/slugify.js 与 types.ts 内容按段落拼进本提示词的【输入材料·文件】区，相对路径基于 tasks.json 所在目录）"
   }
 ]
