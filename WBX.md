@@ -251,6 +251,7 @@ tasks.json 格式与示例：`.zcode/skills/wb-bridge/examples/tasks.example.jso
 | 模型输出质量差 | 检查 worker 提示词是否给了硬输出约束；必要时 `--effort medium` |
 | 国际版 login 永远 pending | state 丢失 bug → 用命令输出里的锦囊 A/B URL；详见上文「国际版登录的已知 bug 与锦囊」 |
 | `Cannot find module ...wbx.mjs` | 命令用了相对路径但当前目录不在项目根 → 先 `cd /d "<项目根目录>"` 再运行，或用绝对路径：`node "<项目根目录>\.zcode\skills\wb-bridge\scripts\wbx.mjs" <子命令>`（路径含空格必须加引号） |
+| 项目路径含非 ASCII（如中文）时 Git Bash 报模块加载/编码错误 | 改用全局桥入口（ASCII 路径）：`node "C:\Users\<用户名>\.zcode\wbx-bridge\scripts\wbx.mjs" <子命令>`（装过 self-install 即有；v4 实测记录） |
 
 ## 风险与边界
 
@@ -480,13 +481,33 @@ fanout 3/3 成功（并行墙钟 ≈16s），tokens 合计 21869/4498，零重�
 输出正确（有效行 7/8、ERROR=2、错误样例）。**结论：接口契约 + 材料先行 + 硬输出约束的
 组合下，flash 的代码模块一次成活率高，v4 定位（能力外包）成立。**
 
-**Phase 5.2 主动分派验证（静态部分）**
+**Phase 5.2 主动分派验证（2026-09-25 实测通过）**
 
-触发面五处实测含 v4 代码意图（`编写或并行编写代码模块/纯函数/组件/测试用例`、`代码实现环节`）：
+触发面五处静态核验含 v4 代码意图（`编写或并行编写代码模块/纯函数/组件/测试用例`、`代码实现环节`）：
 项目 AGENTS.md「代码实现环节」条目、项目级 SKILL.md frontmatter、用户级 skill（实际生效、
 遮蔽项目级）frontmatter、用户级 skill 目录 PROMPTS.md、`/wbx` 命令模板 v4 判定。
-交互式新会话话术实测（「帮我写一个 X 小工具，能并行的部分就并行」）需开第二个 ZCode 会话，
-本执行窗口无法进行——留给用户验证（与 v3 的 /wbx 交互确认同一处理方式）。
+
+**行为实测**（验收标准 2）：本机 ZCode 桌面版无 headless CLI 可开字面意义的第二个窗口，故用
+**全新上下文的 fresh 子代理实例**模拟新会话——输入只有用户话术（不含 wbx/外包/模板字样）：
+「帮我写一个密码强度检查的命令行小工具，能并行的部分就并行」，行为完全由 harness 注入的
+AGENTS.md 常驻规则与 wb-bridge skill 触发面驱动。结果：**自动触发全流程**——`doctor` 双 lane
+全绿 → 子代理自行定义 5 个规则模块的统一契约 → 按 PROMPTS.md T1 模板构造提示词 → `fanout`
+分派（job `20260925-002224-ft7`：5 任务、effort medium、**5/5 成功、ai×3+cn×2 真双 lane 并行、
+65.4s、tokens 37801/29687**）→ 集成校验。执行窗口独立复核：5 份 tasks-input.json 全部具备
+T1 结构特征（接口契约/无工具声明/输出要求）；交付物 `pwcheck`（CLI + 评分聚合为子代理自写、
+5 个规则模块外包）33/33 测试复跑通过、CLI 退出码行为正确。产物在
+`%TEMP%\wbx-v4-verify\`（不入库）。
+
+**佐证**（同日 00:15，独立于本验收）：另一会话经全局桥发起 job `20260925-001458-1um`
+（C# MSTest 测试起草 + 文案任务，T1 形态提示词，2/2 成功）——v4 代码外包模式已被本验收之外的
+真实使用自然触发。
+
+**实测发现的使用注意**：项目文件夹路径含非 ASCII 字符（如本项目「agent联动」）时，Git Bash
+里以相对/绝对路径传参给项目内 `wbx.mjs` 偶发 Node 模块加载编码错误——改用全局桥入口
+`~/.zcode/wbx-bridge/scripts/wbx.mjs`（ASCII 路径）即可绕开，功能一致（WBX.md 故障排查表
+「Cannot find module」条目同源，此处补记现象与绕法）。
+
+字面意义的「新开桌面窗口」人工确认仍可由用户随时复测（话术同上），机制面已经上述行为实测覆盖。
 
 **全局形态同步（Phase 3.3）**
 
