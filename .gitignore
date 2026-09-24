@@ -1,0 +1,5 @@
+# wbx 联动桥运行时（凭证、任务缓存），绝不入库
+.wbx/
+
+node_modules/
+*.log
