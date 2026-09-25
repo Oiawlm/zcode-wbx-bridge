@@ -180,13 +180,15 @@ export function installReadmeText() {
     F + 'bat',
     'npm install -g cline',
     'node scripts\\wbx.mjs login --identity cline    :: 浏览器完成 OAuth 设备授权（有活跃会话时自动通过）',
-    ':: 可选：指定模型（DeepSeek id 需 vendor/model 格式，探测：wbx models --as cline --probe "a/b,c/d"）',
-    'node scripts\\wbx.mjs config set cline-model "deepseek/deepseek-v4.1-flash"',
+    ':: 查当前免费模型组（免费组限时轮换；换默认：config set cline-model "<免费 id>"）',
+    'node scripts\\wbx.mjs models --as cline --free',
     F,
     '',
     'cline 状态只存 <运行时根>/cline-home/（桥以 HOME 覆盖实现隔离），与用户自己的 ~/.cline 互不影响；',
-    '默认 --thinking xhigh --compaction off（上下文与思考强度最大），并发默认 1；',
-    '计费为按量微付费（实测单次约 $0.0003-0.004）。',
+    '默认模型为免费孪生 cline-free/deepseek-v4.1-flash（totalCost=0，实测）、--thinking xhigh、',
+    '--compaction off（上下文与思考强度最大），并发默认 1。免费=限时促销轮换+每日配额：被轮换下线或',
+    '超额时 doctor 会提示并给出当前免费清单；桥的自动回退绝不切换到非 DeepSeek 模型（回退只投 ai/cn）。',
+    '隐私披露：免费用量可能被 Cline 用于改进模型（官方原文）。',
     '',
     '## 使用',
     '',
@@ -375,7 +377,7 @@ export async function selfUninstall({ purge = false } = {}) {
 function collectBundleEntries() {
   const entries = [];
   const add = (name, data) => entries.push({ name, data });
-  const root = 'wbx-bridge-v5/';
+  const root = `wbx-bridge-v${WBX_VERSION}/`;
   // 根入口 stub（安装命令可写 node wbx.mjs self-install）
   add(`${root}wbx.mjs`, '#!/usr/bin/env node\n// 分发包根入口：转发到 scripts/wbx.mjs（真正入口在同目录 scripts/ 下）\nimport("./scripts/wbx.mjs");\n');
   // scripts/
@@ -447,7 +449,7 @@ export async function exportBundle({ out = null } = {}) {
   const knownTokens = assertBundleClean(entries);
   const d = new Date();
   const p2 = (n) => String(n).padStart(2, '0');
-  const zipName = `wbx-bridge-v5-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}.zip`;
+  const zipName = `wbx-bridge-v${WBX_VERSION}-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}.zip`;
   let outFile;
   if (out) {
     out = path.resolve(out);

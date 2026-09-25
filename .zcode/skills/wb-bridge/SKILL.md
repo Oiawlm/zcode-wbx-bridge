@@ -22,7 +22,7 @@ description: >-
 |---|---|---|---|
 | `ai` | WorkBuddy AI 国际版 | **x0.00 免费** | 默认优先（成本理由，见 WBX.md） |
 | `cn` | WorkBuddy 国内版 | x0.03 近免费 | 兜底（微信扫码登录路径稳定） |
-| `cline` | Cline CLI（可选） | DeepSeek V4.1 Flash 按量微付费（实测单次 $0.0003-0.004） | thinking=xhigh/compaction=off；未装/未登录自动跳过，不影响其余功能 |
+| `cline` | Cline CLI（可选） | DeepSeek V4.1 Flash **免费**（`cline-free/` 免费孪生，限时轮换+每日配额） | thinking=xhigh/compaction=off；清单 `wbx models --as cline --free`；未装/未登录自动跳过，不影响其余功能 |
 
 路由：由 `wbx config` 的 default-lane 决定（`auto`=ai 已登录则 ai，否则 cn；cline 在 auto 下
 永远排最后）；回退链 **ai → cn → cline → 自己做**（各一次，不无限重试）；`disabled-lanes`
@@ -150,8 +150,8 @@ node .zcode/skills/wb-bridge/scripts/wbx.mjs fanout --file tasks.json [--lanes a
 | `wbx fanout --file t.json [--lanes ai,cn,cline]` | 多 lane 并发池批量，结果落 `.wbx/jobs/<jobId>/` |
 | `wbx history [--last 10]` / `wbx history <jobId>` | 历史列表 / 完整回放双向对话（含旧 tasks/ 兼容） |
 | `wbx config list\|get\|set` | 配置：default-lane（auto/ai/cn/cline）、disabled-lanes、parallel-per-lane、model、cli-path、cline-*（path/data-dir/provider/model/thinking/compaction/parallel） |
-| `wbx models [--as cn\|ai\|cline]` | 探测模型可用性 + 列出产品配置模型 |
-| `wbx ui [--port 7788]` | 本地 Web UI（127.0.0.1）：三 lane 状态/路由开关/ask/fanout/历史/登录引导 |
+| `wbx models [--as cn\|ai\|cline]` | 探测模型可用性 + 列出产品配置模型；`--as cline --free` 列当前免费模型组（端点实时） |
+| `wbx ui [--port 7788]` | 本地 Web UI（127.0.0.1）：三 lane 状态/路由开关/免费模型选择/ask/fanout/历史/登录引导 |
 | `wbx self-install / self-uninstall` | 用户级全局安装（/wbx 命令 + 用户级 skill + ~/.wbx）/ 一键还原 |
 | `wbx install-user / uninstall-user` | 仅向 `~/.zcode/AGENTS.md` 注入/移除全局主动分派块 |
 
@@ -181,5 +181,7 @@ ask/fanout 分派 → 校验 → 汇总。命令文件在 `~/.zcode/commands/wbx
   `.wbx/`、`~/.wbx/` 已 gitignore，绝不提交。
 - cline lane 一律 `--auto-approve false`（非 TTY 下工具调用全拒 = 纯文本端点）；不使用
   `--yolo`/`--zen`（开启其 agentic 形态是 v5 范围外的另一回事）。
-- 桌面版与桥共用账号额度，高峰期注意节流（cline 为按量微付费，成本见 lane 表）。
+- 桌面版与桥共用账号额度，高峰期注意节流（cline 免费孪生有每日配额，超额会报
+  `Daily free model limit reached`——此时自动跨 lane 回退 ai/cn 仍是 DeepSeek；被轮换下线报
+  `model not found`，用 `wbx models --as cline --free` 查当前清单换 id）。
 - 本桥为临时工具：免费期/低价期结束即废弃（见项目根 WBX.md）。

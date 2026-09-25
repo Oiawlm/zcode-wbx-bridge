@@ -10,6 +10,9 @@
 > `work/`，随 `--purge` 删除，或手动删）；② npm 全局包 `cline`（可选安装物，见第三节）；
 > ③ config 里的 `cline-*` 键（随 config.json 删除，或逐键清空）；④ 仓库内新增文档 SECURITY.md /
 > CONTRIBUTING.md / CHANGELOG.md（删项目目录即净）。
+> v5.1 说明：新增运行时缓存 `~/.wbx/cline-free-models.json`（免费模型清单最近一次成功拉取的
+> 缓存，无凭证；随 `~/.wbx/` 一起删或随手删）。**无新的用户级安装物**——`self-install` 写入位置
+> 与 v5 完全一致，本节其余内容不变。
 
 ## 〇、全局形态卸载（装过 self-install 才需要）
 
@@ -27,7 +30,7 @@ node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" self-uninstall --purge  #
 | `~/.zcode/skills/wb-bridge/` | 用户级 skill（SKILL.md + PROMPTS.md，遮蔽同名项目级 skill） |
 | `~/.zcode/commands/wbx.md` | `/wbx` 斜杠命令 |
 | `~/.zcode/AGENTS.md` | `<!-- wbx:begin/end -->` 标记块（文件只剩它时连文件删除，其余内容保留） |
-| `~/.wbx/` | 运行时：sessions/product **凭证**、config.json、jobs/ 历史、**cline/（可选 lane 隔离数据与 OAuth 凭证）**（仅 `--purge` 删） |
+| `~/.wbx/` | 运行时：sessions/product **凭证**、config.json、jobs/ 历史、**cline-home/（可选 lane 隔离数据与 OAuth 凭证）**、cline-free-models.json（免费清单缓存，无凭证）（仅 `--purge` 删） |
 
 卸载后项目桥自动回到项目形态（运行时根变回 `<项目>/.wbx/`）。
 若全局桥已被手动删除，用下面项目桥路径运行亦可：`node "<项目>\.zcode\skills\wb-bridge\scripts\wbx.mjs" self-uninstall`。

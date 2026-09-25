@@ -644,15 +644,17 @@ E2（parse-duration.js:17）→ parseInt(match[1], 10) 截断小数，即便正�
 - **反例**：把调研初稿的版本号/价格直接当事实引用给用户。
 - **关联**：原则 P8；模板 T4
 
-### E-011 Cline App 的「free」标签 ≠ CLI 零成本，以 models 探测计价为准
-- **来源**：实测（2026-09-25，用户 App 截图对照 + CLI 逐一探测）
+### E-011 Cline 按 id 计费：付费 id 与 cline-free 免费孪生（v5.1 修订）
+- **来源**：实测（2026-09-25，v5 探测 + v5.1 免费孪生复测；机制经先例仓库与官方文档印证）
 - **适用场景**：选择 cline lane 模型、评估成本
-- **要点**：App 标 "(free)" 的模型经 CLI 调用多数按量计费（DeepSeek V4.1 Flash ≈$0.001/次），
-  仅个别目录级真免费（实测 `stealth/space-bunny-alpha` totalCost=0）。判定方法：
-  `wbx models --as cline --probe "<vendor/model>"`（v5 起显示每次探测计价，$0 即免费）。
-- **反例**：按 App 界面标签推断 CLI 成本；把 totalCost（名义计价）直接当作已扣款——
-  免费额度机制（CLI 内含 FreeModelLimitResetTime）以账户侧实际扣减为准。
-- **关联**：WBX.md v5 章调研记录 #13；原则 P8
+- **要点**：同一模型有两个 id：`deepseek/deepseek-v4.1-flash` 按量计费（≈$0.001/次），
+  `cline-free/deepseek-v4.1-flash` 为完全免费孪生（totalCost=0，多次实测）；v5 曾误用计费
+  孪生 id 得出「CLI 无免费模型」的错误结论。桥 v5.1 起默认 cline-model 即免费孪生，doctor
+  校验其是否仍在免费组。免费组**限时轮换**、有每日配额，清单用
+  `wbx models --as cline --free` 实时查，勿硬编码。终判仍是探测计价法：
+  `wbx models --as cline --probe "<id>"`，$0 即免费。免费用量可能被 Cline 用于改进模型（官方披露）。
+- **反例**：按 App 标签或目录名推断成本；把免费清单硬编码进脚本（轮换会失效）。
+- **关联**：WBX.md v5.1 章；原则 P8
 
 ---
 

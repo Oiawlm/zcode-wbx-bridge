@@ -6,6 +6,7 @@
  * 本文件是薄 CLI 壳：参数解析 + 输出格式化。
  *
  * 双 lane：ai = 国际版（deepseek-v4.1-flash x0.00 免费）；cn = 国内版（x0.03 近免费）。
+ * cline lane（v5.1）：默认免费孪生 cline-free/deepseek-v4.1-flash（限时轮换+每日配额）。
  * 默认路由由 config.default-lane 决定（auto = ai 免费优先）；失败/限流自动回退另一 lane（各一次）。
  *
  * 用法（node wbx.mjs <子命令>，详见 --help）：
@@ -32,7 +33,7 @@ import {
   ensureDirs, readStdin, migrateIfNeeded,
   loadConfig, setConfig, parseConfigValue,
   resolveDefaultLane, laneStatusInfo, parseLane, laneReady,
-  askOnce, resolveModel,
+  askOnce, resolveModel, fetchClineFreeModels,
   runAskJob, runFanoutJob,
   listJobs, getJob,
   startLogin, pollLoginToken, fetchAccountInfo, persistLogin,
@@ -71,7 +72,7 @@ async function cmdLogin(opts) {
       const r = await runClineAuth();
       if (r.ok) {
         console.error(`[2/2] 完成：cline 凭证已落隔离目录 ${clineHomeDir()}（.cline/data/settings/providers.json，绝不在用户 ~/.cline）`);
-        console.error('验证：node wbx.mjs doctor（lane cline 段应全绿）。模型建议：wbx models --as cline --probe "<vendor/model 候选id>" 探测后 config set cline-model "<模型 id>"');
+        console.error('验证：node wbx.mjs doctor（lane cline 段应全绿）。默认模型为免费孪生 cline-free/deepseek-v4.1-flash；查当前免费组：wbx models --as cline --free（免费组限时轮换，被轮换下线时 doctor 会提示）');
       } else {
         die(`cline 登录未完成（auth 退出码 ${r.exitCode}，凭证未落盘）。常见原因：浏览器未在有效期内确认设备码。重新运行本命令即可`);
       }
@@ -132,6 +133,17 @@ async function cmdLogin(opts) {
 }
 
 // ---------- 子命令：ask ----------
+// 失败 hint 的人类可读提示（v5.1：含免费档超额/轮换状态机文案）
+function hintText(r) {
+  const h = r && r.hint;
+  if (h === 'login') return '（未登录/凭证过期 -> wbx login）';
+  if (h === 'ratelimit') return '（疑似限流/配额 -> 降低并发或稍后再试）';
+  if (h === 'free-limit') return `（cline 免费额度今日已达上限${r.resetIn ? `，约 ${r.resetIn} 后重置` : ''} -> 稍后再试 / wbx models --as cline --free 换免费模型；跨 lane 已自动回退 ai/cn 仍是 DeepSeek）`;
+  if (h === 'free-promotion-ended') return '（该免费模型促销已结束/被轮换下线 -> wbx models --as cline --free 查当前免费清单后 config set cline-model）';
+  if (h === 'model-not-found') return '（模型 id 不存在或已被轮换下线 -> wbx models --as cline --free 查当前免费清单后 config set cline-model）';
+  return '';
+}
+
 async function cmdAsk(opts) {
   let prompt = null;
   if (opts.file) prompt = await fsp.readFile(path.resolve(opts.file), 'utf8');
@@ -159,7 +171,7 @@ async function cmdAsk(opts) {
       else console.log(r.text);
       await exitWith(0);
     }
-    console.error(`[FAIL] 两个 lane 均失败；最后错误 kind=${r.kind}${r.hint === 'login' ? '（未登录/凭证过期 -> wbx login）' : r.hint === 'ratelimit' ? '（疑似限流/配额 -> 降低并发或稍后再试）' : ''}`);
+    console.error(`[FAIL] 两个 lane 均失败；最后错误 kind=${r.kind}${hintText(r)}`);
     console.error(r.error || '(无错误详情)');
     console.error(`[job] 记录 -> ${r.jobDir}`);
     await exitWith(1);
@@ -254,8 +266,26 @@ async function cmdModels(opts) {
   if (lane === 'cline') {
     const cfg = loadConfig();
     console.error(`lane = cline（provider=${cfg['cline-provider']}，thinking=${cfg['cline-thinking']}，compaction=${cfg['cline-compaction']}）`);
+
+    // v5.1 --free：列当前免费模型组（recommended-models 端点实时；失败降级缓存，再失败明确报错）
+    if (opts.free) {
+      const fm = await fetchClineFreeModels();
+      if (!fm.ok) die(`免费清单获取失败：${fm.error}`);
+      const cur = cfg['cline-model'] || '';
+      console.error(`cline 当前免费模型组（${fm.models.length} 个；来源：${fm.source === 'cache' ? `缓存 ${fm.fetchedAt}（端点失败降级）` : 'recommended-models 端点实时'}）：`);
+      for (const m of fm.models) {
+        const mark = m.id === cur ? '*' : ' ';
+        const deepseek = /deepseek/i.test(m.id);
+        console.log(`  ${mark} ${m.id}${m.name ? `（${m.name}）` : ''}${deepseek ? '' : '  [非 DeepSeek]'}${m.description ? '  # ' + m.description : ''}`);
+      }
+      console.error(`\n切换：wbx config set cline-model "<id>"（标 * 为当前值）。免费组为限时轮换+每日配额；`);
+      console.error('约束：桥的自动回退绝不切换到非 DeepSeek 模型（用户手动选择不受限，UI/命令均可选）。');
+      await exitWith(0);
+      return;
+    }
+
     const list = (opts.probe ? opts.probe.split(',').map((s) => s.trim()).filter(Boolean) : [cfg['cline-model'] || '']).filter(Boolean);
-    if (!list.length) console.log('（cline-model 为空=provider 默认模型；要探测候选 id 用 --probe "id1,id2"，免费 DeepSeek id 以实测为准）');
+    if (!list.length) console.log('（cline-model 为空=provider 默认模型；要探测候选 id 用 --probe "id1,id2"；查当前免费组用 --free）');
     let allOk = true;
     for (const m of list) {
       process.stdout.write(`探测 ${m} … `);
@@ -461,6 +491,7 @@ function parseArgs(argv) {
       case '--retry': opts.retry = parseInt(next(i), 10); i++; break;
       case '--wait': opts.wait = parseInt(next(i), 10); i++; break;
       case '--probe': opts.probe = next(i); i++; break;
+      case '--free': opts.free = true; break;
       case '--identity': opts.identity = next(i); i++; break;
       case '--last': opts.last = parseInt(next(i), 10); i++; break;
       case '--task': opts.task = next(i); i++; break;
@@ -488,14 +519,16 @@ const HELP = `wbx — ZCode <-> 外部算力联动桥（v${WBX_VERSION} 三 lane
 
 lane：ai = 国际版 WorkBuddy AI（deepseek-v4.1-flash x0.00 免费）
       cn = 国内版 WorkBuddy（x0.03 近免费）
-      cline = Cline CLI（可选第三 lane：免费额度轮换模型组，--thinking xhigh --compaction off）
+      cline = Cline CLI（可选第三 lane：默认免费调 DeepSeek——cline-free/deepseek-v4.1-flash 孪生，
+              限时轮换+每日配额，--thinking xhigh --compaction off；清单：models --as cline --free）
 默认路由：config default-lane（auto=ai 免费优先，cline 永远排最后）；失败/限流自动跨 lane 回退
-（ai→cn→cline 各一次）；cline 未装/未登录直接跳过，不影响其余功能。
+（ai→cn→cline 各一次，仍是 DeepSeek；cline 内部绝不换非 DeepSeek 模型顶替）；cline 未装/未登录直接跳过。
 运行时根：WBX_HOME env -> ~/.wbx/（装过 self-install 即全局形态） -> 项目 .wbx/
-cline 隔离：桥的 cline 状态只在 <运行时根>/cline/（--data-dir），绝不读写用户 ~/.cline。
+cline 隔离：桥的 cline 状态只在 <运行时根>/cline-home/（HOME 覆盖），绝不读写用户 ~/.cline。
 
 用法：
-  node wbx.mjs doctor  [--no-probe]                 自检向导：node/CLI 探测/模板/两 lane 凭证+模型探测 + cline 可选段
+  node wbx.mjs doctor  [--no-probe]                 自检向导：node/CLI 探测/模板/两 lane 凭证+模型探测
+                                                   + cline 可选段（含免费孪生存在性校验）
   node wbx.mjs login   [--identity cn|ai|cline] [...] 登录引导（默认 cn 微信扫码；ai 有 state 修补锦囊；
                      cline 为 OAuth 设备授权，浏览器完成）
                      [--wait 300] [--no-open] [--force]
@@ -504,13 +537,15 @@ cline 隔离：桥的 cline 状态只在 <运行时根>/cline/（--data-dir）�
   node wbx.mjs fanout  --file tasks.json            并发池批量执行；任务可用 files:[路径] 拼材料；结果写 <运行时根>/jobs/<jobId>/
                      [--lanes ai,cn,cline] [--parallel 2] [--timeout 300] [--retry 1]
   node wbx.mjs models  [--as cn|ai|cline] [--probe "m1,m2"]   探测模型可用性并列出产品配置中的模型
+                     [--free]     （--as cline --free：列当前免费模型组，recommended-models 端点实时）
   node wbx.mjs config  list | get <key> | set <key> <value>
                                                    配置：default-lane=auto|ai|cn|cline、disabled-lanes=["cn"]、
                                                    parallel-per-lane、model、cli-path、cline-path/data-dir/provider/
-                                                   model/thinking/compaction、cline-parallel（存 <运行时根>/config.json）
+                                                   model（默认 cline-free/deepseek-v4.1-flash）/thinking/compaction、
+                                                   cline-parallel（存 <运行时根>/config.json）
   node wbx.mjs history [--last 10]                 历史列表（时间/类型/任务数/成功率/lane 分布/目录）
   node wbx.mjs history <jobId> [--task <id>]       完整回放一次 job 的双向对话（prompt+回复全文）
-  node wbx.mjs ui      [--port 7788] [--no-open]   本地 Web UI（仅 127.0.0.1；状态/路由/ask/fanout/历史/登录）
+  node wbx.mjs ui      [--port 7788] [--no-open]   本地 Web UI（仅 127.0.0.1；状态/路由/免费模型选择/ask/fanout/历史/登录）
   node wbx.mjs self-install [--adopt] [--no-keep-project]
                                                    全局安装：~/.zcode/wbx-bridge + 用户级 skill + /wbx 命令
                                                    + AGENTS.md 标记块 + ~/.wbx 运行时（--adopt 迁移项目凭证）

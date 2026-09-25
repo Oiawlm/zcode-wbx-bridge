@@ -14,17 +14,25 @@ token 收着用。**自包含**（v4 公理）：任务的全部输入（含代�
 |---|---|---|---|
 | `ai` | WorkBuddy AI 国际版 | DeepSeek V4.1 Flash **x0.00（免费）** | 登录后即可用 |
 | `cn` | WorkBuddy 国内版 | DeepSeek V4.1 Flash x0.03（近免费） | 登录后即可用 |
-| `cline` | Cline CLI（**可选**） | DeepSeek V4.1 Flash 按量微付费（实测单次 $0.0003-0.004，thinking=xhigh） | 未装/未登录时桥照常工作 |
+| `cline` | Cline CLI（**可选**） | DeepSeek V4.1 Flash **免费（`cline-free/` 免费孪生，限时轮换+每日配额，thinking=xhigh）** | 未装/未登录时桥照常工作 |
 
 - 默认路由：`ai` 已登录则优先（免费），否则 `cn`；回退链 **ai → cn → cline → 自己做**
   （各一次；cline 未装/无凭证直接跳过；任一 lane 失败/限流自动改投下一 lane）。
-- 成本理由：同等任务 ai 免费、cn 近免费、cline 微付费、ZCode 自身消耗订阅额度——所以放开用。
+  cline 内部任何失败路径**绝不换用非 DeepSeek 模型顶替**（用户定案）——回退只投 ai/cn。
+- 成本理由：同等任务 ai 免费、cn 近免费、cline 免费孪生、ZCode 自身消耗订阅额度——所以放开用。
+  注意：cline 免费组**限时轮换**——doctor 会校验默认孪生是否仍在组内；清单实时查
+  `wbx models --as cline --free`；超额报 `Daily free model limit reached`（带重置时间提示）。
 - 调用入口：`node .zcode/skills/wb-bridge/scripts/wbx.mjs {doctor|login|ask|fanout|models|config|history|ui|self-install|export-bundle}`。
 - v4 能力保留：fanout 任务级 `"files": ["路径"]` 材料拼接；>12k 字符提示词自动走 stdin 通道；
   ask/fanout 全部落盘为可回放的 job（`history` 回放）。
 - v5 新增：cline lane（`login --identity cline` 浏览器 OAuth 设备授权；状态只在 `~/.wbx/cline-home/`
   隔离目录——桥以 HOME/USERPROFILE 覆盖实现隔离，绝不读写用户 `~/.cline`）；`cline-*` 配置键
   （model/thinking=xhigh/compaction=off/parallel=1）。
+- v5.1 新增：cline 默认模型切为免费孪生 `cline-free/deepseek-v4.1-flash`（计价 $0 实测）；
+  `models --as cline --free` 免费清单（recommended-models 端点实时，失败降级缓存）；doctor 免费孪生
+  存在性校验；`free-limit`/`free-promotion-ended`/`model-not-found` 错误分类与提示；UI 免费模型
+  下拉选择器；存量 config 一次性迁移（仅旧值恰为计费孪生时改写）。隐私：免费用量可能被 Cline
+  用于改进模型（官方披露）。
 - 使用前先 `doctor`；用法与 worker 提示词模板见 `.zcode/skills/wb-bridge/SKILL.md` 与
   `.zcode/skills/wb-bridge/PROMPTS.md`（v2 知识库：原则 12 条 + 模板 T1–T9 + 经验条目 E-xxx +
   决策速查表；ZCode 会话会自动命中该 Skill）。

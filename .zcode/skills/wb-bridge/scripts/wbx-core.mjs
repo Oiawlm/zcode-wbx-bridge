@@ -18,11 +18,12 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '5.0.0';
+export const WBX_VERSION = '5.1.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -89,6 +90,14 @@ const FALLBACK_ORDER = ['cn', 'ai', 'cline'];     // 回退顺序：国内版兜
 const DEFAULT_CLI_PATH = 'D:\\App\\WorkBuddyAI\\resources\\app.asar.unpacked\\cli\\bin\\codebuddy';
 const FALLBACK_MODEL = 'deepseek-v4.1-flash';
 
+// ---------- cline 免费孪生（v5.1：cline lane 默认免费调 DeepSeek V4.1 Flash） ----------
+// Cline 按模型 id 计费：deepseek/deepseek-v4.1-flash 计费，cline-free/ 前缀的同名孪生免费
+//（限时促销轮换 + 每日用量配额，官方文档口径）。免费组会轮换，故清单一律走
+// recommended-models 端点（见 fetchClineFreeModels），本常量只是默认模型 id，不是清单。
+export const CLINE_FREE_DEFAULT_MODEL = 'cline-free/deepseek-v4.1-flash';
+// v5 时期探测后写入 config 的计费孪生（loadConfig 一次性迁移的唯一源值；其他显式值不动）
+const CLINE_METERED_TWIN_MODEL = 'deepseek/deepseek-v4.1-flash';
+
 // ---------- cline lane（v5：可选第三 lane，独立上游） ----------
 // 红线：桥的 cline 状态只在 <运行时根>/cline-home/ 下，绝不读写用户 ~/.cline。
 // 隔离方式（Phase 0 实测定案）：通过 USERPROFILE/HOME 环境变量覆盖，让 cline 解析的
@@ -154,6 +163,111 @@ export function clineHasCredential() {
 
 export function clineReady() {
   return !!resolveClinePath() && clineHasCredential();
+}
+
+// ---------- cline 免费模型清单（v5.1：recommended-models 端点） ----------
+// 官方端点（Bearer OAuth accessToken；token 只用不打印，绝不进日志/响应/导出）。
+// 返回 {recommended,free,clinePass,clineCloud} 四数组，元素 {id,name,description,tags}。
+// 免费组限时轮换 -> 清单永不硬编码，每次实时取；端点失败时降级读最近一次成功缓存。
+const CLINE_RECOMMENDED_MODELS_URL = 'https://api.cline.bot/api/v1/ai/cline/recommended-models';
+const CLINE_FREE_CACHE_FILE = path.join(RUNTIME_ROOT, 'cline-free-models.json');
+
+// 只读 providers.json 取 OAuth accessToken（内部使用，绝不返回给调用方打印）
+function clineAccessTokenForCatalog_() {
+  try {
+    const j = JSON.parse(fs.readFileSync(clineProvidersFile(), 'utf8'));
+    const p = j?.providers?.[loadConfig()['cline-provider'] || 'cline'];
+    const t = p?.settings?.auth?.accessToken || p?.apiKey;
+    return typeof t === 'string' && t ? t : null;
+  } catch { return null; }
+}
+
+// 专用 HTTPS GET（node:https 单次连接，不走 fetch/undici）：undici 全局连接池在 win32 上
+// 与随后的 process.exit 冲突（libuv async.c 断言、exit 127，2026-09-25 实测最小复现），
+// 故目录拉取必须走本实现；返回形状与 httpJson 一致 {status,json,text}。
+function httpsGetJson_(url, { headers = {}, timeoutMs = 10000 } = {}) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const fin = (r) => { if (!settled) { settled = true; resolve(r); } };
+    try {
+      const req = https.request(url, { method: 'GET', headers, agent: false, timeout: timeoutMs }, (res) => {
+        const chunks = [];
+        res.on('data', (b) => chunks.push(b));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          let json = null;
+          try { json = JSON.parse(text); } catch { /* 非 JSON 响应 */ }
+          fin({ status: res.statusCode, json, text });
+          res.destroy();
+        });
+      });
+      req.on('timeout', () => { req.destroy(); fin({ status: 0, json: null, text: `timeout（> ${timeoutMs}ms）` }); });
+      req.on('error', (e) => fin({ status: 0, json: null, text: String((e && e.message) || e) }));
+      req.end();
+    } catch (e) { fin({ status: 0, json: null, text: String((e && e.message) || e) }); }
+  });
+}
+
+function readClineFreeCache() {
+  try {
+    const j = JSON.parse(fs.readFileSync(CLINE_FREE_CACHE_FILE, 'utf8'));
+    if (Array.isArray(j.models) && j.fetchedAt) return j;
+  } catch { /* 无缓存 */ }
+  return null;
+}
+
+/** 当前免费模型组。成功：{ok:true, source:'endpoint'|'cache', fetchedAt, models:[{id,name,description}]}；
+ *  失败：{ok:false, source:'none', models:[], error}（明确报错，绝不崩溃、绝不打印 token）。 */
+export async function fetchClineFreeModels({ timeoutMs = 10000 } = {}) {
+  const token = clineAccessTokenForCatalog_();
+  if (!token) {
+    return { ok: false, source: 'none', models: [], error: 'cline 未登录（隔离 providers.json 无凭证）——node wbx.mjs login --identity cline' };
+  }
+  const r = await httpsGetJson_(CLINE_RECOMMENDED_MODELS_URL, { headers: { Authorization: `Bearer ${token}` }, timeoutMs });
+  if (r.status !== 200 || !r.json) {
+    const cached = readClineFreeCache();
+    if (cached) {
+      return { ok: true, source: 'cache', fetchedAt: cached.fetchedAt, models: cached.models,
+        note: `recommended-models 端点失败（HTTP ${r.status || '网络错误'}），降级使用 ${cached.fetchedAt} 的缓存清单` };
+    }
+    return { ok: false, source: 'none', models: [], error: `recommended-models 端点失败（HTTP ${r.status || '网络错误'}：${brief(r.text, 120)}）且无缓存` };
+  }
+  const d = r.json.data || r.json;
+  const arr = Array.isArray(d?.free) ? d.free : [];
+  const models = arr
+    .filter((m) => m && typeof m.id === 'string' && m.id)
+    .map((m) => ({ id: m.id, name: typeof m.name === 'string' ? m.name : '', description: typeof m.description === 'string' ? m.description : '' }));
+  const rec = { fetchedAt: new Date().toISOString(), models };
+  try {
+    fs.mkdirSync(RUNTIME_ROOT, { recursive: true });
+    fs.writeFileSync(CLINE_FREE_CACHE_FILE, JSON.stringify(rec, null, 2), 'utf8');
+  } catch { /* 缓存写失败不影响返回 */ }
+  return { ok: true, source: 'endpoint', fetchedAt: rec.fetchedAt, models };
+}
+
+// ---------- v5.1 免费档错误形态（超额状态机，P0-3） ----------
+// 形态取证（2026-09-25）：超额未实测到（20 次内未见限制），消息模板取自 cline 3.0.65 二进制：
+//   每日配额：『Daily free model limit reached / You've reached today's free usage limit for this
+//             model. / Try again in <时长> or select another model.』（ClineFreeModelLimitError）
+//   促销轮换：『Free model promotion ended / The free promotion for this model has ended and it is
+//             no longer available.』
+//   不存在 id：『model not found』（实测：agent_event.error.message 与 run_result.text 均为该串）
+export function isFreeLimitError(text) {
+  return /daily free model limit|today'?s free usage limit|free model limit reached/i.test(String(text || ''));
+}
+
+export function isFreePromotionEndedError(text) {
+  return /free model promotion ended|free promotion for this model has ended/i.test(String(text || ''));
+}
+
+export function isModelNotFoundError(text) {
+  return /model not found/i.test(String(text || ''));
+}
+
+/** 从超额错误文本提取重置倒计时（如 "5m"、"2h 30m"）；无则 null。 */
+export function extractFreeLimitResetIn(text) {
+  const m = /Try again in ([^.]+?) or select another model/i.exec(String(text || ''));
+  return m ? m[1].trim() : null;
 }
 
 // ---------- 小工具 ----------
@@ -251,15 +365,15 @@ export const CONFIG_DEFS = {
   },
   'cline-data-dir': {
     type: 'string', default: '',
-    desc: 'cline 隔离数据目录（默认 <运行时根>/cline/data；禁止指向 ~/.cline）',
+    desc: 'cline 隔离主目录（默认 <运行时根>/cline-home；禁止指向 ~/.cline）',
   },
   'cline-provider': {
     type: 'string', default: 'cline',
     desc: 'cline provider id：cline（免费额度+按量）| cline-pass（订阅）',
   },
   'cline-model': {
-    type: 'string', default: '',
-    desc: 'cline lane 模型 id（空=provider 默认模型；免费 DeepSeek id 以 doctor 探测为准）',
+    type: 'string', default: CLINE_FREE_DEFAULT_MODEL,
+    desc: `cline lane 模型 id（默认免费孪生 ${CLINE_FREE_DEFAULT_MODEL}；免费组轮换后用 wbx models --as cline --free 查当前清单）`,
   },
   'cline-thinking': {
     type: 'string', default: 'xhigh',
@@ -292,15 +406,29 @@ export function loadConfig() {
   }
   if (typeof out.model !== 'string' || !out.model) out.model = FALLBACK_MODEL;
   if (typeof out['cli-path'] !== 'string') out['cli-path'] = '';
-  // cline-* 键（v5，全部可选；缺省=行为等同 v4）
-  for (const k of ['cline-path', 'cline-data-dir', 'cline-model']) {
+  // cline-* 键（v5 起全部可选）
+  for (const k of ['cline-path', 'cline-data-dir']) {
     if (typeof out[k] !== 'string') out[k] = '';
   }
+  // v5.1 存量迁移（P0-2，一次性）：仅当旧值恰为 v5 计费孪生 deepseek/deepseek-v4.1-flash 时
+  // 改写为免费孪生默认；用户显式设置的其他模型 id 一律不动。写回 config.json 使迁移只发生一次。
+  let migratedClineModel = false;
+  if (raw['cline-model'] === CLINE_METERED_TWIN_MODEL) {
+    out['cline-model'] = CLINE_FREE_DEFAULT_MODEL;
+    migratedClineModel = true;
+  }
+  if (typeof out['cline-model'] !== 'string' || !out['cline-model']) out['cline-model'] = CLINE_FREE_DEFAULT_MODEL;
   if (!CLINE_PROVIDER_IDS.includes(out['cline-provider'])) out['cline-provider'] = 'cline';
   if (!['none', 'low', 'medium', 'high', 'xhigh'].includes(out['cline-thinking'])) out['cline-thinking'] = 'xhigh';
   if (!['agentic', 'basic', 'off'].includes(out['cline-compaction'])) out['cline-compaction'] = 'off';
   if (!Number.isInteger(out['cline-parallel']) || out['cline-parallel'] < 1 || out['cline-parallel'] > 8) {
     out['cline-parallel'] = 1;
+  }
+  if (migratedClineModel) {
+    try {
+      fs.writeFileSync(CONFIG_FILE, JSON.stringify(out, null, 2) + '\n', 'utf8');
+      console.error(`[MIGRATE] cline-model：检测到 v5 计费孪生 ${CLINE_METERED_TWIN_MODEL}，已改写为免费孪生 ${CLINE_FREE_DEFAULT_MODEL}（仅此值迁移，显式设置的其他模型 id 不动）`);
+    } catch { /* 写回失败不影响本次内存中生效 */ }
   }
   return out;
 }
@@ -404,7 +532,7 @@ export function laneStatusInfo(laneKey) {
     const ready = clineHasCredential();
     const cfg = loadConfig();
     return {
-      key: 'cline', label: 'Cline CLI', cost: '按量微付费（实测单次 $0.0003-0.004）',
+      key: 'cline', label: 'Cline CLI', cost: '免费（cline-free 孪生，限时轮换+每日配额）',
       endpoint: 'cline provider（OAuth 账号）',
       ready: ready && installed, installed, credential: ready,
       disabled: isLaneDisabled('cline'),
@@ -446,6 +574,12 @@ export function resolveDefaultLane() {
 
 // 回退 lane：其余已登录且未禁用的 lane（顺序 cn→ai→cline，各一次）；没有则 null。
 // cline 未装/无凭证时 laneReady 为 false，天然跳过（不耗重试额度）。
+//
+// 【v5.1 红线断言·非 DeepSeek 禁回退（用户定案）】cline lane 失败的一切路径都不得改用
+// 非 DeepSeek 模型顶替：本函数只换 lane（ai/cn 的 WorkBuddy DeepSeek V4.1 Flash 仍是 DeepSeek），
+// 绝不换模型 id——askOnceCline 的 -m 恒为 config cline-model 或任务显式指定的值，失败重试
+// 原样保留。回归（internal/v6-regression）断言：fallbackLane('cline') ∈ {ai,cn}，
+// 且 askOnceCline 失败路径无任何对 -m 的改写。跨 lane 回退（cline→ai/cn）保留。
 export function fallbackLane(fromKey) {
   for (const k of FALLBACK_ORDER) {
     if (k !== fromKey && laneReady(k) && !isLaneDisabled(k)) return k;
@@ -772,9 +906,11 @@ export async function askOnceCline({ prompt, model = null, timeoutMs = 300000 })
   const provider = cfg['cline-provider'] || 'cline';
   const mdl = model || cfg['cline-model'] || '';
   const useStdin = prompt.length > 12000;
+  // cline 参数解析要求提示词至少含一个 ASCII 空格（实测无空格的短中文会被当未知子命令拒绝）；
+  // 无空格时前缀一个空格规避（v5.1 实测可行，不影响模型收到的内容）
   const positional = useStdin
     ? 'Complete the task described in the piped stdin content. Treat it as your full instructions, including all output constraints.'
-    : prompt;
+    : (/\s/.test(prompt) ? prompt : ` ${prompt}`);
   const args = [
     '--json',
     '-P', provider,
@@ -808,12 +944,20 @@ export async function askOnceCline({ prompt, model = null, timeoutMs = 300000 })
   const failed = r.code !== 0 || parsed.error !== null || parsed.finishReason === 'error' || parsed.text === null;
   if (failed) {
     const msg = parsed.error || parsed.text || brief(stderr || combined) || `exit=${r.code}，无输出`;
+    // v5.1 超额状态机（P0-3）：免费档错误优先于通用限流识别；跨 lane 回退语义不变
+    //（runAskJob/runFanoutJob 照旧可回退 ai/cn——同为 DeepSeek，符合用户定案）。
+    let hint;
+    let resetIn = null;
+    if (isFreeLimitError(msg)) { hint = 'free-limit'; resetIn = extractFreeLimitResetIn(msg); }
+    else if (isFreePromotionEndedError(msg)) hint = 'free-promotion-ended';
+    else if (isModelNotFoundError(msg)) hint = 'model-not-found';
+    else if (isRateLimit(msg)) hint = 'ratelimit';
     return {
       ok: false,
       kind: r.code === 0 && parsed.hasRunResult ? 'result-error' : 'cli-error',
       error: brief(msg),
       durationMs, rawStream,
-      hint: isRateLimit(msg) ? 'ratelimit' : undefined,
+      hint, ...(resetIn ? { resetIn } : {}),
     };
   }
   return {
@@ -1060,7 +1204,7 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
     effort: effort || null,
     usage: res?.usage || null,
   };
-  if (res?.ok) rec.result = res.text; else { rec.error = `${res?.kind}: ${res?.error || (last?.kind + ': ' + (last?.error || ''))}`; if (res?.hint) rec.hint = res.hint; }
+  if (res?.ok) rec.result = res.text; else { rec.error = `${res?.kind}: ${res?.error || (last?.kind + ': ' + (last?.error || ''))}`; if (res?.hint) rec.hint = res.hint; if (res?.resetIn) rec.resetIn = res.resetIn; }
   if (res?.rawStream) {
     await fsp.writeFile(path.join(job.dir, 'ask.cline-stream.jsonl'), res.rawStream, 'utf8');
   }
@@ -1072,7 +1216,7 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
   if (res?.ok) {
     return { ok: true, jobId: job.id, jobDir: job.dir, lane: usedLane, fallbackFrom: usedLane !== primary ? primary : null, model: res.model, usage: res.usage, durationMs: res.durationMs, text: res.text };
   }
-  return { ok: false, jobId: job.id, jobDir: job.dir, lane: primary, kind: res?.kind || last?.kind, error: res?.error || last?.error, hint: res?.hint || last?.hint };
+  return { ok: false, jobId: job.id, jobDir: job.dir, lane: primary, kind: res?.kind || last?.kind, error: res?.error || last?.error, hint: res?.hint || last?.hint, ...(res?.resetIn || last?.resetIn ? { resetIn: res?.resetIn || last?.resetIn } : {}) };
 }
 
 /**
@@ -1406,7 +1550,7 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
   {
     const cinfo = laneStatusInfo('cline');
     say('');
-    say(`--- lane cline（Cline CLI · 按量微付费${cinfo.disabled ? ' · 已禁用' : ' · 可选 lane'}）---`);
+    say(`--- lane cline（Cline CLI · 免费孪生${cinfo.disabled ? ' · 已禁用' : ' · 可选 lane'}）---`);
     if (cinfo.disabled) {
       steps.push({ name: 'lane-cline', good: null, detail: '已禁用（disabled-lanes）' });
       say('[SKIP] 可选lane  已禁用（disabled-lanes），路由/回退链跳过该 lane');
@@ -1425,17 +1569,45 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
       const verStr = ansiStrip(ver.stdout || '').trim().split(/\r?\n/)[0] || '?';
       say(`[OK]   凭证     已登录（OAuth，provider=${cfgC['cline-provider']}，model=${cfgC['cline-model'] || 'provider 默认'}，thinking=${cfgC['cline-thinking']}，compaction=${cfgC['cline-compaction']}，cline v${verStr}，隔离目录 ${clineHomeDir()}）`);
       steps.push({ name: 'lane-cline', good: true, detail: `已登录（cline v${verStr}，model=${cfgC['cline-model'] || '默认'}）` });
+
+      // v5.1 免费孪生存在性校验（P0-1）：免费组会轮换，端点确认 cline-model 是否仍在组内。
+      // 端点失败降级 WARN（读缓存或明确报错），绝不影响 exit 0。
+      const fm = await fetchClineFreeModels();
+      const curModel = cfgC['cline-model'] || CLINE_FREE_DEFAULT_MODEL;
+      if (fm.ok && fm.models.length) {
+        const inFree = fm.models.some((m) => m.id === curModel);
+        const srcNote = fm.source === 'cache' ? `（${fm.fetchedAt.slice(0, 10)} 缓存，端点暂不可用）` : '';
+        if (inFree) {
+          const fd = `cline-model=${curModel} 在当前免费组（共 ${fm.models.length} 个）${srcNote}`;
+          steps.push({ name: 'cline-free', good: true, detail: fd });
+          say(`[OK]   免费模型 ${fd}`);
+        } else {
+          const fd = `cline-model=${curModel} 不在当前免费组（可能已被轮换下线，或为计费 id）。当前免费：${fm.models.map((m) => m.id).join('、')}${srcNote}。换用：wbx config set cline-model "<免费 id>"（清单：wbx models --as cline --free）`;
+          steps.push({ name: 'cline-free', good: null, detail: fd });
+          say(`[WARN] 免费模型 ${fd}`);
+        }
+      } else {
+        const fd = `免费清单不可用（${fm.error}）——存在性校验降级跳过（不影响 exit 0）`;
+        steps.push({ name: 'cline-free', good: null, detail: fd });
+        say(`[WARN] 免费模型 ${fd}`);
+      }
+
       if (!probe) { laneRows.push({ ...cinfo, probe: null }); }
       else {
         say('lane cline 模型探测中（tiny ask）…');
         const p = await askOnce({ lane: 'cline', prompt: '请只回复两个字符 OK', timeoutMs: 180000 });
         if (p.ok) {
-          const detail = `${p.model} 可用，${fmtMs(p.durationMs)}，tokens in/out = ${p.usage.in ?? '?'}/${p.usage.out ?? '?'}`;
+          const cost = p.usage && typeof p.usage.cost === 'number' ? p.usage.cost : null;
+          const detail = `${p.model} 可用，${fmtMs(p.durationMs)}，tokens in/out = ${p.usage.in ?? '?'}/${p.usage.out ?? '?'}${cost != null ? `，本次计价 $${cost.toFixed(6)}${cost === 0 ? '（免费）' : ''}` : ''}`;
           steps.push({ name: 'lane-cline-probe', good: true, detail });
           say(`[OK]   模型探测 ${detail}`);
           laneRows.push({ ...cinfo, probe: { good: true, detail } });
         } else {
-          const detail = `${p.kind}: ${p.error}${p.hint === 'login' ? '（凭证疑似过期 -> 重新 wbx login --identity cline）' : ''}`;
+          const extra = p.hint === 'login' ? '（凭证疑似过期 -> 重新 wbx login --identity cline）'
+            : p.hint === 'free-limit' ? `（免费额度今日已达上限${p.resetIn ? `，约 ${p.resetIn} 后重置` : ''} -> 可稍后再试或 wbx models --as cline --free 换免费模型）`
+            : p.hint === 'free-promotion-ended' || p.hint === 'model-not-found' ? '（模型可能已被轮换下线 -> wbx models --as cline --free 查当前免费清单）'
+            : '';
+          const detail = `${p.kind}: ${p.error}${extra}`;
           steps.push({ name: 'lane-cline-probe', good: null, detail });
           say(`[WARN] 模型探测 ${detail}（可选 lane，不影响 exit 0）`);
           laneRows.push({ ...cinfo, probe: { good: false, detail } });
@@ -1468,7 +1640,8 @@ export function userBlockText(bridgeScriptPath) {
     '',
     `本机装有 wbx 桥（入口 "${bridgeScriptPath}"）：三个外部 Agent 当作你的子代理，高频、放量调用`,
     '（几乎免费，不必为省 token 收着用）。lane：ai/cn = WorkBuddy 双 lane 的 DeepSeek V4.1 Flash',
-    '（国际版免费/国内版近免费）；cline = Cline CLI（可选第三 lane，按量微付费实测单次 $0.001 级，thinking=xhigh）。',
+    '（国际版免费/国内版近免费）；cline = Cline CLI（可选第三 lane，默认免费调 DeepSeek——',
+    'cline-free/deepseek-v4.1-flash 孪生，限时轮换+每日配额，thinking=xhigh；免费清单：wbx models --as cline --free）。',
     '自包含（v4 公理）：全部输入可由你打包进提示词（材料先行）、输出可独立校验即可外包——含代码模块编写：',
     '',
     '```bash',

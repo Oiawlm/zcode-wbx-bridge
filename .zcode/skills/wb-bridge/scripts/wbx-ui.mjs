@@ -27,7 +27,7 @@ import {
   LANE_ORDER, CONFIG_DEFS, bridgeForm,
   redact, loadConfig, setConfig, parseLane,
   laneStatusInfo, resolveDefaultLane, newJobId, getJob, listJobs,
-  runAskJob, runFanoutJob, doctorStatus,
+  runAskJob, runFanoutJob, doctorStatus, fetchClineFreeModels,
   startLogin, pollLoginToken, fetchAccountInfo, persistLogin,
   openBrowser, ensureDirs,
 } from './wbx-core.mjs';
@@ -199,7 +199,10 @@ a{color:var(--acc)}
     <h3>cline lane（可选·OAuth 设备授权）</h3>
     <p class="hint">cline 登录是设备码流程，需在终端里跑（浏览器完成授权，凭证落隔离目录 <b>&lt;运行时根&gt;/cline-home/</b>，与用户 ~/.cline 无关）：</p>
     <div class="copyline">node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" login --identity cline</div>
-    <p class="hint">登录后可用 config 设置 cline-model / cline-thinking（默认 xhigh）/ cline-compaction（默认 off）/ cline-parallel（默认 1）。</p>
+    <p class="hint">登录后默认免费调 DeepSeek（cline-free/deepseek-v4.1-flash 孪生，限时轮换+每日配额）；
+    免费模型可在「状态」页 cline 卡下拉选择，或 <b>wbx models --as cline --free</b> 查清单后 config set。
+    thinking 默认 xhigh / compaction 默认 off / 并发默认 1。
+    隐私注：免费用量可能被 Cline 用于改进模型（官方披露）。</p>
   </div>
 </section>
 
@@ -285,10 +288,24 @@ async function loadStatus(){
           :!l.installed?'<span class="badge dim">未安装（可选）</span>'
           :!l.credential?'<span class="badge warn">未登录（OAuth）</span>'
           :'<span class="badge ok">已登录</span>';
+        var freeOpts='';
+        var fmList=s.clineFreeModels||[];
+        for(var fi=0;fi<fmList.length;fi++){
+          var fm=fmList[fi];
+          var cur=(l.model||'')===fm.id;
+          freeOpts+='<option value="'+esc(fm.id)+'"'+(cur?' selected':'')+'>'
+            +esc(fm.id)+(fm.name?(' · '+esc(fm.name)):'')+(fm.deepseek?'':'（非 DeepSeek）')+'</option>';
+        }
+        var freeSel=freeOpts
+          ?'<select id="cline-free-select" style="max-width:340px">'+freeOpts+'</select>'
+            +'<span class="hint">切换即写 config cline-model（当前 '+esc(l.model||'provider 默认')+'）</span>'
+          :'<span class="hint">（免费清单不可用：'+esc(s.clineFreeModelsNote||'未知原因')+'；命令行：wbx models --as cline --free）</span>';
+        var freeNote=s.clineFreeModelsNote?'<span class="hint">'+esc(s.clineFreeModelsNote)+'</span>':'';
         lanesHtml+='<div class="card"><h3>lane cline · Cline CLI（可选） '+cState+'</h3>'
           +'<div class="kv">'
-          +'<b>成本</b><span>按量微付费（实测单次 $0.0003-0.004）</span>'
+          +'<b>成本</b><span>免费（cline-free 孪生，限时轮换+每日配额；计费 id 才按量扣费）</span>'
           +'<b>模型</b><span>'+esc(l.model||'provider 默认')+'</span>'
+          +'<b>免费模型组</b><span style="display:block">'+freeSel+' '+freeNote+'</span>'
           +'<b>思考/压缩</b><span>'+esc(l.thinking)+' / '+esc(l.compaction)+'</span>'
           +'<b>二进制</b><span>'+esc(l.binaryPath||'未找到（npm install -g cline）')+'</span>'
           +'<b>登录方式</b><span>命令行 wbx login --identity cline（浏览器 OAuth 设备授权）</span>'
@@ -314,6 +331,11 @@ async function loadStatus(){
     $('dis-cn').checked=s.config['disabled-lanes'].indexOf('cn')>=0;
     $('route-hint').textContent='当前生效默认路由：'+(s.defaultLane==='auto'?'auto → '+s.effectiveLane:s.defaultLane)
       +'；可用 lane：'+(s.readyCount>0?s.readyCount+' 个':'0 个');
+    var cfs=$('cline-free-select');
+    if(cfs)cfs.onchange=function(){
+      api('POST','/api/config',{key:'cline-model',value:cfs.value}).then(loadStatus)
+        .catch(function(e){alert('切换失败：'+e.message)});
+    };
   }catch(e){$('hdr-meta').textContent='加载失败：'+e.message}
 }
 $('route-pill').onclick=function(ev){
@@ -580,12 +602,24 @@ async function handler(req, res) {
       ensureDirs();
       const cfg = loadConfig();
       const lanes = LANE_ORDER.map((k) => laneStatusInfo(k));
+      // v5.1：cline 免费模型组（server 侧调 recommended-models，失败降级缓存/空数组+提示）
+      let clineFreeModels = [];
+      let clineFreeModelsNote = '';
+      {
+        const fm = await fetchClineFreeModels();
+        if (fm.ok && fm.models.length) {
+          clineFreeModels = fm.models.map((m) => ({ id: m.id, name: m.name, description: m.description, deepseek: /deepseek/i.test(m.id) }));
+          if (fm.source === 'cache') clineFreeModelsNote = `清单为 ${String(fm.fetchedAt).slice(0, 16)} 缓存（端点暂不可用）`;
+        } else {
+          clineFreeModelsNote = fm.error || '免费清单不可用';
+        }
+      }
       sendJson(res, 200, {
         version: WBX_VERSION, runtimeRoot: RUNTIME_ROOT,
         form: bridgeForm(),
         config: cfg, defaultLane: cfg['default-lane'], effectiveLane: resolveDefaultLane(),
         readyCount: lanes.filter((l) => l.ready && !l.disabled).length,
-        lanes,
+        lanes, clineFreeModels, clineFreeModelsNote,
       });
       return;
     }

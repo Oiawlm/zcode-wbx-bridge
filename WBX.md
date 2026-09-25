@@ -1,5 +1,8 @@
-# WBX — ZCode ↔ 外部算力联动桥（v5：三 lane 子代理化高频调度）
+# WBX — ZCode ↔ 外部算力联动桥（v5.1：三 lane 子代理化高频调度 · cline 免费孪生）
 
+> **v5.1**：cline lane 默认免费调用 DeepSeek V4.1 Flash（`cline-free/` 免费孪生，计价 $0 实测；
+> 限时轮换+每日配额）——v5「CLI 侧无免费模型」结论勘误；免费清单可观测可选
+>（`models --as cline --free` / doctor 存在性校验 / UI 下拉）；超额与轮换错误状态机；存量迁移。
 > **v5**：三条 lane（WorkBuddy 双 lane + 可选 Cline CLI）、把三个外部 Agent 当作 ZCode 的
 > **子代理**高频调用（默认分派/消耗豁免/best-of-N/评审常规化）、提示词知识库
 > [PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md) v2（原则 12 条 + 模板 T1–T9 + 经验条目库 + 沉淀闭环）。
@@ -23,7 +26,7 @@ v5 把三个外部 Agent（WorkBuddy 国内版 / WorkBuddy AI / Cline）定位�
 ZCode ──> node wbx.mjs fanout [--lanes ai,cn,cline] ──> 并行 worker 进程
    ai lane  = WorkBuddy AI 国际版（deepseek-v4.1-flash x0.00 免费）
    cn lane  = WorkBuddy 国内版（x0.03 近免费）
-   cline    = Cline CLI（可选：deepseek/deepseek-v4.1-flash 按量微付费，thinking=xhigh）
+   cline    = Cline CLI（可选：cline-free/deepseek-v4.1-flash 免费孪生，thinking=xhigh）
    └─ 结果写 <运行时根>/jobs/<jobId>/（cline 任务另有原始事件流 .cline-stream.jsonl）
 ```
 
@@ -33,7 +36,7 @@ ZCode ──> node wbx.mjs fanout [--lanes ai,cn,cline] ──> 并行 worker �
 |---|---|---|---|---|---|
 | `ai` | 国际版 WorkBuddy AI | www.workbuddy.ai | deepseek-v4.1-flash | **x0.00 完全免费** | `.wbx/sessions/ai.json` + `.wbx/product/ai.json` |
 | `cn` | 国内版 | copilot.tencent.com | deepseek-v4.1-flash | x0.03 近免费 | `.wbx/sessions/cn.json` + `.wbx/product/cn.json` |
-| `cline` | Cline CLI（**可选**） | Cline provider（OAuth） | deepseek/deepseek-v4.1-flash | 按量微付费（实测单次 $0.0003-0.004） | `~/.wbx/cline-home/.cline/data/settings/providers.json`（OAuth，settings.auth.accessToken） |
+| `cline` | Cline CLI（**可选**） | Cline provider（OAuth） | cline-free/deepseek-v4.1-flash | **免费（cline-free 孪生，限时轮换+每日配额）** | `~/.wbx/cline-home/.cline/data/settings/providers.json`（OAuth，settings.auth.accessToken） |
 
 **默认路由：ai 已登录 → ai（免费），否则 cn；回退链 ai → cn → cline → ZCode 自己做**
 （各一次；cline 未装/无凭证直接跳过不耗重试额度；`auto` 下 cline 永远排最后）。
@@ -556,7 +559,7 @@ tm-henningnt/cline-plugin-cc（验证 3.0.37/3.0.40）、r/CLine 免费模型帖
 | 10 | NDJSON 事件全集 | `hook_event`(agent_start/agent_error)、`agent_event`(iteration_start/end、content_start/end——正文与 **reasoning 思考块**（`contentType:"reasoning"`）、error)、`run_result`(finishReason completed/error、**text=最终答案**、usage{inputTokens,outputTokens,cacheRead,cacheWrite,totalCost}、model.id、durationMs)、usage/effort/done/toggle。**解析取 run_result 即可，增量 event.text 仅回退**；无先例所述 `cline-run:` 尾行 |
 | 11 | 纯文本端点 | `--auto-approve false` 下全流无任何工具执行事件（流中 "tool" 字样仅为 reasoning 文本提到"我无工具"） |
 | 12 | thinking/compaction | `--thinking xhigh --compaction off` 被接受且生效（run_start 事件可见 thinking:on；compaction off） |
-| 13 | 模型 id 与费用 | 格式 `vendor/model`；模型目录 API 实测可得（`GET api.cline.bot/api/v1/models`，Bearer OAuth token，全量 460 个模型）。**「免费」终版结论（2026-09-25 追加实测）**：Cline App 内标 "(free)" 的模型（如 DeepSeek V4.1 Flash / MiMo-V2.6-Flash / Space Bunny Alpha）经 CLI 调用时**并非全部零成本**——`stealth/space-bunny-alpha` 实测 totalCost=0（目录级真免费，1M 上下文）；`deepseek/deepseek-v4.1-flash`（已设默认，$0.0008-0.001/次）与 `xiaomi/mimo-v2.6-flash`（$0.001/次）均按量计费；`~deepseek/deepseek-flash-latest` 等自托管变体亦计费（$0.0008/次）。CLI 二进制内含 `FreeModelLimitResetTime`/`CreditsRequired` 字样（免费组+每日额度机制存在），但 App 的 free 标签与 CLI 计价不同源。**找免费模型的办法**：`wbx models --as cline --probe "vendor/model,..."`（v5 起显示每次探测的计价，$0 即免费）；想全免费可 `config set cline-model "stealth/space-bunny-alpha"` |
+| 13 | 模型 id 与费用 | 格式 `vendor/model`；模型目录 API 实测可得（`GET api.cline.bot/api/v1/models`，Bearer OAuth token，全量 460 个模型）。**「免费」终版结论（2026-09-25 追加实测）**：Cline App 内标 "(free)" 的模型（如 DeepSeek V4.1 Flash / MiMo-V2.6-Flash / Space Bunny Alpha）经 CLI 调用时**并非全部零成本**——`stealth/space-bunny-alpha` 实测 totalCost=0（目录级真免费，1M 上下文）；`deepseek/deepseek-v4.1-flash`（已设默认，$0.0008-0.001/次）与 `xiaomi/mimo-v2.6-flash`（$0.001/次）均按量计费；`~deepseek/deepseek-flash-latest` 等自托管变体亦计费（$0.0008/次）。CLI 二进制内含 `FreeModelLimitResetTime`/`CreditsRequired` 字样（免费组+每日额度机制存在），但 App 的 free 标签与 CLI 计价不同源。**找免费模型的办法**：`wbx models --as cline --probe "vendor/model,..."`（v5 起显示每次探测的计价，$0 即免费）；想全免费可 `config set cline-model "stealth/space-bunny-alpha"`。**【勘误（v5.1，2026-09-25）】：本条「CLI 侧 DeepSeek 全部计费」的结论后被 v5.1 推翻——错在探测用了计费孪生 id：同一模型有付费 id 与 `cline-free/` 前缀免费孪生两个 id（`cline-free/deepseek-v4.1-flash` 实测 totalCost=0）。历史结论保留以记录认知演进，最新口径见 v5.1 章】** |
 | 14 | `-t` 超时 | `-t <秒>` 传整轮上限，桥侧 spawn 超时（timeoutMs+20s）独立兜底 |
 
 **隔离性验证**：以 HOME 覆盖运行多个真实任务后，用户 `~/.cline` 除其自身 hub 守护进程日志外
@@ -678,3 +681,97 @@ examples + PROMPTS.md + docs）、用户级 skill SKILL.md + PROMPTS.md v2、`/w
 cline 段按装/未装显示正确状态、exit 1 符合「无可用 lane」语义）→ 已登录机器形态 `ask` 首条
 （10s，ai lane 正确作答）。**机械步骤合计 ~13 秒**，10 分钟预算内余量充足；仅登录步骤需
 真人操作（README 已逐条写明），无超时步骤，无需回写。
+
+---
+
+## v5.1 章：cline lane 免费孪生（cline-free）· 免费模型可观测与可选
+
+> 策划材料：`internal/RESEARCH-V6.md`（孪生机制/清单端点/先例仓库/已排除路线，均经策划窗口
+> 2026-09-25 实机核实）。版本号 **5.1.0**（「V6」仅为策划编号，不进产品版本）。
+
+### v5.1 定位说明
+
+v5 遗留错误：模型探测用了**计费孪生** `deepseek/deepseek-v4.1-flash`，得出「CLI 侧无免费
+模型」的错误结论——错的是 id，不是路线。Cline 按**模型 id** 计费：同一模型有两个 id
+（付费 id 与 `cline-free/` 前缀免费孪生），免费孪生 `cline-free/deepseek-v4.1-flash`
+实测 totalCost=0。v5.1 做四件事（用户定案，不扩大范围）：
+
+1. **默认免费**：`cline-model` 缺省默认切为免费孪生；存量 config 一次性迁移（仅旧值恰为
+   v5 计费孪生时改写，显式其他值不动）。
+2. **可观测**：`wbx models --as cline --free` 实时列免费组（recommended-models 端点，token
+   只用不打印；失败降级缓存）；doctor 校验默认孪生是否仍在免费组（免费组限时轮换的防护）。
+3. **可选**：Web UI 状态页 cline 卡免费模型下拉（选中即写 `cline-model`；非 DeepSeek 项标注）。
+4. **状态机**：免费档超额/轮换错误分类（`free-limit`/`free-promotion-ended`/`model-not-found`）
+   与用户提示；红线断言——cline lane 内部任何失败路径不得用非 DeepSeek 模型顶替
+  （跨 lane 回退 ai/cn 保留，仍是 DeepSeek）。
+
+### 调研补充（策划窗口核实，来源见 RESEARCH-V6 第一部分）
+
+- **孪生机制**：先例仓库 ErfanBagheri404/ClineDesktop2API README 原文——"Cline bills by
+  model ID: deepseek/deepseek-v4.1-flash is metered, cline-free/deepseek-v4.1-flash is not."
+- **清单端点**：`GET https://api.cline.bot/api/v1/ai/cline/recommended-models`（Bearer OAuth
+  accessToken，即隔离 providers.json 的 `settings.auth.accessToken`），返回
+  `{recommended,free,clinePass,clineCloud}` 四数组，元素 `{id,name,description,tags}`。
+- **官方文档**（docs.cline.bot/getting-started/free-models.md）：免费模型面向任何账户，限时
+  促销轮换+用量配额；官方明确支持 CLI（/settings 选择）、明确「Free model usage is not
+  supported through the Cline API」；**免费用量可能被用于改进模型**（隐私披露，已写入
+  README/UI/安装说明）。
+- **已排除路线**（理由见 RESEARCH-V6 附录 A.1）：SDK 直调 / 直连公开 API 走免费档 /
+  本地反代 / 桌面 App 逆向——CLI 原生支持免费孪生，一步到位。
+
+### Phase 0 实测记录（2026-09-25，执行窗口，cline 3.0.65 / Node v24.19.0 / Windows 11）
+
+| # | 事项 | 实测结论 |
+|---|---|---|
+| P0-1 | 基线复测 | doctor 三 lane 全绿（ai 9.4s / cn 5.4s / cline 5.0s）；`ask --as cline`（免费 id）×2 成功，model=cline-free/deepseek-v4.1-flash、**totalCost=0**、4.7-4.8s、中文正确（job 20260925-141952-723 / 20260925-141956-2zc） |
+| P0-2 | 孪生存在性 | recommended-models 端点 HTTP 200；免费组 5 个：`stealth/space-bunny-alpha`、`cline-free/mimo-v2.6-flash`、`cline-free/deepseek-v4.1-flash`（目标在列）、`cline-free/gemini-3.8-flash`、`cline-free/muse-spark-1.3-contributor`（与策划窗口数据一致） |
+| P0-3 | 轮换下线演练 | 以不存在 id `cline-free/deepseek-v4.1-flash-rotated-away` 探测：exit 1、桥分类 cli-error、错误消息 `model not found`；NDJSON 形态 = `agent_event.error.message:"model not found"` + `run_result.finishReason:"error"`（512ms 即失败，不耗额度）——P0-1 存在性校验的降级设计取证完成 |
+| P0-4 | 额度边界探测 | **节约模式分档递进，20 次成功免费调用全部 totalCost=0、无任何警告事件**（4.1-6.1s/次，16 连发批次 77s）——记录「20 次内未见限制」即停（红线：不打爆用户当日额度） |
+| P0-5 | 超额错误形态 | **未实测到边界**（额度 ≥20 次/日）。形态改为二进制内证（cline.exe 符号与消息模板）：`ClineFreeModelLimitError` 类 + 确切消息「`Daily free model limit reached` / `You've reached today's free usage limit for this model.` / `Try again in <时长> or select another model.`」；轮换下线消息「`Free model promotion ended` / `The free promotion for this model has ended and it is no longer available.`」——状态机按真实消息字符串设计，并如实标注「边界未实测到」 |
+| P0-6 | 无空格怪癖防护 | v5 调研 #9 的「无空格短中文被当未知子命令」复现（ask 提示词无 ASCII 空格 → cli-error 回退 cn）；**前缀一个空格实测可用**（completed、$0、2.5s）——v5.1 已在 askOnceCline 加防护 |
+| P0-7 | 附带发现 | undici fetch（全局连接池）+ 随后 `process.exit` 在 win32 触发 libuv 断言（`async.c` `!(handle->flags & UV_HANDLE_CLOSING)`、exit 127）——最小复现在案；解法：目录拉取走 `node:https` 单次连接（不走 fetch/httpJson），登录流 httpJson 不受影响 |
+
+### 设计决策（Phase 1）
+
+1. **默认值与迁移（P0-2）**：`CONFIG_DEFS['cline-model'].default` = `cline-free/deepseek-v4.1-flash`；
+   loadConfig 容错处一次性迁移——**仅当** config 现值恰为 `deepseek/deepseek-v4.1-flash`（v5
+   写入的计费孪生）时改写为新默认、写回 config.json 并打印 `[MIGRATE]` 一行（写回保证只发生
+   一次）；显式设置的其他值一律不动。空值/缺省回落新默认（P1-6 默认值切换的语义）。
+2. **清单不硬编码（P0-5）**：免费组轮换 → 每次实时调端点；成功写缓存
+   `<运行时根>/cline-free-models.json`（无凭证），端点失败读缓存降级（注明时间戳），再失败
+   明确报错（不崩溃）。token 只用不打印（沿用凭证红线）。
+3. **超额状态机（P0-3）**：错误分类优先级 auth → free-limit（含
+   `extractFreeLimitResetIn` 从「Try again in X」提取重置倒计时透出）→ free-promotion-ended
+   → model-not-found → ratelimit；ask/fanout 命中时给用户可操作提示（等待重置/换免费模型/
+   查清单）。**跨 lane 回退语义不变**：free-limit 照常回退 ai/cn（仍是 DeepSeek 且 ai 免费，
+   符合用户定案）——文档写明。
+4. **非 DeepSeek 禁回退（P0-4，用户定案红线）**：cline lane 失败路径绝不换模型 id
+   （`askOnceCline` 的 `-m` 恒为 config/任务指定值）；`fallbackLane` 只换 lane（ai/cn）。
+   代码注释 + 回归断言（见验收记录）双保险。**UI 下拉与 `--free` 清单里的非 DeepSeek 项
+   仅限用户手动选择**——断言约束的是桥的自动行为，不限制用户手选。
+5. **doctor 存在性校验（P0-1）**：cline 段已登录时新增一行——当前 `cline-model` 在免费组
+   `[OK]`（注明来源 端点/缓存）；不在组 `[WARN]` + 列出当前免费 id + 换用命令；端点失败
+   `[WARN]` 降级。均不影响 exit 0（cline 仍是可选 lane 语义）。cline 探测行新增本次计价
+   （$0 标「免费」）。
+6. **zip/bundle 命名带全版本**：`wbx-bridge-v5.1.0-<日期>.zip`（此前 v5 系列名不含补丁号）。
+
+### 桥改动清单（Phase 1，四模块内，不新建文件）
+
+- `wbx-core.mjs`：`WBX_VERSION` 5.1.0；`CLINE_FREE_DEFAULT_MODEL`/`CLINE_METERED_TWIN_MODEL`
+  常量与注释；config 默认值 + 迁移 + 写回；`httpsGetJson_()`（node:https 单次连接，绕开
+  undici/libuv 断言）；`fetchClineFreeModels()`（端点+缓存降级，token 只用不打印）；
+  `isFreeLimitError/isFreePromotionEndedError/isModelNotFoundError/extractFreeLimitResetIn`；
+  `askOnceCline` 失败分类扩展（hint/resetIn）+ 无空格提示词前缀空格防护；runAskJob 传播
+  resetIn；doctor cline 段存在性校验 + 探测计价；`fallbackLane` 红线注释；
+  `laneStatusInfo('cline')` 成本口径；用户级标记块措辞。
+- `wbx.mjs`：`models --as cline --free`（清单+当前值标注+非 DeepSeek 标注）；ask 失败
+  `hintText()`（含 free-limit 带重置时间、promotion-ended、model-not-found 文案）；HELP
+  三处口径；login cline 提示；`--free` 参数解析。
+- `wbx-ui.mjs`：`/api/status` 新增 `clineFreeModels`/`clineFreeModelsNote`（server 侧端点
+  调用，失败空数组+提示）；cline 卡成本行改免费口径 + 免费模型下拉（选中即 POST
+  /api/config 写 cline-model，非 DeepSeek 标注「（非 DeepSeek）」）；登录页 cline 指引更新。
+- `wbx-setup.mjs`：INSTALL-README cline 段免费口径 + 隐私披露；zip/bundle 名带 WBX_VERSION。
+
+### v5.1 验收记录（Phase 3 回填）
+
+（发布后回填：四类断言回归 + 全命令回归 + 发布证据 + 自举 job 清单。）

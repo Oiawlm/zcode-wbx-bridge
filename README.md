@@ -19,7 +19,7 @@
  ai lane（国际版）   cn lane（国内版）    cline lane（可选）  │
  WorkBuddy AI        WorkBuddy           Cline CLI        │
  DeepSeek V4.1 Flash DeepSeek V4.1 Flash DeepSeek V4.1 Flash│
- x0.00 免费          x0.03 近免费         微付费·xhigh     │
+ x0.00 免费          x0.03 近免费         免费孪生·xhigh    │
     └──────────────────┴──────────────────┴───────┬───────┘
                                                    ▼
                      结果落盘 .wbx/jobs/<jobId>/（可回放、可审计）
@@ -31,12 +31,12 @@
 |---|---|---|---|
 | `ai` | WorkBuddy AI 国际版 | www.workbuddy.ai | DeepSeek V4.1 Flash **x0.00（当前免费）** |
 | `cn` | WorkBuddy 国内版 | copilot.tencent.com | DeepSeek V4.1 Flash x0.03（近免费） |
-| `cline` | Cline CLI（可选，需 npm 单独安装） | Cline provider（OAuth 账号） | DeepSeek V4.1 Flash 按量微付费（实测单次约 $0.0003-0.004） |
+| `cline` | Cline CLI（可选，需 npm 单独安装） | Cline provider（OAuth 账号） | DeepSeek V4.1 Flash **免费（`cline-free/` 免费孪生，限时轮换+每日配额）** |
 
-- **回退链**：`ai`（免费）→ `cn`（近免费）→ `cline`（微付费）→ 你的主力模型自己做。任一 lane 失败或限流时自动改投下一条 lane（各一次，不无限重试），全部不可用就退回本地完成，任务不会丢。cline 未安装/未登录时自动跳过，**不影响其余任何功能**（doctor 对它只显示一行 WARN）。
+- **回退链**：`ai`（免费）→ `cn`（近免费）→ `cline`（免费孪生）→ 你的主力模型自己做。任一 lane 失败或限流时自动改投下一条 lane（各一次，不无限重试），全部不可用就退回本地完成，任务不会丢。cline 未安装/未登录时自动跳过，**不影响其余任何功能**（doctor 对它只显示一行 WARN）。回退只在 lane 之间换（始终是 DeepSeek），**绝不在 cline 内部换用非 DeepSeek 模型顶替**。
 - **高频子代理调度（v5）**：三条 lane 几乎免费，所以调用策略是「默认分派」——凡自包含的子任务（输入可打包进提示词、输出可独立校验），单个也直接派，不必凑够批量；关键产物（关键代码模块/文案）同一契约并行派两份、AI 助手评审择优（best-of-N）；代码模块集成前默认过一道评审批判。防护不变：结果必校验、连续失败或限流即止损、涉密绝不外包。
 - 技术上：桥以无界面（headless）方式驱动 WorkBuddy 桌面版自带的 CodeBuddy CLI 与 Cline CLI，关闭其全部工具执行（cline 用 `--auto-approve false`，非终端环境下全部工具调用自动拒绝），只当纯文本模型端点用，因此不会碰你的文件系统和网络。worker 需要的代码上下文由编排器（你的 AI 助手）先读好、完整贴进提示词（「材料先行」）；超长材料走 stdin 通道自动传输，不受命令行长度限制。
-- **隔离边界**：桥的所有状态（凭证、配置、历史）只存在 `.wbx/`（全局形态为 `~/.wbx/`）；cline lane 的状态只存在 `~/.wbx/cline/` 隔离目录——**绝不读写你自己的 `~/.cline`**，也不写 `~/.workbuddy*`、不改系统环境变量。
+- **隔离边界**：桥的所有状态（凭证、配置、历史）只存在 `.wbx/`（全局形态为 `~/.wbx/`）；cline lane 的状态只存在 `~/.wbx/cline-home/` 隔离目录——**绝不读写你自己的 `~/.cline`**，也不写 `~/.workbuddy*`、不改系统环境变量。
 
 ## 适合 / 不适合
 
@@ -143,12 +143,13 @@ node .zcode\skills\wb-bridge\scripts\wbx.mjs self-install --adopt
 ```powershell
 npm install -g cline                                       # Cline CLI（npm 全局包）
 node .zcode\skills\wb-bridge\scripts\wbx.mjs login --identity cline   # 浏览器完成 OAuth 设备授权
-node .zcode\skills\wb-bridge\scripts\wbx.mjs doctor        # cline 段应全绿
-# 可选：固定模型（免费 DeepSeek 模型 id 以 doctor/models 探测为准）
-node .zcode\skills\wb-bridge\scripts\wbx.mjs config set cline-model "<模型id>"
+node .zcode\skills\wb-bridge\scripts\wbx.mjs doctor        # cline 段应全绿（默认模型即免费孪生）
+# 可选：查看当前免费模型组（免费组会轮换；换默认模型用下面第二条命令）
+node .zcode\skills\wb-bridge\scripts\wbx.mjs models --as cline --free
+node .zcode\skills\wb-bridge\scripts\wbx.mjs config set cline-model "<免费模型id>"
 ```
 
-要点：cline lane 默认 `--thinking xhigh --compaction off`（上下文与思考强度拉满），并发默认 1（额度保护）；状态只存 `~\.wbx\cline-home\`（桥以 HOME 覆盖实现隔离——实测 3.0.65 的 `--data-dir` 会破坏认证加载，故不用），与你自己的 Cline（`~\.cline`）互不影响。禁用：`config set disabled-lanes '["cline"]'`；彻底移除：`npm uninstall -g cline` + 删 `~\.wbx\cline-home\`（见 [UNINSTALL.md](UNINSTALL.md)）。
+要点：cline lane 默认免费调 DeepSeek V4.1 Flash（`cline-free/deepseek-v4.1-flash` 免费孪生，实测计价 $0）、默认 `--thinking xhigh --compaction off`（上下文与思考强度拉满），并发默认 1（额度保护）。免费 = 限时促销轮换 + 每日配额——doctor 会校验默认模型是否仍在免费组，被轮换下线或超额会给出明确提示与当前清单。隐私披露：**免费用量可能被 Cline 用于改进模型**（官方原文）。状态只存 `~\.wbx\cline-home\`（桥以 HOME 覆盖实现隔离——实测 3.0.65 的 `--data-dir` 会破坏认证加载，故不用），与你自己的 Cline（`~\.cline`）互不影响。禁用：`config set disabled-lanes '["cline"]'`；彻底移除：`npm uninstall -g cline` + 删 `~\.wbx\cline-home\`（见 [UNINSTALL.md](UNINSTALL.md)）。
 
 ### 给 AI Agent 的部署指引
 
@@ -172,7 +173,7 @@ node .zcode\skills\wb-bridge\scripts\wbx.mjs config set cline-model "<模型id>"
 | `wbx fanout --file tasks.json` | 批量并行（任务文件格式见 [examples](.zcode/skills/wb-bridge/examples/tasks.example.json)；任务可绑 lane、可挂材料文件） |
 | `wbx history --last 10` / `wbx history <jobId>` | 历史列表 / 回放某次任务的完整双向对话 |
 | `wbx config list` / `set <key> <value>` | 路由与并发配置（default-lane、disabled-lanes、parallel-per-lane、cline-* 等） |
-| `wbx models` | 探测模型可用性、列出账号下全部模型 |
+| `wbx models` | 探测模型可用性、列出账号下全部模型（`--as cline --free` 列当前免费模型组） |
 | `wbx ui` | 本地可视化控制台（浏览器打开 127.0.0.1:7788，Ctrl+C 即退） |
 | `wbx self-install --adopt` | 全局安装：任何项目可用 + `/wbx` 斜杠命令 |
 | `wbx self-uninstall [--purge]` | 全局卸载一键还原（`--purge` 连凭证一起删） |
@@ -188,7 +189,7 @@ node .zcode\skills\wb-bridge\scripts\wbx.mjs config set cline-model "<模型id>"
 能，而且这是 v4 起的核心场景。判定标准是「自包含」：模块的接口（函数签名、类型、错误约定、验收标准）由你的 AI 助手定义清楚，所需上下文可以贴进提示词，输出是一份可审查、可运行的完整文件——就适合外包。典型用法：一个功能拆五个模块，其中两三个并行外包给 DeepSeek，AI 助手负责接口定义、集成与审查。不适合的是探索式多轮编码（边跑边看、需要反复交互的任务）。代码产物一律经 AI 助手（或你）审查、编译、运行后才进入交付物；配套的代码任务提示词模板见 [PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md)。
 
 **真的免费吗？**
-`ai` lane（国际版）当前 x0.00，`cn` lane（国内版）x0.03 近免费。`cline` lane 分两种：**按量微付费**（默认模型 DeepSeek V4.1 Flash，实测约 $0.001/次）与**个别真免费模型**（实测 `stealth/space-bunny-alpha` 计价为 0）。注意：Cline **App 里标 "(free)" 的模型经 CLI 调用不一定零成本**（App 与 CLI 计费不同源）——用 `wbx models --as cline --probe "vendor/model"` 实测，显示 `$0（免费）` 的才是真免费；想全免费可 `wbx config set cline-model "stealth/space-bunny-alpha"`。这些都是 WorkBuddy / Cline 的产品策略，随时可能调整；桥每次调用都会显示实际用量，发现不再划算就停用。
+`ai` lane（国际版）当前 x0.00，`cn` lane（国内版）x0.03 近免费。`cline` lane 自 v5.1 起默认走**免费孪生** `cline-free/deepseek-v4.1-flash`：Cline 对同一模型提供两个 id，`deepseek/deepseek-v4.1-flash` 按量计费（约 $0.001/次），`cline-free/` 前缀的同名孪生实测计价恒为 $0。免费来自**限时促销轮换 + 每日用量配额**（Cline 官方口径），随时可能变化——doctor 每次都会校验默认模型是否仍在免费组（被轮换下线会提示并给出当前清单），`wbx models --as cline --free` 随时列当前免费组；想自己验证成本，用 `wbx models --as cline --probe "<id>"` 看实际计价，显示 `$0（免费）` 的才是真免费。隐私披露：**免费用量可能被 Cline 用于改进模型**（官方原文）。这些都是 WorkBuddy / Cline 的产品策略；桥每次调用都会显示实际用量，发现不再划算就停用。
 
 **多久要重新登录一次？**
 国内版 accessToken 约 55 天有效，到期后 doctor 会显示凭证红，重新 `wbx login` 一次即可；国际版有效期更长（数百天级）；cline 的 OAuth 凭证失效后（ask 报 Unauthorized）重新 `wbx login --identity cline` 即可。
@@ -203,7 +204,7 @@ node .zcode\skills\wb-bridge\scripts\wbx.mjs config set cline-model "<模型id>"
 无关联。这是个人开发的非官方工具：借 WorkBuddy 桌面版自带的 CLI、Cline CLI 与它们的免费模型策略工作，ZCode 只是它服务的 AI 编程助手之一。WorkBuddy 是腾讯系产品，智谱是 ZCode 的开发方，Cline 是独立产品，均未参与、不知晓本项目。
 
 **会动我电脑上的 WorkBuddy、Cline 或其他软件吗？**
-不会。桥对 WorkBuddy 桌面版只读（借用 CLI 与配置模板）；对你的 Cline（`~\.cline`）**从不读写**（桥自己的 cline 状态在 `~\.wbx\cline\` 隔离目录）；不写任何桌面版文件、不改系统环境变量、无常驻后台进程（`wbx ui` 是前台进程，关终端即退）。
+不会。桥对 WorkBuddy 桌面版只读（借用 CLI 与配置模板）；对你的 Cline（`~\.cline`）**从不读写**（桥自己的 cline 状态在 `~\.wbx\cline-home\` 隔离目录）；不写任何桌面版文件、不改系统环境变量、无常驻后台进程（`wbx ui` 是前台进程，关终端即退）。
 
 **免费额度用尽怎么办？**
 表现：任务失败、错误里出现 quota / 429 / 限流字样。处置顺序：降并发（`fanout --parallel 1`）稍后再试 → 换 lane（`ask --as <lane>` 或 `config set default-lane`，比如 ai 限流就改走 cn）→ 启用 cline lane 作第三算力 → 都不行就先停用外包，由主力模型自己做。免费策略随时可能变化，不再划算就卸载（[UNINSTALL.md](UNINSTALL.md)）。
@@ -229,6 +230,9 @@ v5 的调度模式：关键产物（关键代码模块/对外文案）用**同�
 | `Cannot find module ...wbx.mjs` | 命令用了相对路径但当前目录不在项目根 | `cd` 到项目根，或用绝对路径调用（路径含空格加引号） |
 | Git Bash 下中文路径报模块加载/编码错误 | 项目路径含非 ASCII 字符 | 改用全局桥 ASCII 入口：`node "C:\Users\<用户名>\.zcode\wbx-bridge\scripts\wbx.mjs" ...` |
 | cline lane 报 Unauthorized | cline OAuth 凭证无效/过期 | 重新 `wbx login --identity cline`（浏览器确认新设备码） |
+| cline 报「Daily free model limit reached」 | 免费模型当日配额用尽（会带重置倒计时提示） | 等待重置 / `wbx models --as cline --free` 换免费模型 / 自动跨 lane 回退 ai、cn |
+| cline 报「model not found」或「Free model promotion ended」 | 该免费模型已被轮换下线 | `wbx models --as cline --free` 查当前清单，`config set cline-model "<新免费 id>"` |
+| doctor 提示「cline-model 不在当前免费组」 | 默认免费模型被轮换或设了计费 id | 按提示换当前免费组里的 id；确认免费：`models --as cline --probe` 看计价 |
 | cline 段显示「未安装（可选）」 | 没装 Cline CLI | 想用就 `npm install -g cline`；不用可无视（不影响 ai/cn） |
 | 任务失败报凭证错误，但 doctor 正常，且重试无效 | 材料里贴了错误样例原文，模型输出复述后被桥误判 | 把材料里的错误关键字换成中性占位符（如 `AUTH_SESSION_INVALID`）再派（详见 PROMPTS.md 经验条目） |
 
