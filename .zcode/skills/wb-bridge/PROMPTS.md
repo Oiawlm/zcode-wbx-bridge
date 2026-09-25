@@ -644,6 +644,16 @@ E2（parse-duration.js:17）→ parseInt(match[1], 10) 截断小数，即便正�
 - **反例**：把调研初稿的版本号/价格直接当事实引用给用户。
 - **关联**：原则 P8；模板 T4
 
+### E-011 Cline App 的「free」标签 ≠ CLI 零成本，以 models 探测计价为准
+- **来源**：实测（2026-09-25，用户 App 截图对照 + CLI 逐一探测）
+- **适用场景**：选择 cline lane 模型、评估成本
+- **要点**：App 标 "(free)" 的模型经 CLI 调用多数按量计费（DeepSeek V4.1 Flash ≈$0.001/次），
+  仅个别目录级真免费（实测 `stealth/space-bunny-alpha` totalCost=0）。判定方法：
+  `wbx models --as cline --probe "<vendor/model>"`（v5 起显示每次探测计价，$0 即免费）。
+- **反例**：按 App 界面标签推断 CLI 成本；把 totalCost（名义计价）直接当作已扣款——
+  免费额度机制（CLI 内含 FreeModelLimitResetTime）以账户侧实际扣减为准。
+- **关联**：WBX.md v5 章调研记录 #13；原则 P8
+
 ---
 
 ## 沉淀闭环（经验 → 知识库的增量流程）

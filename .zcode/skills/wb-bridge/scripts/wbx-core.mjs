@@ -740,7 +740,11 @@ export function parseClineNdjson(text) {
     out.text = asNonEmptyString_(lastRunResult.text);
     out.finishReason = asNonEmptyString_(lastRunResult.finishReason);
     const u = isPlainObject_(lastRunResult.usage) ? lastRunResult.usage : null;
-    out.usage = { in: u === null ? null : asFiniteNumber_(u.inputTokens), out: u === null ? null : asFiniteNumber_(u.outputTokens) };
+    out.usage = {
+      in: u === null ? null : asFiniteNumber_(u.inputTokens),
+      out: u === null ? null : asFiniteNumber_(u.outputTokens),
+      cost: u === null ? null : asFiniteNumber_(u.totalCost),   // 名义计价（免费模型实测为 0）
+    };
     out.model = isPlainObject_(lastRunResult.model) ? asNonEmptyString_(lastRunResult.model.id) : null;
     out.durationMs = asFiniteNumber_(lastRunResult.durationMs);
   }

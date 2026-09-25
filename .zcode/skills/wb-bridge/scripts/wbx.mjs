@@ -260,7 +260,7 @@ async function cmdModels(opts) {
     for (const m of list) {
       process.stdout.write(`探测 ${m} … `);
       const r = await askOnce({ lane: 'cline', model: m, prompt: '请只回复 OK', timeoutMs: 180000 });
-      if (r.ok) console.log(`可用（${fmtMs(r.durationMs)}，tokens ${r.usage.in ?? '?'}/${r.usage.out ?? '?'}）`);
+      if (r.ok) console.log(`可用（${fmtMs(r.durationMs)}，tokens ${r.usage.in ?? '?'}/${r.usage.out ?? '?'}，本次计价 $${(r.usage.cost ?? 0).toFixed(6)}${r.usage.cost === 0 ? '（免费）' : ''}）`);
       else { allOk = false; console.log(`不可用（${r.kind}: ${brief(r.error, 160)}）`); }
     }
     await exitWith(allOk ? 0 : 1);

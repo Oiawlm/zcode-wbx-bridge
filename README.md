@@ -188,7 +188,7 @@ node .zcode\skills\wb-bridge\scripts\wbx.mjs config set cline-model "<模型id>"
 能，而且这是 v4 起的核心场景。判定标准是「自包含」：模块的接口（函数签名、类型、错误约定、验收标准）由你的 AI 助手定义清楚，所需上下文可以贴进提示词，输出是一份可审查、可运行的完整文件——就适合外包。典型用法：一个功能拆五个模块，其中两三个并行外包给 DeepSeek，AI 助手负责接口定义、集成与审查。不适合的是探索式多轮编码（边跑边看、需要反复交互的任务）。代码产物一律经 AI 助手（或你）审查、编译、运行后才进入交付物；配套的代码任务提示词模板见 [PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md)。
 
 **真的免费吗？**
-`ai` lane（国际版）当前 x0.00，`cn` lane（国内版）x0.03 近免费，`cline` lane 按量微付费（实测单次约 $0.0003-0.004；v5 发布当日 CLI 侧未探测到零成本模型，若你的 Cline 账号 App 内有标 Free 的模型，`wbx config set cline-model "<id>"` 即可切换）。这些都是 WorkBuddy / Cline 的产品策略，随时可能调整；桥每次调用都会显示实际用量，发现不再划算就停用。
+`ai` lane（国际版）当前 x0.00，`cn` lane（国内版）x0.03 近免费。`cline` lane 分两种：**按量微付费**（默认模型 DeepSeek V4.1 Flash，实测约 $0.001/次）与**个别真免费模型**（实测 `stealth/space-bunny-alpha` 计价为 0）。注意：Cline **App 里标 "(free)" 的模型经 CLI 调用不一定零成本**（App 与 CLI 计费不同源）——用 `wbx models --as cline --probe "vendor/model"` 实测，显示 `$0（免费）` 的才是真免费；想全免费可 `wbx config set cline-model "stealth/space-bunny-alpha"`。这些都是 WorkBuddy / Cline 的产品策略，随时可能调整；桥每次调用都会显示实际用量，发现不再划算就停用。
 
 **多久要重新登录一次？**
 国内版 accessToken 约 55 天有效，到期后 doctor 会显示凭证红，重新 `wbx login` 一次即可；国际版有效期更长（数百天级）；cline 的 OAuth 凭证失效后（ask 报 Unauthorized）重新 `wbx login --identity cline` 即可。
