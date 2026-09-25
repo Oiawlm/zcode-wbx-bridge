@@ -1374,4 +1374,15 @@ L1 工具白名单：`WebSearch,WebFetch,Read,Glob,Grep`。如实声明：WebFet
   混合档 fanout job `20260925-201708-nnd`（`l0-baseline`@cn L0 无工具成功 / `l1-news`@ai L1
   WebSearch×2 + WebFetch×1 且结果带来源清单——同批混档路由正确）。
 - **门禁矩阵**：v6 24 + v7 27 + v8 22 + ui-contract 23 四门禁全绿；红测 22 变异 + 4 对照全过。
-- **发布记录**：（v6.0.0 发布时回填）
+- **发布记录**（2026-09-25）：commit `60c8e5e`（feat: v6.0.0 worker caps tiers + history inline
+  details，12 文件 +625/−106）→ 白名单 18 项逐文件 add，staged 全在白名单内（未跟踪残留仅
+  `.zcode/plans/`，未入库）→ staged 敏感审计：新增行零命中（WBX.md 5 处命中均为 HEAD 既有的
+  审计模式清单引用，非新增）→ push 后 `gh api` 远端校验：远端 blob 清单=本地 18 文件一致，
+  wbx-core/wbx-ui/AGENTS/README 远端内容复扫零命中 → tag `v6.0.0` + GitHub Release
+  （标题「worker 能力分级 caps（L1 交付 · L2 缓期）+ 历史页行内详情」，notes 引 CHANGELOG，
+  附 `wbx-bridge-v6.0.0-20260925.zip`——export-bundle 零凭证断言通过，比对 9 个本地
+  accessToken 值均未出现）。全局形态：`self-install` 幂等同步（用户级 `~/.zcode/AGENTS.md` 块
+  刷出 caps 段）；`ui --detach` 幂等复用运行中守护（pid 28660，v6.0.0），页面 200 且 v6 标记
+  （tr.job-inline / ask-caps / L2（未交付））在服务；`doctor` 全绿（v6.0.0，caps 步：
+  default-caps=L0、L2 总闸=off、能力面 L1=仅 ai/cn）；L2 总闸复位确认 `caps-l2-enabled=false`、
+  `default-caps="L0"`（出厂态）。
