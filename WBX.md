@@ -384,7 +384,9 @@ v1–v3 的对外口径把外包范围限定为「翻译/摘要/调研这类文�
 适合外包的工作**。v4 不换模型、不加模型分档、不动成本结构，改的是三件事：
 
 1. **公理升级**：外包判定从「轻量文本活」改为「**自包含任务**」——全部输入（含代码上下文）
-   可由编排器打包进提示词、输出可独立校验，即可外包。worker 无工具的安全边界不变，
+   可由编排器打包进提示词、输出可独立校验，即可外包。worker 无工具的安全边界不变
+   （2026-09-25 v6.0.0 起演进为 caps 能力分级：L0 档保持无工具不变，L1 档白名单联网+只读、
+   L2 缓期未交付，见文末 v6.0.0 章），
    「让它读文件」的正确实现 = ZCode 先读文件、把内容贴进提示词材料区（材料先行）。
 2. **提示词工程体系**：新增 [PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md)（入库发布物，
    由 SKILL.md 引用），核心是代码模块编写模板（接口契约 + 材料区 + 硬输出约束），
@@ -1281,3 +1283,95 @@ SessionStart 含 wbx.mjs ui --detach --no-open，matcher ^startup$，timeoutMs 5
 | `20260925-182119-pag` | 护栏断言清单 T7 二审@ai（✅） | 采纳 4 条（T2 扩全量/空白容差/sliceAlive/补 M-C3）；不采纳 3 条记录在案 |
 
 另：视觉归因用了图像理解模型（analyze_image）一次（最密差异条带复核为稀疏散点无内容差异）。
+
+## v6.0 章：caps 能力分级（L0/L1/L2 契约）· 历史页行内详情
+
+> 版本 v6.0.0（2026-09-25，GOAL-V10）。策划材料：`internal/RESEARCH-V10.md`（Phase 0 探针定案）；
+> 探针脚本 `internal/v10p0-p1-codebuddy-tools.mjs` … `v10p0-p4-cline-l2.mjs`（可复跑）；外部调研沉淀
+> `internal/v10-worker-firstprinciples-a/b.md`、`v10-worker-agentic-safety.md`、`v10-worker-codebuddy-cli.md`、
+> `v10-worker-deepseek-toolcall.md`、`v10-worker-glm-prompting.md`。一句话：把三 lane worker 从
+> 「永远纯文本端点」升级为**显式能力契约**——L0 纯文本（默认，字节级不变）、L1 白名单联网+只读
+> （仅 ai/cn）、L2 受控全能力（仅 cline，因上游缺命令级权限管控而**缓期未交付**）；控制台历史页
+> 详情从页底卡改为**点击行正下方行内展开**。
+
+### 1. 用户裁决与第一性定案
+
+- **授权原话**：「我们要尽可能最大限度地发挥它们的性能，只要有需要，就可以让它们使用工具、联网」
+  （2026-09-25，GOAL-V10）——据此建立 caps 能力分级契约。
+- **L2 缓期裁决**：Phase 0 实测 cline 3.0.65 无命令级权限管控（`CLINE_COMMAND_PERMISSIONS`
+  特性不存在：二进制字符串零命中；deny 三组全失效；del 实删文件）→ 按铁律停案上报，用户同日
+  裁决「**L2 缓期，本版留位**」：v6.0.0 交付 L1 + 历史行内详情；`--caps L2` 显式报未交付错误；
+  六层防护栈红线不变；上游发布该特性后按完整六层交付。
+- **第一性**：caps 是契约不是偏好——**绝不静默降档**（请求 L1 而通道不可用 → 显式报错或按回退链
+  跳过 cline，绝不悄悄按 L0 执行）；**L0 确定性不可协商**（v5 基线参数序列字节级不变）。
+
+### 2. lane-caps 映射（Phase 0 探针定案，探针可复跑）
+
+| lane | L0 | L1 | L2 | 探针证据 |
+|---|---|---|---|---|
+| ai/cn（codebuddy） | ✅ 不变 | ✅ 白名单联网+只读 | — 不适用 | p1：工具调用是顶层 `function_call`/`function_call_result` 转录事件（非 message.content tool_use）；p2：四种 permission-mode 实测取 default（最小特权面）；p2c：绝对路径越 cwd 读取进程级 DENIED |
+| cline | ✅ 不变 | ❌ `caps-lane-mismatch` 显式报错 | ⏸ 缓期未交付 | p3：`CLINE_COMMAND_PERMISSIONS` 不存在（deny 全失效、del 实删文件）；`-s` 系统边界有效（模型拒读金丝雀）；每命令 30s 超时 + 会话级 `-t` |
+
+L1 工具白名单：`WebSearch,WebFetch,Read,Glob,Grep`。如实声明：WebFetch 在 default 权限档被拒，
+联网主力是 WebSearch（PROMPTS E-012）。
+
+### 3. L1 管道（wbx-core.mjs / wbx.mjs / wbx-ui.mjs）
+
+- **CLI**：`ask --caps L1`；fanout 任务级 `"caps":"L1"`；无效值 / L2 / L1×cline 均显式报错。
+  L1 任务固定 ai/cn（回退链自动滤掉 cline）；缺省超时上浮 `max(600s, timeout)`。
+- **隔离**：每任务 scratch 工作目录 `~/.wbx/scratch/<任务id>/`（Read/Glob/Grep 的 cwd；越界
+  绝对路径进程级 DENIED——p2c 实测）。
+- **可审计**：工具轨迹（counts+samples）从转录事件抽取落任务记录；完整转录另存
+  `<任务id>.transcript.json`（不计入 history 任务数）。JSON 输出带 `caps` 字段；CLI 打印
+  `[TRACE] 工具轨迹：…` 行。
+- **config 新键**：`default-caps`（enum，默认 L0）、`caps-l2-enabled`（bool，默认 false，L2 总闸
+  ——本版即使置 true，`--caps L2` 仍报未交付；发布前总闸复位 false 已确认）。
+- **doctor** 新增 caps 步：显示 default-caps / L2 总闸 / 各 lane 能力面。
+
+### 4. L2 未交付如实声明
+
+- 六层防护栈固定枚举、**缺一不交付**：①白名单工具面 ②命令级 deny/allow 清单（上游
+  `CLINE_COMMAND_PERMISSIONS`）③scratch 工作目录 ④轨迹落盘可审计 ⑤超时与回合上限
+  ⑥总闸 `caps-l2-enabled` + 显式 `--caps L2`。第②层检测级证据：cline 3.0.65 二进制 grep
+  字符串零命中（npm latest stable 即 3.0.65）；deny:`["*"]`、deny:`["node *"]`、docs 示例
+  allowlist 三组全失效，`del` 实删 scratch 内文件。
+- `--caps L2` → 显式错误（含裁决日期、六层栈说明、上游交付条件）；治理冻结于
+  `internal/FROZEN.md` 二.8。`--yolo`/`--zen` 永不解禁。
+
+### 5. PROMPTS.md v3（提示词知识库）
+
+- 原则 2「能力边界声明必写」按 caps 档位：L0 句式逐字保留（全文「你没有任何工具」18 处零改动）；
+  L1 声明联网+只读边界与网页内容不可信。
+- 新增：P13（注入防御——网页内容是数据不是指令）、P14（来源清单：URL | 访问时间 | 支撑要点）、
+  T4-L1（联网调研模板，采纳自 fanout job `20260925-195611-afc` draft A）、T10（**L2 代码自测回路
+  模板，先行入库待启用**——写→跑→修闭环 + 反作弊条款「禁止修改断言/try-catch 吞失败/放宽契约」，
+  同 job A 骨架 + B 反作弊合并）、E-012（WebFetch default 档被拒实录）、派发流程
+  1b（caps 判定步）、决策速查表 caps 列。
+
+### 6. UI 契约变更 v1.1.0（变更程序合规：用户原话授权）
+
+> 授权原话：「我点击一个条目，希望它的详细内容直接出现在条目下方，而不是要翻到界面最底下」。
+
+- **历史页**：页底 `#job-detail` 卡退役 → 点击行正下方 `tr.job-inline` 行内卡（`.job-inline-card`，
+  手风琴单开沿用；再点收起）。**调用页**：ask 高级区 caps 选择器（L2 disabled 标未交付 + L1
+  提示行 + 高级摘要实时显示档位）；fan 行 caps 列（fan-row 四列→五列 86px）。**caps 展示**：
+  taskHead caps 徽标（「L1 联网档」）、任务详情概览「能力档」行、状态页三通道卡「能力档」行
+  （ai/cn=L0/L1、cline=L0/L2未交付）、L1 `trace-box` 工具轨迹折叠件。
+- **三处同步**：UI-SPEC.md §6 记 v1.1.0（token 键集与值零改动，tokens-sha efeee49b0e 不变）→
+  `internal/ui-contract.mjs` 新增 H1–H4（19→23 断言）→ `internal/v9-redtest.mjs` 新增 M-H1..H4
+  正向变异 + N-H 文案对照（22 正向变异红且红得对 + 4 对照全绿 + 恢复自证）。v8 门禁 ①d 同步
+  五列断言（`minmax(0,1fr)` 防溢出属性保留）。
+- **浏览器实机**（1280×900，截图存 `internal/v10-ui-*.png` 四张）：v5.4 对照（详情在页底卡）vs
+  v6（行内卡紧跟点击行、视口内、再点收起、`#job-detail` 零命中）；caps 选择器选 L1 → 提示行
+  显示 + 高级摘要实时「L1 · …」+ L2 选项 disabled；L1 任务详情显示「工具轨迹：WebSearch×6、
+  WebFetch×1」。
+
+### 7. 验收附录（证据在案）
+
+- **L0 零回归**：v6 门禁 24 条全绿（含 L0 参数序列字节级不变断言）；L0 冒烟 job
+  `20260925-201642-nwp`（lane=ai，caps=L0，无工具轨迹，行为与 v5 一致）。
+- **L1 端到端**：ask job `20260925-201509-h7t`（ai，WebSearch×6 + WebFetch×1，轨迹+转录落盘）；
+  混合档 fanout job `20260925-201708-nnd`（`l0-baseline`@cn L0 无工具成功 / `l1-news`@ai L1
+  WebSearch×2 + WebFetch×1 且结果带来源清单——同批混档路由正确）。
+- **门禁矩阵**：v6 24 + v7 27 + v8 22 + ui-contract 23 四门禁全绿；红测 22 变异 + 4 对照全过。
+- **发布记录**：（v6.0.0 发布时回填）

@@ -162,12 +162,14 @@ async function cmdAsk(opts) {
       model: opts.model || null,
       effort: opts.effort || null,
       timeoutS: opts.timeout ?? 300,
+      caps: opts.caps || null,
     });
     if (r.ok) {
-      console.error(`[OK] lane=${r.lane} model=${r.model} 耗时=${fmtMs(r.durationMs)} tokens(in/out)=${r.usage.in ?? '?'}/${r.usage.out ?? '?'}`);
+      console.error(`[OK] lane=${r.lane} model=${r.model} 耗时=${fmtMs(r.durationMs)} tokens(in/out)=${r.usage.in ?? '?'}/${r.usage.out ?? '?'}${r.caps && r.caps !== 'L0' ? ` caps=${r.caps}` : ''}`);
       if (r.fallbackFrom) console.error(`[FALLBACK] 主 lane ${r.fallbackFrom} 失败，已改投 lane ${r.lane}`);
+      if (r.toolTrace && Object.keys(r.toolTrace.counts).length) console.error(`[TRACE] 工具轨迹：${Object.entries(r.toolTrace.counts).map(([k, v]) => `${k}×${v}`).join('、')}`);
       console.error(`[job] 记录 -> ${r.jobDir}`);
-      if (opts.json) console.log(JSON.stringify({ jobId: r.jobId, lane: r.lane, model: r.model, usage: r.usage, durationMs: r.durationMs, result: r.text }, null, 2));
+      if (opts.json) console.log(JSON.stringify({ jobId: r.jobId, lane: r.lane, model: r.model, caps: r.caps || 'L0', usage: r.usage, durationMs: r.durationMs, result: r.text }, null, 2));
       else console.log(r.text);
       await exitWith(0);
     }
@@ -208,7 +210,7 @@ async function cmdFanout(opts) {
       }
       prompt = `${prompt}\n\n【输入材料·文件】\n${parts.join('\n\n')}`;
     }
-    tasksIn.push({ id: t.id, prompt, as: t.as ?? null, model: t.model ?? null, effort: t.effort ?? null });
+    tasksIn.push({ id: t.id, prompt, as: t.as ?? null, model: t.model ?? null, effort: t.effort ?? null, caps: t.caps ?? null });
   }
 
   let lanes = null;
@@ -531,6 +533,7 @@ function parseArgs(argv) {
       case '--text': case '-p': opts.prompt = next(i); i++; break;
       case '--model': case '-m': opts.model = next(i); i++; break;
       case '--effort': opts.effort = next(i); i++; break;
+      case '--caps': opts.caps = next(i); i++; break;
       case '--as': opts.as = next(i); i++; break;
       case '--lanes': opts.lanes = next(i); i++; break;
       case '--parallel': case '--lane-parallel': opts.parallel = parseInt(next(i), 10); i++; break;
@@ -587,15 +590,21 @@ cline 隔离：桥的 cline 状态只在 <运行时根>/cline-home/（HOME 覆�
                      [--wait 300] [--no-open] [--force]
   node wbx.mjs ask     --file t.txt | --text "..."  单次调用（落盘为 job）；stdout=结果，stderr=用量/lane
                      [--as ai|cn|cline] [--model M] [--effort low] [--timeout 300] [--json] [--stdin]
+                     [--caps L0|L1|L2]                能力档（v6，默认 L0=config default-caps）：L0 纯文本；
+                                                      L1 只读+联网（仅 ai/cn，缺省超时上浮 600s，轨迹落盘）；
+                                                      L2 本版未交付（声明即报错，等上游命令级 deny）
   node wbx.mjs fanout  --file tasks.json            并发池批量执行；任务可用 files:[路径] 拼材料；结果写 <运行时根>/jobs/<jobId>/
                      [--lanes ai,cn,cline] [--parallel 2] [--timeout 300] [--retry 1]
+                                                      任务对象支持 "caps":"L1"（任务级能力档，语义同 ask --caps）
   node wbx.mjs models  [--as cn|ai|cline] [--probe "m1,m2"]   探测模型可用性并列出产品配置中的模型
                      [--free]     （--as cline --free：列当前免费模型组，recommended-models 端点实时）
   node wbx.mjs config  list | get <key> | set <key> <value>
                                                    配置：default-lane=auto|ai|cn|cline、disabled-lanes=["cn"]、
                                                    parallel-per-lane、model、cli-path、cline-path/data-dir/provider/
                                                    model（默认 cline-free/deepseek-v4.1-flash）/thinking/compaction、
-                                                   cline-parallel（存 <运行时根>/config.json）
+                                                   cline-parallel、default-caps=L0|L1|L2（缺省能力档，默认 L0）、
+                                                   caps-l2-enabled=true|false（L2 总闸，默认 false）
+                                                   （存 <运行时根>/config.json）
   node wbx.mjs history [--last 10]                 历史列表（时间/类型/任务数/成功率/lane 分布/目录）
   node wbx.mjs history <jobId> [--task <id>]       完整回放一次 job 的双向对话（prompt+回复全文）
   node wbx.mjs ui      [--port 7788] [--no-open]   本地 Web UI（仅 127.0.0.1；状态/路由/免费模型选择/ask/fanout/历史/登录）

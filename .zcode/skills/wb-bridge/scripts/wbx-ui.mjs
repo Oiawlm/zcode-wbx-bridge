@@ -10,8 +10,8 @@
  *   GET  /api/doctor?probe=1         体检（probe=1 含模型探测，较慢）
  *   GET  /api/history                job 列表（含旧 .wbx/tasks/ 兼容条目）
  *   GET  /api/job/:id[?brief=1]      job 详情（brief 不含 prompt/回复正文，用于轮询）
- *   POST /api/ask                    {prompt, lane, model, effort, timeout} -> {jobId}
- *   POST /api/fanout                 {tasks:[{id,prompt,as}], lanes, parallel, timeout, retry} -> {jobId}
+ *   POST /api/ask                    {prompt, lane, model, effort, timeout, caps} -> {jobId}（caps=L0|L1|L2，v6）
+ *   POST /api/fanout                 {tasks:[{id,prompt,as,caps}], lanes, parallel, timeout, retry} -> {jobId}
  *   POST /api/config                 {key, value} -> 写 <运行时根>/config.json
  *   POST /api/login/start            {lane} -> {authUrl, tips}（登录流在 server 侧跑）
  *   GET  /api/login/poll             登录轮询状态
@@ -33,7 +33,7 @@ import crypto from 'node:crypto';
 import {
   WBX_VERSION, RUNTIME_ROOT, JOBS_DIR,
   LANE_ORDER, CONFIG_DEFS, bridgeForm,
-  redact, loadConfig, setConfig, parseLane,
+  redact, loadConfig, setConfig, parseLane, parseCaps,
   laneStatusInfo, resolveDefaultLane, newJobId, getJob, listJobs,
   runAskJob, runFanoutJob, doctorStatus, fetchClineFreeModels,
   startLogin, pollLoginToken, fetchAccountInfo, persistLogin,
@@ -280,10 +280,17 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);
 .expand{margin-top:4px}
 
 /* ===== 批量任务行 ===== */
-.fan-row{display:grid;grid-template-columns:140px 110px minmax(0,1fr) 34px;gap:var(--s2);margin-bottom:var(--s2)}
+.fan-row{display:grid;grid-template-columns:140px 110px 86px minmax(0,1fr) 34px;gap:var(--s2);margin-bottom:var(--s2)}
 .fan-row textarea{min-height:44px}
 .fan-row .fan-del{height:32px;padding:0;border:1px solid var(--line-strong);background:transparent;color:var(--dim);border-radius:var(--r-sm);cursor:pointer;font-size:var(--fs-sm)}
 .fan-row .fan-del:hover{color:var(--err);border-color:rgba(255,107,107,.45)}
+
+/* ===== v6：历史行内详情 + L1 工具轨迹 ===== */
+tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var(--panel-inset);border-top:1px dashed var(--line-strong)}
+.job-inline-card{border:1px solid var(--line);border-radius:var(--r-md);background:var(--panel);padding:var(--s2) var(--s3) var(--s3);margin:var(--s1) 0 0}
+.trace-box{border:1px dashed var(--line-strong);border-radius:var(--r-sm);padding:6px var(--s3);margin:var(--s2) 0;font-size:var(--fs-xs);color:var(--dim)}
+.trace-box summary{cursor:pointer;color:var(--dim-hi)}
+.trace-box pre{margin:var(--s2) 0 2px;white-space:pre-wrap;word-break:break-all;color:var(--dim)}
 
 /* ===== 空态 / 体检分组 ===== */
 .empty{padding:var(--s5) var(--s4);text-align:center}
@@ -385,6 +392,12 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);
           <summary>高级<span class="adv-sum" id="ask-adv-sum"></span></summary>
           <div class="dbd">
             <div class="row">
+              <label>能力档
+                <select id="ask-caps" title="L0=纯文本（默认）；L1=联网+只读（仅 WorkBuddy AI/国内版）；L2 本版未交付">
+                  <option value="L0">L0 纯文本</option>
+                  <option value="L1">L1 联网+只读</option>
+                  <option value="L2" disabled title="L2 本版未交付：上游 cline 无命令级权限管控，六层防护栈缺层不交付">L2（未交付）</option>
+                </select></label>
               <label>思考档
                 <select id="ask-effort">
                   <option value="">默认</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option>
@@ -392,6 +405,7 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);
               <label>模型 <input type="text" id="ask-model" placeholder="默认取 config.model" style="width:170px"></label>
               <label>超时(s) <input type="text" id="ask-timeout" value="300" style="width:70px"></label>
             </div>
+            <p class="hint" id="ask-caps-hint" style="display:none;margin-top:4px">L1 = 联网搜索+只读工具（仅 WorkBuddy AI / 国内版通道；轨迹与来源清单落盘；缺省超时上浮 600s）。</p>
           </div>
         </details>
       </div>
@@ -431,9 +445,9 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);
         <thead><tr><th>时间</th><th>类型</th><th class="num">任务数</th><th class="num">成功率</th><th>任务 ID</th></tr></thead>
         <tbody></tbody>
       </table></div>
+      <p class="hint" style="margin-top:8px">点击行内任意位置，详情直接展开在该行下方（v6 行内化）；再点收起。任务 ID 列点击复制。</p>
     </div>
   </div>
-  <div class="card" id="job-detail" style="display:none"></div>
 </section>
 
 <section id="tab-login">
@@ -687,6 +701,7 @@ function wbCardHtml(l){
     +'<div class="card__bd"><div class="kv">'
     +'<span class="k">成本</span><span class="v"><span class="cost '+costCls+'" title="'+esc(l.cost)+'">'+costTxt+'</span></span>'
     +'<span class="k">模型</span><span class="v"><span class="vtxt">DeepSeek V4.1 Flash</span></span>'
+    +'<span class="k">能力档</span><span class="v"><span class="vtxt">L0 纯文本 · L1 联网+只读（caps L1）</span></span>'
     +'<span class="k">凭证到期</span><span class="v">'+exp+'</span>'
     +'</div>'
     +'<details aria-expanded="false"><summary>详情与排障</summary><div class="dbd"><div class="kv">'
@@ -729,6 +744,7 @@ function clineCardHtml(l,s){
     +'<div class="card__bd"><div class="kv">'
     +'<span class="k">成本</span><span class="v"><span class="cost warn" title="'+esc(costTitle)+'">免费 · 限时配额</span></span>'
     +'<span class="k">模型</span><span class="v">'+modelRow+'</span>'
+    +'<span class="k">能力档</span><span class="v"><span class="vtxt" title="L2 需上游命令级权限管控，六层防护栈缺层不交付（2026-09-25 裁决缓期）">L0 纯文本 · L2 未交付</span></span>'
     +'<span class="k">免费组</span><span class="v">'+freeRow+'</span>'
     +'</div>'
     +'<details aria-expanded="false"><summary>详情与排障</summary><div class="dbd"><div class="kv">'
@@ -841,12 +857,19 @@ function pollJob(jobId,onDone,onTick){
 function taskHead(r){
   if(!r)return '<span class="badge neutral">无记录</span>';
   return '<span class="badge '+(r.status==='success'?'ok':'err')+'">'+esc(taskStatusLabel(r.status))+'</span>'
+    +(r.caps&&r.caps!=='L0'?'<span class="badge acc" title="能力档（v6 caps）">'+esc(r.caps)+' 联网档</span>':'')
     +'<span>通道 <b>'+esc(fallbackText(r.fallbackFrom,r.lane))+'</b></span><span class="num">'+fmtMs(r.durationMs)+'</span>'
     +'<span>Token 数 <span class="num">'+(r.usage&&r.usage.in!=null?r.usage.in:'?')+' / '+(r.usage&&r.usage.out!=null?r.usage.out:'?')+'</span></span>'
     +'<span>尝试 '+r.attempts+'</span><span class="num">'+esc(r.model||'')+'</span>';
 }
 function taskBody(rec){
   let h='';
+  if(rec&&rec.toolTrace&&rec.toolTrace.counts&&Object.keys(rec.toolTrace.counts).length){
+    const t=rec.toolTrace;
+    const line=Object.keys(t.counts).map(function(k){return esc(k)+'×'+t.counts[k]}).join('、');
+    const samples=(t.samples||[]).map(function(s){return esc(s)}).join('\\n');
+    h+='<details class="trace-box" aria-expanded="false"><summary>工具轨迹：'+line+'</summary><div class="dbd"><pre>'+samples+'</pre></div></details>';
+  }
   if(rec&&rec.result!=null)h+='<div class="mdwrap clamp">'+md(rec.result)+'</div>';
   if(rec&&rec.error)h+=errBox(rec.error+(errorHint(rec.error)?' '+errorHint(rec.error):''));
   return h;
@@ -870,9 +893,11 @@ function updAskSum(){
   const e=$('ask-effort').value||'默认档';
   const m=$('ask-model').value.trim()||'自动模型';
   const t=parseInt($('ask-timeout').value,10)||300;
-  $('ask-adv-sum').textContent=e+' · '+m+' · '+t+'s';
+  const c=$('ask-caps').value||'L0';
+  $('ask-adv-sum').textContent=c+' · '+e+' · '+m+' · '+t+'s';
+  const hint=$('ask-caps-hint');if(hint)hint.style.display=c==='L1'?'block':'none';
 }
-['ask-effort','ask-model','ask-timeout'].forEach(function(id){$(id).addEventListener('input',updAskSum);$(id).addEventListener('change',updAskSum)});
+['ask-caps','ask-effort','ask-model','ask-timeout'].forEach(function(id){$(id).addEventListener('input',updAskSum);$(id).addEventListener('change',updAskSum)});
 function updFanSum(){
   const p=parseInt($('fan-parallel').value,10)||2;
   const t=parseInt($('fan-timeout').value,10)||300;
@@ -885,7 +910,7 @@ $('ask-btn').onclick=function(){
   btn.disabled=true;
   $('run-out').innerHTML='<p class="runline"><span class="dot--running"></span>执行中…</p>';
   api('POST','/api/ask',{prompt:prompt,lane:$('ask-lane-seg').dataset.v||undefined,effort:$('ask-effort').value||undefined,
-    model:$('ask-model').value.trim()||undefined,
+    model:$('ask-model').value.trim()||undefined,caps:$('ask-caps').value||undefined,
     timeout:parseInt($('ask-timeout').value,10)||300}).then(function(r){
     pollJob(r.jobId,function(j){
       btn.disabled=false;
@@ -913,12 +938,14 @@ function renderFanRows(){
     h+='<div class="fan-row">'
       +'<input type="text" data-i="'+i+'" data-f="id" value="'+esc(r.id)+'" placeholder="任务 ID">'
       +'<select data-i="'+i+'" data-f="lane"><option value="">自动</option><option value="ai"'+(r.lane==='ai'?' selected':'')+'>WorkBuddy AI</option><option value="cn"'+(r.lane==='cn'?' selected':'')+'>WorkBuddy</option><option value="cline"'+(r.lane==='cline'?' selected':'')+'>Cline</option></select>'
+      +'<select data-i="'+i+'" data-f="caps" title="能力档：L0 纯文本（默认）/ L1 联网+只读（仅 WorkBuddy AI、国内版）"><option value=""'+(!r.caps?' selected':'')+'>L0</option><option value="L1"'+(r.caps==='L1'?' selected':'')+'>L1 联网</option></select>'
       +'<textarea data-i="'+i+'" data-f="prompt" style="min-height:44px" placeholder="worker 提示词">'+esc(r.prompt)+'</textarea>'
       +'<button class="fan-del" data-del="'+i+'" title="删除此任务行">×</button></div>';
   }
   $('fan-rows').innerHTML=h||'<p class="hint">（还没有任务行，点「+ 添加任务行」）</p>';
   $('fan-rows').querySelectorAll('[data-f]').forEach(function(el){
     el.oninput=function(){fanRows[+el.dataset.i][el.dataset.f]=el.value};
+    el.onchange=function(){fanRows[+el.dataset.i][el.dataset.f]=el.value};
   });
   $('fan-rows').querySelectorAll('[data-del]').forEach(function(el){
     el.onclick=function(){fanRows.splice(+el.dataset.del,1);renderFanRows()};
@@ -931,7 +958,7 @@ $('fan-btn').onclick=function(){
   for(let i=0;i<fanRows.length;i++){
     const p=(fanRows[i].prompt||'').trim();
     if(!p)continue;
-    tasks.push({id:fanRows[i].id||('task-'+(i+1)),prompt:p,as:fanRows[i].lane||undefined});
+    tasks.push({id:fanRows[i].id||('task-'+(i+1)),prompt:p,as:fanRows[i].lane||undefined,caps:fanRows[i].caps||undefined});
   }
   if(!tasks.length){toast('至少要有一行带提示词的任务','error');return}
   btn.disabled=true;
@@ -957,6 +984,7 @@ $('fan-btn').onclick=function(){
 // ---------- 历史（徽标化 + ID 可复制 + 手风琴单开） ----------
 async function loadHistory(){
   try{
+    closeInlineDetail();
     const h=await api('GET','/api/history');
     $('hist-count').textContent='共 '+h.jobs.length+' 条';
     const tb=$('hist-table').querySelector('tbody');
@@ -978,16 +1006,25 @@ $('hist-refresh').onclick=loadHistory;
 $('hist-table').addEventListener('click',function(e){
   const tr=e.target.closest('tr[data-id]');if(!tr)return;
   if(e.target.closest('td.mono')){copyText(tr.dataset.id);return}
-  toggleJob(tr.dataset.id);
+  toggleJob(tr.dataset.id,tr);
 });
+// v6 行内详情：点击行 -> 详情 <tr> 插在该行正下方（手风琴单开，openJobId 语义沿用；页底卡已退役）
 let openJobId=null;
-async function toggleJob(id){
-  const box=$('job-detail');
-  if(openJobId===id){box.style.display='none';openJobId=null;return}
+function closeInlineDetail(){
+  const ex=document.querySelector('tr.job-inline');
+  if(ex)ex.remove();
+  openJobId=null;
+}
+async function toggleJob(id,row){
+  if(openJobId===id){closeInlineDetail();return}
+  closeInlineDetail();
   try{
     const j=await api('GET','/api/job/'+id);
     openJobId=id;
     const dist=Object.keys(j.laneDist||{}).map(function(k){return esc(laneLabel(k))+'×'+j.laneDist[k]}).join('、')||'—';
+    const capsSet={};(j.tasks||[]).forEach(function(t){if(t.record&&t.record.caps)capsSet[t.record.caps]=1});
+    const capsList=Object.keys(capsSet);
+    const capsRow=capsList.length?('<span class="k">能力档</span><span class="v">'+esc(capsList.join('、'))+(capsList.indexOf('L1')>=0?'（联网+只读）':'')+'</span>'):'';
     let h='<div class="card__hd"><span class="card__title">任务 '+esc(j.id)+'</span>'
       +'<span class="badge '+(j.status==='done'?'ok':'acc run')+'">'+esc(jobStatusLabel(j.status))+'</span>'
       +'<span class="card__sub">'+esc(typeLabel(j.type,j.legacy))+(j.legacy?'（旧 tasks/ 兼容）':'')+'</span>'
@@ -997,6 +1034,7 @@ async function toggleJob(id){
       +'<div class="kv">'
       +'<span class="k">状态</span><span class="v">'+esc(jobStatusLabel(j.status))+'</span>'
       +'<span class="k">成功率</span><span class="v">'+(j.successRate==null?'?':j.successRate+'%')+'</span>'
+      +capsRow
       +'<span class="k">通道分布</span><span class="v"><span class="vtxt">'+dist+'</span></span>'
       +'<span class="k">目录</span><span class="v"><span class="vtxt" title="'+esc(j.dir)+'">'+esc(j.dir)+'</span>'+copyBtn(j.dir)+'</span>'
       +'</div>'
@@ -1009,9 +1047,11 @@ async function toggleJob(id){
     if(j.summaryMd)h+='<details aria-expanded="false"><summary>summary.md</summary><div class="dbd"><pre>'+esc(j.summaryMd)+'</pre></div></details>';
     h+='<div class="copyline"><span class="t">wbx history '+esc(j.id)+'（CLI 回放）</span>'+copyBtn('wbx history '+j.id)+'</div>';
     h+='</div>';
-    box.innerHTML=h;
-    box.style.display='block';
-    enhanceClamps(box);
+    const dtr=document.createElement('tr');
+    dtr.className='job-inline';
+    dtr.innerHTML='<td colspan="5"><div class="job-inline-card">'+h+'</div></td>';
+    row.parentNode.insertBefore(dtr,row.nextSibling);
+    enhanceClamps(dtr);
   }catch(e){toast(e.message,'error')}
 }
 // ---------- 登录（状态内联：按钮 disabled + spinner + 文案） ----------
@@ -1207,12 +1247,22 @@ async function handler(req, res) {
         as = parseLane(b.lane);
         if (!as) return sendJson(res, 400, { error: `lane 取值只支持 auto|ai|cn|cline（ai=WorkBuddy AI，cn=WorkBuddy，cline=Cline；收到 ${b.lane}）` });
       }
+      // v6 caps：任务契约字段——不合法值/lane 不匹配/L2 未交付均 400（绝不静默降档或改路）
+      let caps = null;
+      if (b.caps != null && b.caps !== '') {
+        caps = parseCaps(b.caps);
+        if (!caps) return sendJson(res, 400, { error: `caps 只支持 L0 | L1 | L2（收到 ${b.caps}）` });
+      }
+      if (caps === 'L1' && as === 'cline') {
+        return sendJson(res, 400, { error: 'caps L1 与通道 cline 不匹配：L1 仅支持 WorkBuddy AI / 国内版（ai/cn）' });
+      }
       const jobId = newJobId();
       runAskJob({
         prompt, as,
         model: typeof b.model === 'string' && b.model ? b.model : null,
         effort: typeof b.effort === 'string' && b.effort ? b.effort : null,
         timeoutS: Number(b.timeout) > 0 ? Number(b.timeout) : 300,
+        caps,
         jobId,
       }).catch((e) => writeFailedJob(jobId, e.message));
       sendJson(res, 200, { jobId });
@@ -1227,6 +1277,7 @@ async function handler(req, res) {
         as: t.as || null,
         effort: t.effort || null,
         model: t.model || null,
+        caps: t.caps != null && t.caps !== '' ? t.caps : null,   // v6 任务级能力档（透传 core 校验）
       }));
       const bad = tasksIn.find((t) => !t.prompt.trim());
       if (bad) return sendJson(res, 400, { error: `任务 ${bad.id} 缺少提示词（prompt）` });

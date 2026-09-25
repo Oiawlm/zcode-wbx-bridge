@@ -23,7 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '5.4.0';
+export const WBX_VERSION = '6.0.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -272,6 +272,52 @@ export function extractFreeLimitResetIn(text) {
   return m ? m[1].trim() : null;
 }
 
+// ---------- worker 能力分级 caps（v6：L0 纯文本默认 / L1 只读+联网 / L2 缓期未交付） ----------
+// 第一性：caps 是任务契约不是偏好——绝不静默降档、绝不自动改路；L0 出厂零回退。
+// 映射（Phase 0 探针定案，证据 internal/v10p0-*.mjs + WBX.md v6.0.0 章映射表）：
+//   L0 = 三 lane 现有链逐字不变；
+//   L1 = 仅 ai/cn（codebuddy --tools 白名单；四档 permission-mode 端到端可用，取最小权限 default；
+//         Read/Glob/Grep 越 cwd 绝对路径读取被进程级拒绝（P2c），故以空 scratch 为 cwd 获得读边界）；
+//   L2 = 仅 cline，本版未交付（2026-09-25 用户裁决「L2 缓期，本版留位」）：cline 3.0.65 无命令级
+//         权限管控——CLINE_COMMAND_PERMISSIONS 特性不存在于二进制（P3b2/P3b3/P4 三组 deny 实测
+//         全失效、del 实删），六层防护栈第②层缺层不交付（GOAL-V10 红线 2）。
+export const CAPS_LEVELS = ['L0', 'L1', 'L2'];
+export const L1_TOOLS_WHITELIST = 'WebSearch,WebFetch,Read,Glob,Grep';   // P1 自报+P2/P2b 行为证实实名
+export const L1_MAX_TURNS = '8';
+export const L2_NOT_DELIVERED_MSG = 'L2 本版未交付：cline 3.0.65 无命令级权限管控（CLINE_COMMAND_PERMISSIONS 特性不存在，Phase 0 实测 deny 三组全失效、del 实删文件），六层防护栈缺层不交付（用户 2026-09-25 裁决「L2 缓期，本版留位」）。上游发布该特性后将按完整六层防护栈交付，详见 WBX.md v6.0.0';
+
+export function parseCaps(v) {
+  const s = String(v || '').toUpperCase();
+  return CAPS_LEVELS.includes(s) ? s : null;
+}
+
+// L1 的空 scratch 工作目录（读边界：白名单无写工具 + cwd 外绝对路径读取被进程级拒绝）
+export const SCRATCH_ROOT = path.join(RUNTIME_ROOT, 'scratch');
+export function ensureScratch(name) {
+  const d = path.join(SCRATCH_ROOT, sanitizeId(name));
+  fs.mkdirSync(d, { recursive: true });
+  return d;
+}
+
+// L1 工具轨迹摘要：从 codebuddy transcript 数组提取 function_call 事件（P2 实测事件形态）
+// 返回 { counts: {工具名: 次数}, samples: ['工具名|参数前80字符', ...]（≤20 条） }
+export function extractToolTrace(arr) {
+  const counts = {};
+  const samples = [];
+  if (!Array.isArray(arr)) return { counts, samples };
+  for (const ev of arr) {
+    if (ev && typeof ev === 'object' && ev.type === 'function_call') {
+      const name = typeof ev.name === 'string' ? ev.name : (ev.function?.name ?? 'unknown');
+      counts[name] = (counts[name] || 0) + 1;
+      if (samples.length < 20) {
+        const argsRaw = typeof ev.arguments === 'string' ? ev.arguments : JSON.stringify(ev.function?.arguments ?? ev.arguments ?? {});
+        samples.push(`${name}|${String(argsRaw).replace(/\s+/g, ' ').slice(0, 80)}`);
+      }
+    }
+  }
+  return { counts, samples };
+}
+
 // ---------- 小工具 ----------
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export function die(msg) { console.error('[FAIL] ' + msg); process.exit(1); }
@@ -389,6 +435,14 @@ export const CONFIG_DEFS = {
     type: 'int', min: 1, max: 8, default: 1,
     desc: 'cline lane 并发上限（默认 1，免费额度保护；实测稳定后可调）',
   },
+  'default-caps': {
+    type: 'enum', values: ['L0', 'L1', 'L2'], default: 'L0',
+    desc: 'ask/fanout 缺省能力档：L0 纯文本（出厂默认，零回退）| L1 只读+联网（仅 ai/cn）| L2（本版未交付，声明即报错）',
+  },
+  'caps-l2-enabled': {
+    type: 'boolean', default: false,
+    desc: 'L2 总闸（默认 false；本版 L2 未交付——开闸也报「未交付」。留作上游支持命令级 deny 后的前置闸，日常开闸须用户显式授权）',
+  },
 };
 
 export function loadConfig() {
@@ -426,6 +480,9 @@ export function loadConfig() {
   if (!Number.isInteger(out['cline-parallel']) || out['cline-parallel'] < 1 || out['cline-parallel'] > 8) {
     out['cline-parallel'] = 1;
   }
+  // v6 caps 键：default-caps 非法回退 L0；caps-l2-enabled 非布尔回退 false（出厂缺省）
+  if (!CAPS_LEVELS.includes(out['default-caps'])) out['default-caps'] = 'L0';
+  if (typeof out['caps-l2-enabled'] !== 'boolean') out['caps-l2-enabled'] = false;
   if (migratedClineModel) {
     try {
       fs.writeFileSync(CONFIG_FILE, JSON.stringify(out, null, 2) + '\n', 'utf8');
@@ -455,6 +512,12 @@ export function parseConfigValue(key, valueStr) {
       const n = Number(v);
       if (!Number.isInteger(n) || n < def.min || n > def.max) throw new Error(`${key} 需为 ${def.min}-${def.max} 的整数`);
       return n;
+    }
+    case 'boolean': {
+      if (typeof v === 'boolean') return v;
+      if (v === 'true') return true;
+      if (v === 'false') return false;
+      throw new Error(`${key} 只支持 true | false（收到 ${JSON.stringify(v)}）`);
     }
     default:
       return String(v);
@@ -653,8 +716,8 @@ export function killTree(child) {
 export async function waitKills() { await Promise.allSettled([...pendingKills]); }
 export async function exitWith(code) { await waitKills(); process.exit(code); }
 
-export function spawnNode(args, { env, timeoutMs, stdin } = {}) {
-  return spawnBin(process.execPath, args, { env, timeoutMs, stdin, cwd: RUNTIME_ROOT });
+export function spawnNode(args, { env, timeoutMs, stdin, cwd } = {}) {
+  return spawnBin(process.execPath, args, { env, timeoutMs, stdin, cwd: cwd || RUNTIME_ROOT });
 }
 
 // 通用子进程执行（v5：cline exe 与 node 均走这里），超时用 killTree 兜底
@@ -769,33 +832,51 @@ function normalizeResult(j) {
 }
 
 /**
- * 单次无头调用（纯 LLM，无工具），跑在指定 lane 上。返回：
- *   成功 { ok:true, text, usage, durationMs, model, raw }
+ * 单次无头调用，跑在指定 lane 上。caps（v6，任务契约字段，默认 L0）：
+ *   L0 = 纯 LLM 无工具（--tools '' --max-turns 1，逐字保持 v5 行为零回退）；
+ *   L1  = 只读+联网（仅 ai/cn；--tools 白名单 + --permission-mode default + --max-turns 8，
+ *         cwd=空 scratch 读边界；P2/P2b/P2c 探针定案）；返回值附 toolTrace 轨迹摘要与原始 transcript；
+ *   L2  = 本版未交付（上游 cline 3.0.65 无命令级 deny；明确报错，绝不静默降档）。
+ * 返回：
+ *   成功 { ok:true, text, usage, durationMs, model, raw, caps?, toolTrace?, rawTranscript?, scratchDir? }
  *   失败 { ok:false, kind, error, durationMs, hint? }
- * kind: timeout | cli-error | unparseable | result-error | auth
+ * kind: timeout | cli-error | unparseable | result-error | auth | caps-l2-not-delivered | caps-invalid
  * v5：lane=cline 走 cline CLI（--json NDJSON）；任务级 effort 对 cline 不生效
  *（用户定案：cline 思考档一律取 config cline-thinking，不下调）。
  */
-export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000 }) {
-  if (lane === 'cline') return askOnceCline({ prompt, model, timeoutMs });
+export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000, caps = 'L0', scratchDir = null }) {
+  if (lane === 'cline') return askOnceCline({ prompt, model, timeoutMs, caps });
+  const capsLevel = parseCaps(caps);
+  if (!capsLevel) {
+    return { ok: false, kind: 'caps-invalid', error: `caps 只支持 L0 | L1 | L2（收到 ${caps}）`, durationMs: 0, hint: 'caps-invalid' };
+  }
+  if (capsLevel === 'L2') {
+    return { ok: false, kind: 'caps-l2-not-delivered', error: L2_NOT_DELIVERED_MSG, durationMs: 0, hint: 'caps-l2-not-delivered' };
+  }
   const laneKey = IDENTITIES[lane] ? lane : 'cn';
-  const mdl = resolveModel(model);
   // v4：超长提示词（>12k 字符）改走 stdin 通道（-p 不带位置参数），绕过命令行长度上限；
   // 短提示词保持 v3 位置参数路径不变（对外行为零回退）
   const useStdin = prompt.length > 12000;
+  const mdl = resolveModel(model);
+  // caps 分档 flags（L0 序列逐字保持 v5：--tools '' --output-format json --no-session-persistence --max-turns 1）
+  const capsArgs = capsLevel === 'L1'
+    // L1：白名单工具（P1/P2/P2b 实名）+ 最小权限 permission-mode（P2 四档实测均可用，取 default）
+    ? ['--tools', L1_TOOLS_WHITELIST, '--permission-mode', 'default', '--max-turns', L1_MAX_TURNS, '--output-format', 'json', '--no-session-persistence']
+    // L0：纯 LLM 无工具模式（对标桌面版 Quick 模式）——逐字不变
+    : ['--tools', '', '--output-format', 'json', '--no-session-persistence', '--max-turns', '1'];
   const args = [
     resolveCliPath(), '-p',
     ...(useStdin ? [] : [prompt]),
     '--model', mdl,
-    '--tools', '',                       // 纯 LLM 无工具模式（对标桌面版 Quick 模式）
-    '--output-format', 'json',
-    '--no-session-persistence',
-    '--max-turns', '1',
+    ...capsArgs,
   ];
   if (effort) args.push('--effort', effort);
 
+  // L1 工作目录 = 空 scratch（白名单无写工具 + cwd 外绝对路径读取被进程级拒绝（P2c）→ 读边界）
+  const scratch = capsLevel === 'L1' ? (scratchDir || ensureScratch('l1-' + stamp())) : null;
+
   const t0 = Date.now();
-  const r = await spawnNode(args, { env: baseEnv(laneKey), timeoutMs, stdin: useStdin ? prompt : null });
+  const r = await spawnNode(args, { env: baseEnv(laneKey), timeoutMs, stdin: useStdin ? prompt : null, cwd: scratch || undefined });
   const durationMs = Date.now() - t0;
   const stdout = ansiStrip(r.stdout || '');
   const stderr = ansiStrip(r.stderr || '');
@@ -808,7 +889,8 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000 
     return { ok: false, kind: 'auth', error: '未登录或凭证已过期（Authentication required）', durationMs, hint: 'login' };
   }
 
-  const j = normalizeResult(extractJson(stdout));
+  const parsedFull = extractJson(stdout);
+  const j = normalizeResult(parsedFull);
   if (!j) {
     return {
       ok: false,
@@ -829,6 +911,13 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000 
   let text = j.result ?? j.text ?? j.content ?? j.message;
   if (typeof text !== 'string') text = JSON.stringify(text, null, 2);
   if (text === undefined || text === null) text = JSON.stringify(j, null, 2);
+  // L1 附加：caps 档位 + 工具轨迹摘要（function_call 事件计数+参数截断）+ 原始 transcript（落盘回放）
+  if (capsLevel === 'L1') {
+    return {
+      ok: true, text, usage: usageOf(j), durationMs, model: j.model || mdl, raw: j,
+      caps: capsLevel, toolTrace: extractToolTrace(parsedFull), rawTranscript: stdout, scratchDir: scratch,
+    };
+  }
   return { ok: true, text, usage: usageOf(j), durationMs, model: j.model || mdl, raw: j };
 }
 
@@ -899,7 +988,20 @@ export function parseClineNdjson(text) {
  * 提示词 >12000 字符走 stdin 通道（pipe 提示词全文 + 短位置参数指令，Phase 0 实测可用）。
  * 注意：cline 参数解析要求提示词至少含一个 ASCII 空格（实测无空格的短中文会被当未知子命令拒绝）。
  */
-export async function askOnceCline({ prompt, model = null, timeoutMs = 300000 }) {
+export async function askOnceCline({ prompt, model = null, timeoutMs = 300000, caps = 'L0' }) {
+  // caps 契约（v6）：cline 不承载 L1（--auto-approve 仅布尔两档，CLINE_COMMAND_PERMISSIONS 只覆盖
+  // run_commands 且 3.0.65 实测不存在该特性——无法承诺只读语义）；L2 本版未交付。两者均明确报错，
+  // 绝不静默降档 L0、绝不自动改路（是否降档重派由编排器显式决定）。
+  const capsLevel = parseCaps(caps);
+  if (!capsLevel) {
+    return { ok: false, kind: 'caps-invalid', error: `caps 只支持 L0 | L1 | L2（收到 ${caps}）`, durationMs: 0, hint: 'caps-invalid' };
+  }
+  if (capsLevel === 'L1') {
+    return { ok: false, kind: 'caps-lane-mismatch', error: 'L1 仅支持 ai | cn lane（codebuddy --tools 白名单承载，--as ai / --as cn）；cline 不承载 L1：--auto-approve 仅布尔两档，无法承诺只读语义', durationMs: 0, hint: 'caps-lane-mismatch' };
+  }
+  if (capsLevel === 'L2') {
+    return { ok: false, kind: 'caps-l2-not-delivered', error: L2_NOT_DELIVERED_MSG, durationMs: 0, hint: 'caps-l2-not-delivered' };
+  }
   const bin = resolveClinePath();
   if (!bin) {
     return { ok: false, kind: 'cli-error', error: 'cline 未安装（可选 lane）。安装：npm install -g cline，然后 wbx login --identity cline', durationMs: 0, hint: 'not-installed' };
@@ -1032,13 +1134,15 @@ export async function finalizeJob(jobDir, { total, ok, durationMs }) {
 }
 
 const RECORD_FILES = new Set(['manifest.json', 'tasks-input.json', 'summary.md']);
+// v6 L1 附件（原始 transcript）不是任务记录，统计/读取时排除
+const isTaskRecordFile = (name) => name.endsWith('.json') && !RECORD_FILES.has(name) && !name.endsWith('.transcript.json');
 
 export async function readJobRecords(jobDir) {
   const out = [];
   let entries = [];
   try { entries = await fsp.readdir(jobDir); } catch { return out; }
   for (const e of entries) {
-    if (!e.endsWith('.json') || RECORD_FILES.has(e)) continue;
+    if (!isTaskRecordFile(e)) continue;
     try { out.push({ file: e, rec: JSON.parse(await fsp.readFile(path.join(jobDir, e), 'utf8')) }); }
     catch { /* 跳过坏文件 */ }
   }
@@ -1060,7 +1164,7 @@ export function summarizeJob(id, dir, { legacy = false } = {}) {
   const recs = [];
   try {
     for (const e of fs.readdirSync(dir)) {
-      if (!e.endsWith('.json') || RECORD_FILES.has(e)) continue;
+      if (!isTaskRecordFile(e)) continue;
       try { recs.push(JSON.parse(fs.readFileSync(path.join(dir, e), 'utf8'))); } catch { /* 坏文件跳过 */ }
     }
   } catch { /* 目录不可读 */ }
@@ -1154,10 +1258,10 @@ export function buildSummaryMd({ type, tasks, results, totalMs, laneKeys, lanePa
   }
   lines.push(`- 结果：成功 ${okCount} / 失败 ${tasks.length - okCount}（成功率 ${(okCount / tasks.length * 100).toFixed(0)}%）`);
   lines.push(`- 总耗时：${fmtMs(totalMs)}；tokens：in ${tin} / out ${tout}`, '');
-  lines.push('| id | lane | 状态 | 耗时 | tokens(in/out) | 尝试 | 模型 |', '|---|---|---|---|---|---|---|');
+  lines.push('| id | lane | caps | 状态 | 耗时 | tokens(in/out) | 尝试 | 模型 |', '|---|---|---|---|---|---|---|---|');
   for (const r of results) {
     const lane = r.fallbackFrom ? `${r.fallbackFrom}→${r.lane}` : r.lane;
-    lines.push(`| ${r.id} | ${lane} | ${r.status === 'success' ? '✅' : '❌'} ${r.status} | ${fmtMs(r.durationMs)} | ${r.usage?.in ?? '-'}/${r.usage?.out ?? '-'} | ${r.attempts} | ${r.model} |`);
+    lines.push(`| ${r.id} | ${lane} | ${r.caps || 'L0'} | ${r.status === 'success' ? '✅' : '❌'} ${r.status} | ${fmtMs(r.durationMs)} | ${r.usage?.in ?? '-'}/${r.usage?.out ?? '-'} | ${r.attempts} | ${r.model} |`);
   }
   const failed = results.filter((r) => r.status !== 'success');
   if (failed.length) {
@@ -1173,24 +1277,39 @@ export function buildSummaryMd({ type, tasks, results, totalMs, laneKeys, lanePa
  * runAskJob：单条 ask，含回退链与 job 落盘。返回：
  *   { ok, jobId, jobDir, lane, fallbackFrom, model, usage, durationMs, text|error, kind }
  */
-export async function runAskJob({ prompt, as = null, model = null, effort = null, timeoutS = 300, jobId = null }) {
+export async function runAskJob({ prompt, as = null, model = null, effort = null, timeoutS = 300, jobId = null, caps = null }) {
   ensureDirs();
   const cfg = loadConfig();
+  // caps 契约（v6）：不合法值 / L2 未交付 / caps×lane 不匹配 -> 明确报错，绝不静默降档或改路
+  const capsLevel = parseCaps(caps || cfg['default-caps'] || 'L0');
+  if (!capsLevel) throw new Error(`--caps 只支持 L0 | L1 | L2（收到 ${caps}）`);
+  if (capsLevel === 'L2') throw new Error(L2_NOT_DELIVERED_MSG);
   let primary = as ? parseLane(as) : null;
   if (as && !primary) throw new Error(`--as 只支持 ai | cn | cline（收到 ${as}）`);
   if (!as) primary = resolveDefaultLane();
   if (isLaneDisabled(primary)) {
     throw new Error(`lane ${primary} 已被 disabled-lanes 硬禁用。启用：wbx config set disabled-lanes []`);
   }
+  if (capsLevel === 'L1' && primary === 'cline') {
+    throw new Error('caps L1 与 lane cline 不匹配：L1 仅支持 ai | cn（codebuddy --tools 白名单承载）。请显式 --as ai 或 --as cn');
+  }
   const fb = fallbackLane(primary);
-  const chain = fb && fb !== primary ? [primary, fb] : [primary];
+  let chain = fb && fb !== primary ? [primary, fb] : [primary];
+  if (capsLevel === 'L1') {
+    // L1 回退链只在 ai/cn 之间（同能力档跨 lane 回退语义不变；cline 不承载 L1）
+    chain = chain.filter((k) => k !== 'cline');
+    if (!chain.length) throw new Error('caps L1 无可用 lane：需要 ai/cn 至少一个可用且未禁用');
+  }
+  // L1 缺省超时上浮（多轮+搜索延迟显著高于 L0 单轮；任务级更大值可覆盖）
+  const effTimeoutS = capsLevel === 'L1' ? Math.max(timeoutS, 600) : timeoutS;
 
-  const job = await createJob('ask', { promptPreview: brief(prompt, 120), as: as || 'auto', model: resolveModel(model), effort, timeoutS }, { lanes: chain, tasksInput: [{ id: 'ask', prompt }], jobId });
+  const job = await createJob('ask', { promptPreview: brief(prompt, 120), as: as || 'auto', model: resolveModel(model), effort, timeoutS: effTimeoutS, caps: capsLevel }, { lanes: chain, tasksInput: [{ id: 'ask', prompt, ...(capsLevel !== 'L0' ? { caps: capsLevel } : {}) }], jobId });
+  const l1Scratch = capsLevel === 'L1' ? ensureScratch('job-' + job.id) : null;
 
   let last = null, usedLane = null, fallbackFrom = null, res = null, attempts = 0;
   for (const lane of chain) {
     attempts++;
-    res = await askOnce({ lane, prompt, model, effort, timeoutMs: timeoutS * 1000 });
+    res = await askOnce({ lane, prompt, model, effort, timeoutMs: effTimeoutS * 1000, caps: capsLevel, scratchDir: l1Scratch });
     if (res.ok) { usedLane = lane; break; }
     last = res;
     if (lane !== primary) break;
@@ -1204,11 +1323,17 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
     durationMs: res?.durationMs ?? 0,
     model: res?.ok ? res.model : resolveModel(model),
     effort: effort || null,
+    caps: capsLevel,
     usage: res?.usage || null,
   };
   if (res?.ok) rec.result = res.text; else { rec.error = `${res?.kind}: ${res?.error || (last?.kind + ': ' + (last?.error || ''))}`; if (res?.hint) rec.hint = res.hint; if (res?.resetIn) rec.resetIn = res.resetIn; }
+  if (res?.ok && res.toolTrace) rec.toolTrace = res.toolTrace;   // L1 工具轨迹摘要（工具名+次数+参数截断）
   if (res?.rawStream) {
     await fsp.writeFile(path.join(job.dir, 'ask.cline-stream.jsonl'), res.rawStream, 'utf8');
+  }
+  if (res?.rawTranscript) {
+    // L1 原始 transcript 落盘（联网内容不可冻结复现，轨迹全文留档供回放核对）
+    await fsp.writeFile(path.join(job.dir, 'ask.transcript.json'), res.rawTranscript, 'utf8');
   }
   await writeTaskRecord(job.dir, rec);
   await finalizeJob(job.dir, { total: 1, ok: res?.ok ? 1 : 0, durationMs: res?.durationMs ?? 0 });
@@ -1216,9 +1341,9 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
   await fsp.writeFile(path.join(job.dir, 'summary.md'), md, 'utf8');
 
   if (res?.ok) {
-    return { ok: true, jobId: job.id, jobDir: job.dir, lane: usedLane, fallbackFrom: usedLane !== primary ? primary : null, model: res.model, usage: res.usage, durationMs: res.durationMs, text: res.text };
+    return { ok: true, jobId: job.id, jobDir: job.dir, lane: usedLane, fallbackFrom: usedLane !== primary ? primary : null, model: res.model, usage: res.usage, durationMs: res.durationMs, text: res.text, caps: capsLevel, ...(res.toolTrace ? { toolTrace: res.toolTrace } : {}) };
   }
-  return { ok: false, jobId: job.id, jobDir: job.dir, lane: primary, kind: res?.kind || last?.kind, error: res?.error || last?.error, hint: res?.hint || last?.hint, ...(res?.resetIn || last?.resetIn ? { resetIn: res?.resetIn || last?.resetIn } : {}) };
+  return { ok: false, jobId: job.id, jobDir: job.dir, lane: primary, kind: res?.kind || last?.kind, error: res?.error || last?.error, hint: res?.hint || last?.hint, caps: capsLevel, ...(res?.resetIn || last?.resetIn ? { resetIn: res?.resetIn || last?.resetIn } : {}) };
 }
 
 /**
@@ -1244,6 +1369,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
   if (disabledHit.length) throw new Error(`lane ${disabledHit.join(',')} 已被 disabled-lanes 硬禁用。启用：wbx config set disabled-lanes []`);
 
   const seen = new Set();
+  const defaultCaps = parseCaps(cfg['default-caps'] || 'L0') || 'L0';
   const tasks = [];
   for (let i = 0; i < tasksIn.length; i++) {
     const t = tasksIn[i] || {};
@@ -1256,7 +1382,24 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       lane = parseLane(t.as);
       if (!lane) throw new Error(`任务 ${t.id} 的 as 只支持 ai|cn|cline`);
     }
-    tasks.push({ id, prompt: String(t.prompt), lane, model: t.model || null, effort: t.effort || null });
+    // caps 契约（v6）：任务级 "caps" 字段；缺省继承 config default-caps；
+    // 不合法 / L2 未交付 / L1×cline 不匹配 -> 明确报错（绝不静默降档、绝不自动改路）
+    let taskCaps = null;
+    if (t.caps != null) {
+      taskCaps = parseCaps(t.caps);
+      if (!taskCaps) throw new Error(`任务 ${t.id ?? id} 的 caps 只支持 L0 | L1 | L2（收到 ${JSON.stringify(t.caps)}）`);
+    }
+    const effCaps = taskCaps || defaultCaps;
+    if (effCaps === 'L2') throw new Error(`任务 ${t.id ?? id}：${L2_NOT_DELIVERED_MSG}`);
+    if (effCaps === 'L1') {
+      if (lane === 'cline') throw new Error(`任务 ${t.id ?? id}：caps L1 与 lane cline 不匹配——L1 仅支持 ai | cn（--as ai / --as cn）`);
+      if (!lane) {
+        // L1 任务不进公共队列（可能落到 cline worker）：显式钉到可用的 ai/cn
+        const dl = resolveDefaultLane();
+        lane = (dl === 'ai' || dl === 'cn') ? dl : 'ai';
+      }
+    }
+    tasks.push({ id, prompt: String(t.prompt), lane, model: t.model || null, effort: t.effort || null, caps: taskCaps || null, effCaps });
   }
 
   const laneParallel = Math.max(1, parallel ?? cfg['parallel-per-lane'] ?? 2);
@@ -1276,7 +1419,10 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
   tasks.forEach((task, i) => {
     task.index = i;
     if (task.lane && laneKeys.includes(task.lane)) laneBuckets.get(task.lane).push(task);
-    else {
+    else if (task.lane && task.effCaps === 'L1') {
+      // L1 任务钉死 lane 后该 lane 未启用：明确报错（进公共队列可能落到 cline worker = 静默改路）
+      throw new Error(`任务 ${task.id}：caps L1 需要可用且未禁用的 ai/cn lane（lane ${task.lane} 不在本次执行 lanes [${laneKeys.join(',')}] 内）。修复：--lanes 纳入 ${task.lane}，或任务改 --as`);
+    } else {
       if (task.lane) say(`${task.id} 绑定 lane ${task.lane} 未启用，改投公共队列`);
       sharedQueue.push(task);
     }
@@ -1288,10 +1434,14 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
   async function runTask(task, lane) {
     const started = Date.now();
     const mdl = task.model; // 传给 askOnce 的显式模型（null -> core 按配置解析）
+    const capsLevel = task.caps || defaultCaps;
+    // L1：任务级超时上浮 + 每 job 每 task 独立 scratch（读边界）
+    const taskTimeoutMs = capsLevel === 'L1' ? Math.max(timeoutMs, 600000) : timeoutMs;
+    const l1Scratch = capsLevel === 'L1' ? ensureScratch(`job-${job.id}-${task.id}`) : null;
     let res = null, attempts = 0;
     for (let a = 0; a <= retryN; a++) {
       attempts = a + 1;
-      res = await askOnce({ lane, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs });
+      res = await askOnce({ lane, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs: taskTimeoutMs, caps: capsLevel, scratchDir: l1Scratch });
       if (res.ok) break;
       if (a < retryN) {
         const rl = res.hint === 'ratelimit' || isRateLimit(res.error);
@@ -1301,11 +1451,13 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     }
     let usedLane = lane, fallbackFrom = null;
     if (!res.ok) {
-      const fb = fallbackLane(lane);   // 跨 lane 回退（仅一次；禁用 lane 自动跳过）
+      // L1 跨 lane 回退只在 ai/cn 之间（cline 不承载 L1，不得进入回退目标）
+      let fb = fallbackLane(lane);
+      if (capsLevel === 'L1' && fb === 'cline') fb = null;
       if (fb) {
         attempts++;
         say(`${task.id}@${lane} 用尽重试（${res.kind}），跨 lane 回退 -> ${fb}`);
-        res = await askOnce({ lane: fb, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs });
+        res = await askOnce({ lane: fb, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs: taskTimeoutMs, caps: capsLevel, scratchDir: l1Scratch });
         if (res.ok) { usedLane = fb; fallbackFrom = lane; }
       }
     }
@@ -1318,17 +1470,23 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       durationMs: Date.now() - started,
       model: res.ok ? res.model : resolveModel(mdl),
       effort: task.effort || null,
+      caps: capsLevel,
       usage: res.usage || null,
     };
     if (res.ok) rec.result = res.text;
     else rec.error = `${res.kind}: ${res.error || ''}`;
+    if (res.ok && res.toolTrace) rec.toolTrace = res.toolTrace;   // L1 工具轨迹摘要
     if (res.rawStream) {
       // cline lane：原始 NDJSON 事件流全文落盘，供回放与解析器迭代（RESEARCH 设计 §3.2-5）
       await fsp.writeFile(path.join(job.dir, `${sanitizeId(task.id)}.cline-stream.jsonl`), res.rawStream, 'utf8');
     }
+    if (res.rawTranscript) {
+      // L1：codebuddy transcript 全文落盘（联网内容不可冻结复现，轨迹留档供回放核对）
+      await fsp.writeFile(path.join(job.dir, `${sanitizeId(task.id)}.transcript.json`), res.rawTranscript, 'utf8');
+    }
     results[task.index] = rec;
     await writeTaskRecord(job.dir, rec);
-    say(`${task.id}${fallbackFrom ? `（${fallbackFrom}→${usedLane} 回退）` : `@${usedLane}`} -> ${rec.status}（${fmtMs(rec.durationMs)}，尝试 ${attempts}）`);
+    say(`${task.id}${fallbackFrom ? `（${fallbackFrom}→${usedLane} 回退）` : `@${usedLane}`} -> ${rec.status}（${fmtMs(rec.durationMs)}，尝试 ${attempts}${capsLevel !== 'L0' ? `，caps ${capsLevel}` : ''}）`);
   }
 
   async function runWorker(lane) {
@@ -1502,6 +1660,14 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
   const routeNote = dl === 'auto' ? 'auto（ai 免费优先）' : dl;
   step('route', null, `default-lane=${routeNote}${disabled.length ? `；disabled-lanes=[${disabled.join(',')}]` : ''}${dl !== 'auto' && disabled.includes(dl) ? '（⚠ default-lane 指向的 lane 已禁用，实际按 auto 处理）' : ''}`);
 
+  // 4b) caps 能力分级（v6）：两键合法性 + L2 总闸状态 + 交付面
+  const dc = parseCaps(cfg['default-caps']);
+  const l2gate = cfg['caps-l2-enabled'] === true;
+  const capsValid = !!dc && typeof cfg['caps-l2-enabled'] === 'boolean';
+  step('caps', capsValid ? null : false,
+    `default-caps=${dc || `非法（${JSON.stringify(cfg['default-caps'])}，已按 L0 处理）`}；L2 总闸=${l2gate ? 'on' : 'off（默认）'}；`
+    + `能力面：L0=三 lane | L1=仅 ai/cn（联网+只读，--caps L1 / 任务 "caps":"L1"） | L2=本版未交付（cline 3.0.65 无命令级 deny，Phase 0 实测；上游支持后按完整六层防护栈交付）`);
+
   // 5) 模板缓存（登录前置条件；cline 走独立认证，无模板概念）
   for (const key of LANE_ORDER) {
     if (key === 'cline') continue;
@@ -1660,8 +1826,12 @@ export function userBlockText(bridgeScriptPath) {
     '默认过一道评审批判（T7）——多一次免费调用换质量下限。fanout ≥6 任务或结果很长时，用自己的子代理',
     '管理整批、主上下文只收摘要（层级 ≤2）。',
     '',
-    '防护不变：结果必校验后才用；涉密/隐私/凭证绝不外包；worker 无工具（提示词用「角色+任务+材料+',
-    '输出硬约束+无工具声明」模板，详见桥 PROMPTS.md v2，模板 T1–T9）；doctor FAIL、连续 >= 2 失败或',
+    '能力分级 caps（v6）：L0 纯文本默认零回退；L1 联网+只读（--caps L1，仅 ai/cn，时效调研用 T4-L1，',
+    '带来源清单）；L2 本版未交付（--caps L2 报错；上游 cline 支持命令级 deny 后按六层防护栈交付）。',
+    'caps 是任务契约：失败不静默降档、lane 不匹配明确报错。',
+    '',
+    '防护不变：结果必校验后才用；涉密/隐私/凭证绝不外包；L0 提示词含无工具声明、L1 含能力边界+',
+    '注入防御+来源清单（模板见桥 PROMPTS.md v3，T1–T10）；doctor FAIL、连续 >= 2 失败或',
     '限流 -> 停止外包，改由自己完成并如实告知用户。完整文档/卸载：桥项目文件夹内 WBX.md、UNINSTALL.md。',
     USER_BLOCK_END,
   ].join('\n');

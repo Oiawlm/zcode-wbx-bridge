@@ -1,4 +1,4 @@
-# UI-SPEC — wbx 桥控制台 UI 风格契约（contract v1.0.0）
+# UI-SPEC — wbx 桥控制台 UI 风格契约（contract v1.1.0）
 
 > 授权来源：用户 2026-09-25「风格和方向可以基本锁定」「该固定的部分先固定下来，之后基本就是
 > 新增或者删减一些内容」。冻结登记见 `internal/FROZEN.md`「UI 契约冻结」项；变更须用户显式授权
@@ -281,7 +281,9 @@
 - **用法**：历史表（时间/类型徽标/任务数/成功率/任务 ID）。
 - **Do**：滚动交给 .tbl-wrap；表头 sticky 吸顶；可复制列加 td.mono。
 - **Don't**：不要加斑马纹（hover 已足够区分）；表头下边不要用 --line（层级读不出）。
-- **何时不用**：行内需展开详情时在表下挂 details/手风琴（job-detail 模式），不嵌套网格。
+- **何时不用**：无天然表格语义的松散条目不用 table；行内需展开详情时在**点击行正下方插入详情 tr**
+  （v6 行内详情模式：`tr.job-inline` + `.job-inline-card`，手风琴单开沿用 openJobId；2026-09-25
+  契约变更，授权=用户原话「详细内容直接出现在条目下方」），不嵌套网格、不再回页底独立卡。
 - **A11y 与不变量**：容器包裹防横向滚动为机器断言（C2+C3）；1100px 正文容器（C4）。
 - **相关组件**：num、badge、details、copy-button。
 
@@ -505,3 +507,4 @@ T4/C3/C5/D4 的保活前置）、形状双编码（S1）、阈值乱序（S2）�
 | contract version | 日期 | tokens-sha | 变更 |
 |---|---|---|---|
 | v1.0.0 | 2026-09-25 | efeee49b0e | 契约起步：v5.3 已收敛风格显式化（58 token+20 组件+3 Pattern+IA/编码/术语冻结）；随桥 v5.4.0 发布（token 语义化改名 --acc-text/--acc-hover/--panel-inset 已并入基线） |
+| v1.1.0 | 2026-09-25 | efeee49b0e（token 零改动） | 语义升级（授权=用户原话「我点击一个条目，希望它的详细内容直接出现在条目下方」）：历史页详情从页底 #job-detail 卡改为**点击行正下方行内展开**（tr.job-inline + .job-inline-card，手风琴单开沿用，页底卡退役）；新增内容级元素：调用页 caps 选择器（L2 disabled 标未交付）、taskHead caps 徽标、概览/通道卡「能力档」行、L1 工具轨迹 trace-box 折叠件；ui-contract 新增 H1–H4 断言（19→23）；token 键集与值零改动 |

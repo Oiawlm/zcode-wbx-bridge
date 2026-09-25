@@ -40,9 +40,17 @@ token 收着用。**自包含**（v4 公理）：任务的全部输入（含代�
 - v5.3 新增：控制台界面产品化（只动展示层，行为零变化）——状态页首屏健康总览条（3 秒判总体
   状态）+ 通道卡扫读/详情/排障三层 + 停用开关在通道卡 + 体检空态与分组结果；视觉 token 化；
   全站 toast 替代弹窗。守护/安全面/API/config 键/术语表全部不动。
+- v6.0.0 新增：**worker 能力分级 caps（L0/L1/L2）**——L0 纯文本默认零回退（出厂
+  `default-caps=L0`）；L1 只读+联网 opt-in（`--caps L1` / 任务 `"caps":"L1"`，仅 ai/cn：
+  WebSearch/WebFetch/Read/Glob/Grep 白名单 + 空 scratch 读边界 + 工具轨迹落盘 + transcript
+  留档，缺省超时上浮 600s，模板 T4-L1）；L2 受控全能**本版未交付**（cline 3.0.65 无命令级
+  deny，Phase 0 实测 deny 三组全失效——`--caps L2` 声明即报错；总闸 `caps-l2-enabled`
+  默认 false）。历史页详情行内化（点击行下方展开）+ 调用页 caps 选择器 + caps 徽标。
+  PROMPTS.md 升 v3（原则 2「能力边界声明按档位」+ P13 注入防御 + P14 来源清单 + T4-L1 +
+  T10（L2 模板先行入库）+ 决策速查表 caps 列）。
 - 使用前先 `doctor`；用法与 worker 提示词模板见 `.zcode/skills/wb-bridge/SKILL.md` 与
-  `.zcode/skills/wb-bridge/PROMPTS.md`（v2 知识库：原则 12 条 + 模板 T1–T9 + 经验条目 E-xxx +
-  决策速查表；ZCode 会话会自动命中该 Skill）。
+  `.zcode/skills/wb-bridge/PROMPTS.md`（v3 知识库：原则 14 条 + 模板 T1–T10 + 经验条目
+  E-001…E-012 + 决策速查表含 caps 列；ZCode 会话会自动命中该 Skill）。
 
 ## 调用准则（v5 基线反转：默认分派）
 
@@ -82,7 +90,12 @@ token 收着用。**自包含**（v4 公理）：任务的全部输入（含代�
 - 凭证（`.wbx/sessions/`、`.wbx/product/`、`~/.wbx/cline-home/`）绝不展示给用户或写进日志、文档、对话输出。
 - `.wbx/` 保持 gitignore，绝不提交。
 - 不写 `~/.workbuddy`、`~/.workbuddy-ai`、**不读写用户 `~/.cline`**，不改桌面版任何文件，不动系统环境变量。
-- 不开启外部 Agent 自身的 agentic 模式（cline lane 一律 `--auto-approve false` 纯文本端点；
-  不使用 `--yolo`/`--zen`）；模型输出不可信——best-of-N 择优与集成必须经 ZCode 评审/运行验证。
+- **caps 分级授权（v6，授权来源=用户 2026-09-25 原话「我们要尽可能最大限度地发挥它们的性能，
+  只要有需要，就可以让它们使用工具、联网」与拍板「三级分级」；L2 缓期为当日实测后用户裁决）**：
+  L0 纯文本默认零回退；L1 只读+联网 opt-in（仅 ai/cn，白名单+scratch 读边界+轨迹落盘）；
+  L2 本版未交付（仅 cline 且上游无命令级 deny，`--caps L2` 声明即报错；总闸 `caps-l2-enabled`
+  默认 false，日常开闸须用户显式授权）。caps 是任务契约：L1/L2 失败**绝不静默降档**，
+  caps×lane 不匹配明确报错；`--yolo`/`--zen` 继续禁用（既有定案）。模型输出不可信——
+  best-of-N 择优与集成必须经 ZCode 评审/运行验证；L1 联网产出另抽查来源清单（URL+访问时间）。
 - 所有产物限于本项目文件夹内（用户级 `~/.zcode/AGENTS.md` 的 wbx 标记块是唯一例外，
   且只能通过 `wbx install-user` / `uninstall-user` 管理）。

@@ -57,7 +57,8 @@ Remove-Item -Recurse -Force ".zcode\skills\wb-bridge"
 # 2. 运行时（含 ai/cn 两 lane 的凭证、config.json、jobs/ 历史、任务缓存；
 #    全局形态还有 ~/.wbx/ 下的同类内容与 cline-home/ 隔离主目录）
 #    结构：sessions\{cn,ai}.json + product\{cn,ai}.json + config\{cn,ai}\ + config.json
-#          + jobs\<jobId>\ + tasks\<时间戳>\ + tmp\ + cline-home\.cline\{data,...} + cline-home\work\
+#          + jobs\<jobId>\（含 v6 L1 任务的 <任务id>.transcript.json 工具转录）+ tasks\<时间戳>\
+#          + tmp\ + scratch\（v6 L1 联网档任务的只读工作目录）+ cline-home\.cline\{data,...} + cline-home\work\
 Remove-Item -Recurse -Force ".wbx"
 
 # 3. 项目级常驻指令（若文件里还有非 wbx 内容，只删 wbx 段落）
