@@ -772,6 +772,65 @@ v5 遗留错误：模型探测用了**计费孪生** `deepseek/deepseek-v4.1-fla
   /api/config 写 cline-model，非 DeepSeek 标注「（非 DeepSeek）」）；登录页 cline 指引更新。
 - `wbx-setup.mjs`：INSTALL-README cline 段免费口径 + 隐私披露；zip/bundle 名带 WBX_VERSION。
 
-### v5.1 验收记录（Phase 3 回填）
+### v5.1 验收记录（Phase 3 回填，2026-09-25）
 
-（发布后回填：四类断言回归 + 全命令回归 + 发布证据 + 自举 job 清单。）
+**1. 四类断言回归（internal/v6-regression.mjs，24 PASS / 0 FAIL）**：
+
+- **① 存量迁移（沙箱 WBX_HOME）**：旧值恰为计费孪生 → 打印 `[MIGRATE] cline-model：检测到
+  v5 计费孪生 deepseek/deepseek-v4.1-flash，已改写为免费孪生 cline-free/deepseek-v4.1-flash
+  （仅此值迁移，显式设置的其他模型 id 不动）`、stdout/落盘均为免费孪生；**二次运行不再迁移**
+  （幂等）；显式 `cline-free/mimo-v2.6-flash` 不被迁移；缺省/空串回落新默认。
+- **② 免费 id 缺失降级（真实运行时根，改后即恢复）**：config 临时设为不存在 id → doctor
+  `--no-probe` exit 0 且输出 `[WARN] 免费模型 cline-model=…-rotated-away 不在当前免费组
+  （可能已被轮换下线，或为计费 id）。当前免费：stealth/space-bunny-alpha、…（全清单）+
+  换用指引`；ask `--as cline` 命中 `model not found` 后自动跨 lane 回退 ai/cn 成功
+  （`[FALLBACK] 主 lane cline 失败`）；恢复后 config 原样。
+- **③ 超额状态机（真实二进制消息模板模拟）**：`isFreeLimitError` 命中
+  「Daily free model limit reached…Try again in 2h 30m…」；`extractFreeLimitResetIn`
+  提取 `2h 30m`；`isFreePromotionEndedError` 命中「Free model promotion ended…」；
+  `isModelNotFoundError` 命中实测形态「model not found」；正常文本零误判；通用 429 仍走
+  ratelimit；NDJSON 模拟事件（agent_event.error + run_result error）解析出消息文本。
+- **④ 非 DeepSeek 禁回退**：`fallbackLane('cline')` = `cn`（只回 ai/cn）；`askOnceCline`
+  内 `mdl` 只赋值一次、`'-m'` 只出现一次（失败路径无模型替换逻辑）；`fetchClineFreeModels`
+  返回结构无 token 字段。
+
+**2. v5 全命令回归（零回退）**：4 脚本 `node --check` 通过；doctor（含探测：ai/cn/cline 三绿
++ 免费模型存在性行 + cline 探测计价 `$0.000000（免费）`，exit 0）；ask 默认路径（ai 10.4s）、
+`--as cline`（免费孪生 4.7s、$0）、无空格中文提示词直达 cline 成功（v5.1 新防护）、
+`config set default-lane cline` 后 ask 走 cline（4.7s）再恢复 auto；fanout 3 任务三 lane
+混合 + `files` 材料拼接（3/3 成功、9.8s、材料标题读取正确，job 20260925-144030-2mt）；
+models `--as cline --free`（5 个、非 DeepSeek 标注、当前值 *）/ `--probe`（计价显示）/
+默认 ai；config 七键 round-trip（default-lane、disabled-lanes、cline-model）+ UI API 写
+cline-model 生效；history 列表 + `--task` 定向回放；UI（/api/status 含 clineFreeModels 5 项
++ note、cline 卡下拉存在、POST /api/config 写回成功）；export-bundle
+（wbx-bridge-v5.1.0-20260925.zip、11 文件、零凭证断言比对 9 token）。
+
+**3. UI 免费模型选择器验收**：/api/status 新增 `clineFreeModels`（5 项，非 DeepSeek 4 项带
+标记）与 `clineFreeModelsNote`（空=端点正常）；页面 cline 卡渲染 `<select id="cline-free-select">`
+（当前值 selected）；选中 → POST /api/config `{key:'cline-model'}` → config.json 写入生效
+（实测回读一致）；清单不可用时降级为提示文字（含命令行替代方案）。
+
+**4. GitHub 发布与审计**：白名单逐文件 `git add`（11 个修改文件；无新增文件，白名单 16
+文件不变，`git ls-files` 逐项对照一致）→ staged 敏感审计零命中（六套：人名/账号
+`jaferpentz|FireChou|周燎原|Lenovo|Agent Vault|Yglstr`、邮箱正则、`D:\Download`、
+`C:\Users\Lenovo`、uin 脱敏 `33**54|45**32`、`usr-01M2X`）+ 凭证值级
+（`accessToken"…"20+ 字符`形态）零命中 → commit `86356e6` → push → `gh api` 分支 sha
+与本地一致（86356e6c2ae…）→ **origin/main 远端复扫六套零命中** → tag `v5.1.0` → release
+（notes 引 CHANGELOG + WBX 链接，附件 `wbx-bridge-v5.1.0-20260925.zip` 320KB/11 文件/
+零凭证断言比对 9 token）→ description 更新（「可选 Cline CLI 免费孪生」口径；topics 已含
+cline/deepseek/cost-saving 无需新增）。
+
+**5. 全局形态幂等同步**：项目 v5.1 `self-install` → `~/.zcode/wbx-bridge/` v5.1.0（scripts +
+examples + PROMPTS.md + docs）、用户级 skill、`/wbx` 命令、`~/.zcode/AGENTS.md` 标记块
+（免费孪生措辞，核验命中）；全局入口 doctor 通过（含免费模型存在性 `[OK]`）；`~/.wbx/`
+凭证原样三绿。
+
+**6. 自举记录（wbx 外包，材料先行，逐份校验后采用）**：
+
+| job | 任务 | 用途 |
+|---|---|---|
+| `20260925-143219-fuo` | e011-revise（✅）、faq-free-rewrite（✅） | E-011 修订草稿 + README「真的免费吗」改写草稿（ai lane，各 35-44s；ZCode 审校微调后集成） |
+
+**7. 如实声明**：免费额度边界未实测到（当日 20 次成功调用全部 $0，节约模式即停）；超额
+错误形态（消息模板与类名）取自 cline 3.0.65 二进制内证，状态机按真实消息字符串设计——
+若线上实际报文与此不符，`hint` 兜底为通用 `ratelimit` 分类（仍能触发跨 lane 回退），不崩溃。
