@@ -665,7 +665,16 @@ examples + PROMPTS.md + docs）、用户级 skill SKILL.md + PROMPTS.md v2、`/w
 **9. 触发面静态核验**：项目 AGENTS.md（4 处）、项目 SKILL.md（6 处）、用户级标记块模板（2 处）、
 /wbx 命令模板（1 处）均含「默认分派/单个也直接派」意图；止损与涉密防护措辞逐处保留。
 
-**10. GitHub 发布与审计**：见下方发布记录（白名单逐文件 add、`git grep --cached` 敏感审计
-零命中（模式 + `cline` 凭证路径）、push 后 `gh api` 复扫、tag `v5.0.0` + release + topics）。
+**10. GitHub 发布与审计**：白名单逐文件 `git add`（16 文件：根 9 + 技能目录 7，`git ls-files`
+逐项对照一致）→ 五套敏感审计 `git grep --cached` 零命中（人名/账号/机器路径/邮箱/uin 脱敏形态；
+`~/.wbx/cline-home` 命中均为文档路径说明，凭证值级检查（token 字段带值、账号 id、40+ 随机串）
+另跑一轮零命中）→ commit `cda9e53` → push → `gh api` 线上校验 sha 一致 + 本地远端零差异 +
+**对 origin/main 重跑审计三套零命中** → tag `v5.0.0` → release（notes 引 CHANGELOG 摘要，
+附件 `wbx-bridge-v5-20260925.zip` 279KB/11 文件/零凭证断言比对 9 token）→ description 更新
+三 lane 口径、topics 增 `cline`（`ai-agent`/`windows` 已在列，不重复）。
 
-**11. 「新人 10 分钟」走查**：见下方走查记录（按发布后 README 从 clone 到第一条 ask 逐步自查）。
+**11. 「新人 10 分钟」走查**：按发布后 README 逐步实测——`git clone`（3s，16 文件齐全）→
+全新运行时（WBX_HOME 指向空目录模拟新机）`doctor`（0s，各 lane 正确给出对应 login 指引、
+cline 段按装/未装显示正确状态、exit 1 符合「无可用 lane」语义）→ 已登录机器形态 `ask` 首条
+（10s，ai lane 正确作答）。**机械步骤合计 ~13 秒**，10 分钟预算内余量充足；仅登录步骤需
+真人操作（README 已逐条写明），无超时步骤，无需回写。
