@@ -120,7 +120,7 @@ export function wbxCommandText() {
   const gscript = globalBridgeScript();
   return [
     '---',
-    'description: 把任务描述经 wbx 桥分派给外部免费算力（DeepSeek V4.1 Flash：国际版免费/国内版近免费）执行并汇总',
+    'description: 把任务描述经 wbx 桥分派给外部免费算力（三 lane：WorkBuddy 双 lane DeepSeek V4.1 Flash + 可选 Cline CLI）执行并汇总',
     'argument-hint: <任务描述>',
     'skills: wb-bridge',
     '---',
@@ -129,10 +129,10 @@ export function wbxCommandText() {
     '',
     '请按 wb-bridge 技能的流程处理上面的任务（这是用户要的一键分派触发器）：',
     '',
-    '1. 先自检：运行 `' + `node "${gscript}" doctor` + '`；有任一 lane 可用即继续，两个 lane 都不可用则由你自己完成任务并说明原因。',
-    '2. 判断任务是否适合分派（相互独立、自包含可单轮完成、不涉密——v4 起含代码模块编写：接口清晰、材料可贴、输出可校验）。适合则按技能里引用的 PROMPTS.md 模板（角色+任务+材料+输出硬约束+无工具声明）构造任务。',
+    '1. 先自检：运行 `' + `node "${gscript}" doctor` + '`；有任一 lane 可用即继续（cline 是可选 lane，未装/未登录只 WARN），全部不可用则由你自己完成任务并说明原因。',
+    '2. 判断任务是否适合分派（自包含可单轮完成、不涉密——含代码模块编写：接口清晰、材料可贴、输出可校验；v5 基线=默认分派，单个自包含任务也直接派）。适合则按技能里引用的 PROMPTS.md 模板（角色+任务+材料+输出硬约束+无工具声明）构造任务；关键产物并行 2 份择优（T8）。',
     '3. 单条子任务用 ask，可拆分的多条用 fanout（任务写成 tasks.json）分派到外部算力；结果落 ~/.wbx/jobs/<jobId>/。',
-    '4. 校验结果后汇总输出给用户；标注信息来自模型已有知识、可能过时。',
+    '4. 校验结果后汇总输出给用户（代码模块集成前默认过一道 T7 评审批判）；标注信息来自模型已有知识、可能过时。',
     '5. doctor FAIL、连续 >= 2 个任务失败或限流 → 停止外包，如实告知用户，剩余任务由你自己完成。',
     '',
     '安全：涉密、隐私、凭证、内部代码、未公开数据绝不外包给外部模型。',
@@ -146,8 +146,9 @@ export function installReadmeText() {
   const L = [
     '# wbx 桥安装说明（v' + WBX_VERSION + '）',
     '',
-    '把合适的子任务并行分派给 WorkBuddy 账号下的 DeepSeek V4.1 Flash',
-    '（国际版 x0.00 免费 / 国内版 x0.03 近免费），由 ZCode 会话编排与校验。',
+    '把合适的子任务并行分派给外部免费算力（三 lane）：WorkBuddy 双 lane 的 DeepSeek V4.1 Flash',
+    '（国际版 x0.00 免费 / 国内版 x0.03 近免费）+ 可选 Cline CLI lane（免费额度轮换模型组），',
+    '由 ZCode 会话编排与校验。',
     '',
     '## 前提（缺一不可）',
     '',
@@ -172,6 +173,21 @@ export function installReadmeText() {
     '',
     '装完自检：' + B + 'node scripts\\wbx.mjs doctor' + B + '，两个 lane 全绿即就绪。',
     '',
+    '## 可选扩展：cline lane（第三条算力）',
+    '',
+    '不装也不影响 WorkBuddy 双 lane 的任何功能（doctor 对 cline 只显示 WARN）：',
+    '',
+    F + 'bat',
+    'npm install -g cline',
+    'node scripts\\wbx.mjs login --identity cline    :: 浏览器完成 OAuth 设备授权（有活跃会话时自动通过）',
+    ':: 可选：指定模型（DeepSeek id 需 vendor/model 格式，探测：wbx models --as cline --probe "a/b,c/d"）',
+    'node scripts\\wbx.mjs config set cline-model "deepseek/deepseek-v4.1-flash"',
+    F,
+    '',
+    'cline 状态只存 <运行时根>/cline-home/（桥以 HOME 覆盖实现隔离），与用户自己的 ~/.cline 互不影响；',
+    '默认 --thinking xhigh --compaction off（上下文与思考强度最大），并发默认 1；',
+    '计费为按量微付费（实测单次约 $0.0003-0.004）。',
+    '',
     '## 使用',
     '',
     '- **任何项目的 ZCode 会话**直接说「帮我调研 A、B、C…」即可触发主动分派（用户级 skill + AGENTS.md 标记块）；',
@@ -187,19 +203,20 @@ export function installReadmeText() {
     '',
     '| 位置 | 内容 |',
     '|---|---|',
-    '| ' + B + '~/.zcode/wbx-bridge/' + B + ' | 桥本体（scripts + SKILL.md + examples + docs） |',
+    '| ' + B + '~/.zcode/wbx-bridge/' + B + ' | 桥本体（scripts + SKILL.md + PROMPTS.md + examples + docs） |',
     '| ' + B + '~/.zcode/skills/wb-bridge/' + B + ' | 用户级 skill（遮蔽同名项目级 skill，内容一致） |',
     '| ' + B + '~/.zcode/commands/wbx.md' + B + ' | /wbx 斜杠命令 |',
     '| ' + B + '~/.zcode/AGENTS.md' + B + ' | ' + B + '<!-- wbx:begin/end -->' + B + ' 标记块 |',
-    '| ' + B + '~/.wbx/' + B + ' | 运行时：sessions/product 凭证、config.json、jobs/ 历史 |',
+    '| ' + B + '~/.wbx/' + B + ' | 运行时：sessions/product 凭证、config.json、jobs/ 历史、cline-home/（可选 lane 隔离主目录） |',
     '',
-    '绝不写 ' + B + '~/.workbuddy' + B + '、' + B + '~/.workbuddy-ai' + B + '、桌面版安装目录、系统环境变量。',
+    '绝不写 ' + B + '~/.workbuddy' + B + '、' + B + '~/.workbuddy-ai' + B + '、' + B + '~/.cline' + B + '（用户自己的 Cline 状态）、桌面版安装目录、系统环境变量。',
     '',
     '## 卸载',
     '',
     F + 'bat',
     'node scripts\\wbx.mjs self-uninstall          :: 移除上面前四处（保留 ~/.wbx/ 凭证）',
-    'node scripts\\wbx.mjs self-uninstall --purge  :: 连 ~/.wbx/（含凭证）一起删',
+    'node scripts\\wbx.mjs self-uninstall --purge  :: 连 ~/.wbx/（含凭证、cline-home/）一起删',
+    ':: 若装过可选 cline lane：npm uninstall -g cline',
     F,
     '',
     '解压出来的本目录可随手删（self-install 已复制到 ~/.zcode/wbx-bridge/）。',
@@ -210,6 +227,7 @@ export function installReadmeText() {
     '  或 ' + B + 'node scripts\\wbx.mjs config set cli-path "<codebuddy 完整路径>"' + B + '。',
     '- doctor 提示缺模板缓存：启动一次对应桌面版即可。',
     '- 登录国际版遇到「登录失败」页：复制 login 命令输出里的锦囊 A URL 到地址栏回车。',
+    '- cline lane 报 Unauthorized：OAuth 凭证过期 → 重新 ' + B + 'login --identity cline' + B + '。',
   ];
   return L.join('\n') + '\n';
 }
@@ -357,7 +375,7 @@ export async function selfUninstall({ purge = false } = {}) {
 function collectBundleEntries() {
   const entries = [];
   const add = (name, data) => entries.push({ name, data });
-  const root = 'wbx-bridge-v4/';
+  const root = 'wbx-bridge-v5/';
   // 根入口 stub（安装命令可写 node wbx.mjs self-install）
   add(`${root}wbx.mjs`, '#!/usr/bin/env node\n// 分发包根入口：转发到 scripts/wbx.mjs（真正入口在同目录 scripts/ 下）\nimport("./scripts/wbx.mjs");\n');
   // scripts/
@@ -404,6 +422,16 @@ function assertBundleClean(entries) {
         } catch { /* 不存在 */ }
       }
     }
+    // cline lane 的 OAuth 凭证（v5：HOME 覆盖目录下 providers.json）
+    for (const prov of ['cline-home/.cline/data/settings/providers.json', 'cline/data/settings/providers.json']) {
+      try {
+        const j = JSON.parse(fs.readFileSync(path.join(root, prov), 'utf8'));
+        for (const p of Object.values(j?.providers || {})) {
+          const t = p?.settings?.auth?.accessToken || p?.apiKey;
+          if (t) tokenVals.push(String(t));
+        }
+      } catch { /* 不存在 */ }
+    }
   }
   for (const e of entries) {
     const text = e.data.toString('utf8');
@@ -419,7 +447,7 @@ export async function exportBundle({ out = null } = {}) {
   const knownTokens = assertBundleClean(entries);
   const d = new Date();
   const p2 = (n) => String(n).padStart(2, '0');
-  const zipName = `wbx-bridge-v4-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}.zip`;
+  const zipName = `wbx-bridge-v5-${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}.zip`;
   let outFile;
   if (out) {
     out = path.resolve(out);

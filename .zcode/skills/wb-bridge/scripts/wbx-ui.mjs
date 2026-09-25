@@ -126,9 +126,11 @@ a{color:var(--acc)}
         <button data-v="auto">auto（ai 免费优先）</button>
         <button data-v="ai">固定 ai</button>
         <button data-v="cn">固定 cn</button>
+        <button data-v="cline">固定 cline</button>
       </span>
       <label class="switch"><input type="checkbox" id="dis-ai"> 禁用 ai</label>
       <label class="switch"><input type="checkbox" id="dis-cn"> 禁用 cn</label>
+      <label class="switch"><input type="checkbox" id="dis-cline"> 禁用 cline</label>
       <span class="hint" id="route-hint"></span>
     </div>
     <div class="hint">写 <b>config.json</b>（default-lane / disabled-lanes），doctor、ask、fanout、回退链即时生效。</div>
@@ -147,7 +149,7 @@ a{color:var(--acc)}
     <div class="row">
       <label>lane
         <select id="ask-lane" style="width:110px">
-          <option value="">auto</option><option value="ai">ai</option><option value="cn">cn</option>
+          <option value="">auto</option><option value="ai">ai</option><option value="cn">cn</option><option value="cline">cline</option>
         </select></label>
       <label>effort
         <select id="ask-effort" style="width:110px">
@@ -186,12 +188,18 @@ a{color:var(--acc)}
 
 <section id="tab-login">
   <div class="card">
-    <h3>登录引导（SSO，凭证约 55 天有效）</h3>
+    <h3>登录引导（WorkBuddy SSO 凭证约 55 天有效）</h3>
     <div class="row">
       <button class="primary" id="login-cn">开始登录 cn（国内版·微信扫码）</button>
       <button class="primary" id="login-ai">开始登录 ai（国际版·邮箱/OneID）</button>
     </div>
     <div id="login-out"></div>
+  </div>
+  <div class="card">
+    <h3>cline lane（可选·OAuth 设备授权）</h3>
+    <p class="hint">cline 登录是设备码流程，需在终端里跑（浏览器完成授权，凭证落隔离目录 <b>&lt;运行时根&gt;/cline-home/</b>，与用户 ~/.cline 无关）：</p>
+    <div class="copyline">node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" login --identity cline</div>
+    <p class="hint">登录后可用 config 设置 cline-model / cline-thinking（默认 xhigh）/ cline-compaction（默认 off）/ cline-parallel（默认 1）。</p>
   </div>
 </section>
 
@@ -272,6 +280,21 @@ async function loadStatus(){
     var lanesHtml='';
     for(var i=0;i<s.lanes.length;i++){
       var l=s.lanes[i];
+      if(l.key==='cline'){
+        var cState=l.disabled?'<span class="badge warn">已禁用</span>'
+          :!l.installed?'<span class="badge dim">未安装（可选）</span>'
+          :!l.credential?'<span class="badge warn">未登录（OAuth）</span>'
+          :'<span class="badge ok">已登录</span>';
+        lanesHtml+='<div class="card"><h3>lane cline · Cline CLI（可选） '+cState+'</h3>'
+          +'<div class="kv">'
+          +'<b>成本</b><span>按量微付费（实测单次 $0.0003-0.004）</span>'
+          +'<b>模型</b><span>'+esc(l.model||'provider 默认')+'</span>'
+          +'<b>思考/压缩</b><span>'+esc(l.thinking)+' / '+esc(l.compaction)+'</span>'
+          +'<b>二进制</b><span>'+esc(l.binaryPath||'未找到（npm install -g cline）')+'</span>'
+          +'<b>登录方式</b><span>命令行 wbx login --identity cline（浏览器 OAuth 设备授权）</span>'
+          +'</div></div>';
+        continue;
+      }
       var stateBadge=l.disabled?'<span class="badge warn">已禁用</span>'
         :(l.ready?'<span class="badge ok">已登录</span>':'<span class="badge err">未登录</span>');
       var exp=l.expiresAt?('约 <b>'+l.expiresInDays+'</b> 天后过期（'+l.expiresAt.slice(0,10)+'）'):'—';
@@ -301,9 +324,10 @@ function onDisChange(){
   var dis=[];
   if($('dis-ai').checked)dis.push('ai');
   if($('dis-cn').checked)dis.push('cn');
+  if($('dis-cline').checked)dis.push('cline');
   api('POST','/api/config',{key:'disabled-lanes',value:JSON.stringify(dis)}).then(loadStatus).catch(function(e){alert(e.message)});
 }
-$('dis-ai').onchange=onDisChange;$('dis-cn').onchange=onDisChange;
+$('dis-ai').onchange=onDisChange;$('dis-cn').onchange=onDisChange;$('dis-cline').onchange=onDisChange;
 $('doctor-btn').onclick=function(){
   var btn=this;btn.disabled=true;
   $('doctor-out').innerHTML='<p><span class="spin"></span>体检中（每 lane 一次 tiny ask，约 10-30s）…</p>';
@@ -364,7 +388,7 @@ function renderFanRows(){
     var r=fanRows[i];
     h+='<div class="fan-row">'
       +'<input type="text" data-i="'+i+'" data-f="id" value="'+esc(r.id)+'" placeholder="任务 id">'
-      +'<select data-i="'+i+'" data-f="lane"><option value="">auto</option><option'+(r.lane==='ai'?' selected':'')+'>ai</option><option'+(r.lane==='cn'?' selected':'')+'>cn</option></select>'
+      +'<select data-i="'+i+'" data-f="lane"><option value="">auto</option><option'+(r.lane==='ai'?' selected':'')+'>ai</option><option'+(r.lane==='cn'?' selected':'')+'>cn</option><option'+(r.lane==='cline'?' selected':'')+'>cline</option></select>'
       +'<textarea data-i="'+i+'" data-f="prompt" style="min-height:44px" placeholder="worker 提示词">'+esc(r.prompt)+'</textarea>'
       +'<button class="ghost" data-del="'+i+'">×</button></div>';
   }
@@ -590,7 +614,7 @@ async function handler(req, res) {
       let as = null;
       if (b.lane && b.lane !== 'auto') {
         as = parseLane(b.lane);
-        if (!as) return sendJson(res, 400, { error: `lane 只支持 auto|ai|cn（收到 ${b.lane}）` });
+        if (!as) return sendJson(res, 400, { error: `lane 只支持 auto|ai|cn|cline（收到 ${b.lane}）` });
       }
       const jobId = newJobId();
       runAskJob({

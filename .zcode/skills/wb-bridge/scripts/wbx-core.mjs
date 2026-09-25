@@ -22,7 +22,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '4.0.0';
+export const WBX_VERSION = '5.0.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -83,11 +83,78 @@ export const IDENTITIES = {
     configDir: path.join(RUNTIME_ROOT, 'config', 'cn'),
   },
 };
-export const LANE_ORDER = ['ai', 'cn'];     // 默认路由顺序：免费优先
-const FALLBACK_ORDER = ['cn', 'ai'];        // 回退顺序：国内版（微信扫码路径稳定）兜底
+export const LANE_ORDER = ['ai', 'cn', 'cline']; // 默认路由顺序：免费优先，cline（可选）排最后
+const FALLBACK_ORDER = ['cn', 'ai', 'cline'];     // 回退顺序：国内版兜底，cline 最末（稳定性待实测）
 
 const DEFAULT_CLI_PATH = 'D:\\App\\WorkBuddyAI\\resources\\app.asar.unpacked\\cli\\bin\\codebuddy';
 const FALLBACK_MODEL = 'deepseek-v4.1-flash';
+
+// ---------- cline lane（v5：可选第三 lane，独立上游） ----------
+// 红线：桥的 cline 状态只在 <运行时根>/cline-home/ 下，绝不读写用户 ~/.cline。
+// 隔离方式（Phase 0 实测定案）：通过 USERPROFILE/HOME 环境变量覆盖，让 cline 解析的
+// ~/.cline 落在桥目录内。不用 --data-dir——实测 3.0.65 该 flag 会破坏运行时认证加载
+//（同凭证同目录，带 flag 即 401；auth 子命令放在其前的 --data-dir 还会被忽略导致误写 ~/.cline）。
+export const CLINE_HOME = path.join(RUNTIME_ROOT, 'cline-home');
+export const CLINE_WORK_DIR = path.join(CLINE_HOME, 'work');
+const CLINE_PROVIDER_IDS = ['cline', 'cline-pass'];   // 两个独立 provider，不得混用凭证
+
+// cline 调用/登录专用的隔离 env（USERPROFILE+HOME 指向桥目录；unset HOMEDRIVE/HOMEPATH 防拼接干扰）
+export function clineSpawnEnv() {
+  const env = { ...process.env, USERPROFILE: CLINE_HOME, HOME: CLINE_HOME };
+  delete env.HOMEDRIVE;
+  delete env.HOMEPATH;
+  return env;
+}
+
+// cline 二进制解析：WBX_CLINE env → config cline-path → npm 全局平台二进制扫描
+export function scanClineCandidates() {
+  const found = [];
+  const push = (p) => { if (p && fs.existsSync(p) && !found.includes(p)) found.push(p); };
+  if (process.env.APPDATA) {
+    const nm = path.join(process.env.APPDATA, 'npm', 'node_modules');
+    // npm i -g cline 的平台二进制（Bun 编译 exe，可直接 spawn）
+    push(path.join(nm, 'cline', 'node_modules', '@cline', 'cli-windows-x64', 'bin', 'cline.exe'));
+    // postinstall 跑过时的缓存二进制
+    push(path.join(nm, 'cline', 'bin', '.cline'));
+  }
+  return found;
+}
+
+export function resolveClinePath() {
+  if (process.env.WBX_CLINE) return process.env.WBX_CLINE;
+  const cfg = loadConfig();
+  if (cfg['cline-path']) return cfg['cline-path'];
+  const cands = scanClineCandidates();
+  return cands[0] || null;
+}
+
+// 兼容：cline-data-dir 现在语义为「隔离主目录」（HOME 覆盖目标），缺省 <运行时根>/cline-home
+export function clineHomeDir() {
+  const cfg = loadConfig();
+  const p = cfg['cline-data-dir'] || CLINE_HOME;
+  return path.resolve(p);
+}
+
+export function clineProvidersFile() {
+  return path.join(clineHomeDir(), '.cline', 'data', 'settings', 'providers.json');
+}
+
+/** 凭证存在性判断（只读 providers.json 的结构，绝不返回/打印 token 值）。
+ * OAuth 形态：providers.<id>.settings.auth.accessToken（实测 3.0.65）；API-key 形态：providers.<id>.apiKey */
+export function clineHasCredential() {
+  try {
+    const j = JSON.parse(fs.readFileSync(clineProvidersFile(), 'utf8'));
+    const p = j?.providers?.[loadConfig()['cline-provider'] || 'cline'];
+    if (!p) return false;
+    const oauth = p.settings?.auth?.accessToken;
+    return (typeof oauth === 'string' && oauth.length > 0) ||
+      (typeof p.apiKey === 'string' && p.apiKey.length > 0);
+  } catch { return false; }
+}
+
+export function clineReady() {
+  return !!resolveClinePath() && clineHasCredential();
+}
 
 // ---------- 小工具 ----------
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -142,6 +209,8 @@ export function ensureDirs() {
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
   fs.mkdirSync(PRODUCT_DIR, { recursive: true });
   fs.mkdirSync(JOBS_DIR, { recursive: true });
+  fs.mkdirSync(CLINE_HOME, { recursive: true });             // cline 隔离主目录（HOME 覆盖目标）
+  fs.mkdirSync(CLINE_WORK_DIR, { recursive: true });         // cline 调用的空工作目录（-c）
 }
 
 export function readStdin() {
@@ -157,8 +226,8 @@ export function readStdin() {
 // ---------- 配置（config.json，存运行时根） ----------
 export const CONFIG_DEFS = {
   'default-lane': {
-    type: 'enum', values: ['auto', 'ai', 'cn'], default: 'auto',
-    desc: 'ask 默认路由：auto=ai 优先（免费），或固定 ai / cn',
+    type: 'enum', values: ['auto', 'ai', 'cn', 'cline'], default: 'auto',
+    desc: 'ask 默认路由：auto=ai 优先（免费），或固定 ai / cn / cline',
   },
   'disabled-lanes': {
     type: 'lanes', default: [],
@@ -166,15 +235,43 @@ export const CONFIG_DEFS = {
   },
   'parallel-per-lane': {
     type: 'int', min: 1, max: 8, default: 2,
-    desc: 'fanout 每 lane 并发上限（默认 2）',
+    desc: 'fanout 每 lane 并发上限（默认 2；cline 另受 cline-parallel 约束）',
   },
   'model': {
     type: 'string', default: FALLBACK_MODEL,
-    desc: '默认模型 id',
+    desc: '默认模型 id（ai/cn lane 的 CodeBuddy 模型）',
   },
   'cli-path': {
     type: 'string', default: '',
     desc: 'CodeBuddy CLI 入口路径（优先级低于 WBX_CLI env；doctor 可自动探测写入）',
+  },
+  'cline-path': {
+    type: 'string', default: '',
+    desc: 'cline 二进制路径（可选 lane；空=自动扫描 npm 全局；传空串清空）',
+  },
+  'cline-data-dir': {
+    type: 'string', default: '',
+    desc: 'cline 隔离数据目录（默认 <运行时根>/cline/data；禁止指向 ~/.cline）',
+  },
+  'cline-provider': {
+    type: 'string', default: 'cline',
+    desc: 'cline provider id：cline（免费额度+按量）| cline-pass（订阅）',
+  },
+  'cline-model': {
+    type: 'string', default: '',
+    desc: 'cline lane 模型 id（空=provider 默认模型；免费 DeepSeek id 以 doctor 探测为准）',
+  },
+  'cline-thinking': {
+    type: 'string', default: 'xhigh',
+    desc: 'cline 思考档位（none|low|medium|high|xhigh；用户定案默认 xhigh，任务级 effort 不下调）',
+  },
+  'cline-compaction': {
+    type: 'string', default: 'off',
+    desc: 'cline 上下文压缩模式（agentic|basic|off；默认 off=上下文最大化）',
+  },
+  'cline-parallel': {
+    type: 'int', min: 1, max: 8, default: 1,
+    desc: 'cline lane 并发上限（默认 1，免费额度保护；实测稳定后可调）',
   },
 };
 
@@ -189,12 +286,22 @@ export function loadConfig() {
   // 容错矫正
   if (!CONFIG_DEFS['default-lane'].values.includes(out['default-lane'])) out['default-lane'] = 'auto';
   if (!Array.isArray(out['disabled-lanes'])) out['disabled-lanes'] = [];
-  out['disabled-lanes'] = out['disabled-lanes'].filter((x) => x === 'ai' || x === 'cn');
+  out['disabled-lanes'] = out['disabled-lanes'].filter((x) => x === 'ai' || x === 'cn' || x === 'cline');
   if (!Number.isInteger(out['parallel-per-lane']) || out['parallel-per-lane'] < 1 || out['parallel-per-lane'] > 8) {
     out['parallel-per-lane'] = 2;
   }
   if (typeof out.model !== 'string' || !out.model) out.model = FALLBACK_MODEL;
   if (typeof out['cli-path'] !== 'string') out['cli-path'] = '';
+  // cline-* 键（v5，全部可选；缺省=行为等同 v4）
+  for (const k of ['cline-path', 'cline-data-dir', 'cline-model']) {
+    if (typeof out[k] !== 'string') out[k] = '';
+  }
+  if (!CLINE_PROVIDER_IDS.includes(out['cline-provider'])) out['cline-provider'] = 'cline';
+  if (!['none', 'low', 'medium', 'high', 'xhigh'].includes(out['cline-thinking'])) out['cline-thinking'] = 'xhigh';
+  if (!['agentic', 'basic', 'off'].includes(out['cline-compaction'])) out['cline-compaction'] = 'off';
+  if (!Number.isInteger(out['cline-parallel']) || out['cline-parallel'] < 1 || out['cline-parallel'] > 8) {
+    out['cline-parallel'] = 1;
+  }
   return out;
 }
 
@@ -210,8 +317,8 @@ export function parseConfigValue(key, valueStr) {
     case 'lanes': {
       if (typeof v === 'string') v = v.split(',').map((s) => s.trim()).filter(Boolean);
       if (!Array.isArray(v)) throw new Error(`${key} 需为 lane 数组，如 ["cn"] 或 "cn"`);
-      const bad = v.filter((x) => x !== 'ai' && x !== 'cn');
-      if (bad.length) throw new Error(`${key} 只支持 ai/cn（收到 ${JSON.stringify(bad)}）`);
+      const bad = v.filter((x) => x !== 'ai' && x !== 'cn' && x !== 'cline');
+      if (bad.length) throw new Error(`${key} 只支持 ai/cn/cline（收到 ${JSON.stringify(bad)}）`);
       return [...new Set(v)];
     }
     case 'int': {
@@ -278,6 +385,7 @@ export function readSession(laneKey) {
 }
 
 export function laneReady(laneKey) {
+  if (laneKey === 'cline') return clineReady();
   const id = IDENTITIES[laneKey];
   return !!id && fs.existsSync(id.sessionPath) && fs.existsSync(id.productPath);
 }
@@ -290,6 +398,23 @@ export function loggedLanes() { return LANE_ORDER.filter(laneReady); }
 
 // 非_secret_ 的 lane 状态摘要（UI/doctor 安全展示用：只含昵称/脱敏 uin/到期，绝无 token）
 export function laneStatusInfo(laneKey) {
+  if (laneKey === 'cline') {
+    const bin = resolveClinePath();
+    const installed = !!bin;
+    const ready = clineHasCredential();
+    const cfg = loadConfig();
+    return {
+      key: 'cline', label: 'Cline CLI', cost: '按量微付费（实测单次 $0.0003-0.004）',
+      endpoint: 'cline provider（OAuth 账号）',
+      ready: ready && installed, installed, credential: ready,
+      disabled: isLaneDisabled('cline'),
+      model: cfg['cline-model'] || null,
+      thinking: cfg['cline-thinking'], compaction: cfg['cline-compaction'],
+      nickname: null, uinMasked: null, expiresAt: null, expiresInDays: null,
+      templateExists: installed,
+      binaryPath: bin,
+    };
+  }
   const id = IDENTITIES[laneKey] || IDENTITIES.cn;
   const s = readSession(laneKey);
   let expiresAt = null, expiresInDays = null;
@@ -308,10 +433,10 @@ export function laneStatusInfo(laneKey) {
   };
 }
 
-// 默认路由：config.default-lane 固定 ai/cn（未禁用），否则 auto（enabled+已登录 里 ai 优先）
+// 默认路由：config.default-lane 固定 ai/cn/cline（未禁用），否则 auto（enabled+已登录 里 ai 优先，cline 最末）
 export function resolveDefaultLane() {
   const pick = loadConfig()['default-lane'];
-  if ((pick === 'ai' || pick === 'cn') && !isLaneDisabled(pick)) return pick;
+  if ((pick === 'ai' || pick === 'cn' || pick === 'cline') && !isLaneDisabled(pick)) return pick;
   for (const k of LANE_ORDER) {
     if (!isLaneDisabled(k) && laneReady(k)) return k;
   }
@@ -319,7 +444,8 @@ export function resolveDefaultLane() {
   return enabled[0] || 'cn';
 }
 
-// 回退 lane：另一侧已登录且未禁用的 lane；没有则 null
+// 回退 lane：其余已登录且未禁用的 lane（顺序 cn→ai→cline，各一次）；没有则 null。
+// cline 未装/无凭证时 laneReady 为 false，天然跳过（不耗重试额度）。
 export function fallbackLane(fromKey) {
   for (const k of FALLBACK_ORDER) {
     if (k !== fromKey && laneReady(k) && !isLaneDisabled(k)) return k;
@@ -329,7 +455,7 @@ export function fallbackLane(fromKey) {
 
 export function parseLane(v) {
   const k = String(v || '').toLowerCase();
-  return IDENTITIES[k] ? k : null;
+  return (IDENTITIES[k] || k === 'cline') ? k : null;
 }
 
 // v1 -> v2 一次性迁移：session.json / product-config.json -> sessions/<id>.json / product/<id>.json
@@ -392,14 +518,24 @@ export async function waitKills() { await Promise.allSettled([...pendingKills]);
 export async function exitWith(code) { await waitKills(); process.exit(code); }
 
 export function spawnNode(args, { env, timeoutMs, stdin } = {}) {
+  return spawnBin(process.execPath, args, { env, timeoutMs, stdin, cwd: RUNTIME_ROOT });
+}
+
+// 通用子进程执行（v5：cline exe 与 node 均走这里），超时用 killTree 兜底
+export function spawnBin(bin, args, { env, timeoutMs, stdin, cwd } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, args, { env: env || process.env, windowsHide: true, cwd: RUNTIME_ROOT });
+    const child = spawn(bin, args, { env: env || process.env, windowsHide: true, cwd: cwd || RUNTIME_ROOT });
     let stdout = '', stderr = '', timedOut = false, settled = false;
     const timer = timeoutMs ? setTimeout(() => { timedOut = true; killTree(child); }, timeoutMs) : null;
     if (stdin != null) {
       // v4 stdin 通道：超长提示词经 stdin 传入，绕过命令行长度上限（CLI -p 无位置参数时读 stdin）
       child.stdin.on('error', () => { /* EPIPE 等忽略，主进程退出码会反映失败 */ });
       child.stdin.write(stdin);
+      child.stdin.end();
+    } else {
+      // v5：无 stdin 数据也必须立即 EOF——cline CLI 总会检查 stdin（支持 cat file | cline），
+      // 管道不关会一直等 EOF 导致进程悬挂（Phase 0 实测：异步 spawn 不 end stdin 必挂）
+      child.stdin.on('error', () => { /* EPIPE 忽略 */ });
       child.stdin.end();
     }
     child.stdout.on('data', (b) => { stdout += b.toString('utf8'); });
@@ -501,8 +637,11 @@ function normalizeResult(j) {
  *   成功 { ok:true, text, usage, durationMs, model, raw }
  *   失败 { ok:false, kind, error, durationMs, hint? }
  * kind: timeout | cli-error | unparseable | result-error | auth
+ * v5：lane=cline 走 cline CLI（--json NDJSON）；任务级 effort 对 cline 不生效
+ *（用户定案：cline 思考档一律取 config cline-thinking，不下调）。
  */
 export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000 }) {
+  if (lane === 'cline') return askOnceCline({ prompt, model, timeoutMs });
   const laneKey = IDENTITIES[lane] ? lane : 'cn';
   const mdl = resolveModel(model);
   // v4：超长提示词（>12k 字符）改走 stdin 通道（-p 不带位置参数），绕过命令行长度上限；
@@ -555,6 +694,152 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000 
   if (typeof text !== 'string') text = JSON.stringify(text, null, 2);
   if (text === undefined || text === null) text = JSON.stringify(j, null, 2);
   return { ok: true, text, usage: usageOf(j), durationMs, model: j.model || mdl, raw: j };
+}
+
+// ---------- cline lane：NDJSON 解析 + 一次性调用（v5） ----------
+// parseClineNdjson —— 解析 cline --json 的 stdout 全文（纯函数，零依赖，任何输入不抛异常）。
+// 初稿由 wbx fanout 外包产出（job 20260925-120106-jh7），ZCode 审查修订后集成。
+function makeEmptyClineResult() {
+  return { events: 0, text: null, finishReason: null, usage: { in: null, out: null }, model: null, durationMs: null, error: null, hasRunResult: false };
+}
+function isPlainObject_(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
+function asNonEmptyString_(value) { return typeof value === 'string' && value.trim() !== '' ? value : null; }
+function asFiniteNumber_(value) { return typeof value === 'number' && Number.isFinite(value) ? value : null; }
+
+export function parseClineNdjson(text) {
+  const out = makeEmptyClineResult();
+  if (typeof text !== 'string' || text.length === 0) return out;
+  const normalized = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;  // 去 BOM
+  const agentTexts = [];
+  let lastRunResult = null;
+  let firstErrorMessage = null;
+  for (const rawLine of normalized.split(/\r?\n/)) {
+    const line = typeof rawLine === 'string' ? rawLine.trim() : '';
+    if (line === '') continue;
+    let parsed;
+    try { parsed = JSON.parse(line); } catch { continue; }   // 非 JSON 行（横幅/日志）忽略
+    if (!isPlainObject_(parsed)) continue;
+    out.events += 1;
+    if (parsed.type === 'run_result') { lastRunResult = parsed; out.hasRunResult = true; continue; }
+    if (parsed.type === 'agent_event' && isPlainObject_(parsed.event)) {
+      if (parsed.event.type === 'error') {
+        const msg = asNonEmptyString_(parsed.event.error?.message);
+        if (msg !== null && firstErrorMessage === null) firstErrorMessage = msg;   // 多处错误取首个
+      }
+      const chunk = asNonEmptyString_(parsed.event.text);
+      if (chunk !== null) agentTexts.push(chunk);   // 正文增量（成功场景待实测，容错跳过缺字段行）
+      continue;
+    }
+    // 兼容顶层 type:"error" 形态（实测出现在 stderr，stdout 理论上不出现）
+    if (parsed.type === 'error') {
+      const msg = asNonEmptyString_(parsed.message) || asNonEmptyString_(parsed.event?.error?.message);
+      if (msg !== null && firstErrorMessage === null) firstErrorMessage = msg;
+    }
+  }
+  if (lastRunResult !== null) {
+    out.text = asNonEmptyString_(lastRunResult.text);
+    out.finishReason = asNonEmptyString_(lastRunResult.finishReason);
+    const u = isPlainObject_(lastRunResult.usage) ? lastRunResult.usage : null;
+    out.usage = { in: u === null ? null : asFiniteNumber_(u.inputTokens), out: u === null ? null : asFiniteNumber_(u.outputTokens) };
+    out.model = isPlainObject_(lastRunResult.model) ? asNonEmptyString_(lastRunResult.model.id) : null;
+    out.durationMs = asFiniteNumber_(lastRunResult.durationMs);
+  }
+  if (out.text === null && agentTexts.length > 0) out.text = agentTexts.join('');
+  if (firstErrorMessage !== null) out.error = firstErrorMessage;
+  else if (lastRunResult !== null && out.finishReason === 'error') out.error = asNonEmptyString_(lastRunResult.text);
+  return out;
+}
+
+/**
+ * cline lane 一次性纯文本调用。
+ * 命令行：cline --json -P <provider> [-m <model>] --auto-approve false
+ *         --thinking <config> --compaction <config> -t <秒> -c <空 workdir> "<提示词>"
+ * 隔离：USERPROFILE/HOME 覆盖（见 clineSpawnEnv），不用 --data-dir（实测 3.0.65 会破坏认证加载）。
+ * 禁用 --zen 与 --yolo（后者开启其 agentic 形态，v5 范围外）。
+ * 提示词 >12000 字符走 stdin 通道（pipe 提示词全文 + 短位置参数指令，Phase 0 实测可用）。
+ * 注意：cline 参数解析要求提示词至少含一个 ASCII 空格（实测无空格的短中文会被当未知子命令拒绝）。
+ */
+export async function askOnceCline({ prompt, model = null, timeoutMs = 300000 }) {
+  const bin = resolveClinePath();
+  if (!bin) {
+    return { ok: false, kind: 'cli-error', error: 'cline 未安装（可选 lane）。安装：npm install -g cline，然后 wbx login --identity cline', durationMs: 0, hint: 'not-installed' };
+  }
+  const cfg = loadConfig();
+  const provider = cfg['cline-provider'] || 'cline';
+  const mdl = model || cfg['cline-model'] || '';
+  const useStdin = prompt.length > 12000;
+  const positional = useStdin
+    ? 'Complete the task described in the piped stdin content. Treat it as your full instructions, including all output constraints.'
+    : prompt;
+  const args = [
+    '--json',
+    '-P', provider,
+    ...(mdl ? ['-m', mdl] : []),
+    '--auto-approve', 'false',        // 非 TTY 下工具调用全拒 -> 纯文本端点
+    '--thinking', cfg['cline-thinking'],
+    '--compaction', cfg['cline-compaction'],
+    '-t', String(Math.max(30, Math.ceil(timeoutMs / 1000))),   // CLI 侧超时（桥侧 timeoutMs 仍兜底）
+    '-c', CLINE_WORK_DIR,             // 空工作目录（无工具执行，仅满足 -c 语义）
+    positional,
+  ];
+
+  const t0 = Date.now();
+  const r = await spawnBin(bin, args, { env: clineSpawnEnv(), timeoutMs: timeoutMs + 20000, stdin: useStdin ? prompt : null, cwd: CLINE_WORK_DIR });
+  const durationMs = Date.now() - t0;
+  const stdout = ansiStrip(r.stdout || '');
+  const stderr = ansiStrip(r.stderr || '');
+  const parsed = parseClineNdjson(stdout);
+  const rawStream = stdout;   // 原始 NDJSON 全文，供 job 目录落盘回放
+
+  if (r.timedOut) {
+    return { ok: false, kind: 'timeout', error: `执行超时（> ${Math.round(timeoutMs / 1000)}s，桥侧兜底 kill）`, durationMs, rawStream };
+  }
+  if (r.code === -1 && !parsed.events) {
+    return { ok: false, kind: 'cli-error', error: `cline 进程启动/执行失败：${brief(stderr || '无输出')}`, durationMs, rawStream, hint: 'not-installed' };
+  }
+  const combined = stdout + '\n' + stderr;
+  if (isAuthError(parsed.error || '') || isAuthError(combined)) {
+    return { ok: false, kind: 'auth', error: 'cline 凭证无效或未登录（Unauthorized）', durationMs, rawStream, hint: 'login' };
+  }
+  const failed = r.code !== 0 || parsed.error !== null || parsed.finishReason === 'error' || parsed.text === null;
+  if (failed) {
+    const msg = parsed.error || parsed.text || brief(stderr || combined) || `exit=${r.code}，无输出`;
+    return {
+      ok: false,
+      kind: r.code === 0 && parsed.hasRunResult ? 'result-error' : 'cli-error',
+      error: brief(msg),
+      durationMs, rawStream,
+      hint: isRateLimit(msg) ? 'ratelimit' : undefined,
+    };
+  }
+  return {
+    ok: true, text: parsed.text,
+    usage: parsed.usage, durationMs: durationMs,
+    model: parsed.model || mdl || `${provider}(默认)`,
+    raw: { finishReason: parsed.finishReason, events: parsed.events },
+    rawStream,
+  };
+}
+
+/**
+ * cline lane OAuth 登录：spawn `cline auth <provider>`（隔离 env 生效，凭证落桥目录）。
+ * stdio=inherit：设备码与授权 URL 直接显示给用户，用户在浏览器完成 OAuth（桥不代输任何凭证）。
+ * 注意：不用 --data-dir（实测 3.0.65 auth 子命令对其处理不一致）。
+ * 返回 { exitCode, ok }；ok = 凭证已落盘（只查存在性）。
+ */
+export async function runClineAuth() {
+  const bin = resolveClinePath();
+  if (!bin) throw new Error('cline 未安装。安装：npm install -g cline（平台二进制），再运行 wbx login --identity cline');
+  fs.mkdirSync(clineHomeDir(), { recursive: true });
+  const provider = loadConfig()['cline-provider'] || 'cline';
+  const child = spawn(bin, ['auth', provider], {
+    stdio: 'inherit', windowsHide: false, env: clineSpawnEnv(),
+  });
+  const exitCode = await new Promise((res) => {
+    child.on('close', (c) => res(c ?? -1));
+    child.on('error', () => res(-1));
+  });
+  return { exitCode, ok: clineHasCredential() };
 }
 
 // ---------- 统一 job 模型（ask/fanout 都落盘，可回放） ----------
@@ -742,7 +1027,7 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
   ensureDirs();
   const cfg = loadConfig();
   let primary = as ? parseLane(as) : null;
-  if (as && !primary) throw new Error(`--as 只支持 ai | cn（收到 ${as}）`);
+  if (as && !primary) throw new Error(`--as 只支持 ai | cn | cline（收到 ${as}）`);
   if (!as) primary = resolveDefaultLane();
   if (isLaneDisabled(primary)) {
     throw new Error(`lane ${primary} 已被 disabled-lanes 硬禁用。启用：wbx config set disabled-lanes []`);
@@ -772,6 +1057,9 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
     usage: res?.usage || null,
   };
   if (res?.ok) rec.result = res.text; else { rec.error = `${res?.kind}: ${res?.error || (last?.kind + ': ' + (last?.error || ''))}`; if (res?.hint) rec.hint = res.hint; }
+  if (res?.rawStream) {
+    await fsp.writeFile(path.join(job.dir, 'ask.cline-stream.jsonl'), res.rawStream, 'utf8');
+  }
   await writeTaskRecord(job.dir, rec);
   await finalizeJob(job.dir, { total: 1, ok: res?.ok ? 1 : 0, durationMs: res?.durationMs ?? 0 });
   const md = buildSummaryMd({ type: 'ask', tasks: [{ id: 'ask' }], results: [rec], totalMs: 0, jobId: job.id });
@@ -816,12 +1104,14 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     let lane = null;
     if (t.as != null) {
       lane = parseLane(t.as);
-      if (!lane) throw new Error(`任务 ${t.id} 的 as 只支持 ai|cn`);
+      if (!lane) throw new Error(`任务 ${t.id} 的 as 只支持 ai|cn|cline`);
     }
     tasks.push({ id, prompt: String(t.prompt), lane, model: t.model || null, effort: t.effort || null });
   }
 
   const laneParallel = Math.max(1, parallel ?? cfg['parallel-per-lane'] ?? 2);
+  // cline lane 并发单独受 cline-parallel 约束（默认 1，免费额度保护；--parallel 不抬升它）
+  const laneParallelOf = (lane) => (lane === 'cline' ? Math.max(1, cfg['cline-parallel'] || 1) : laneParallel);
   const timeoutMs = timeoutS * 1000;
   const retryN = Math.max(0, retry ?? 1);
 
@@ -829,7 +1119,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     { lanes: laneKeys, parallel: laneParallel, timeoutS, retry: retryN, count: tasks.length },
     { lanes: laneKeys, tasksInput: tasks, jobId });
 
-  say(`开始：${tasks.length} 个任务，lanes ${laneKeys.join(',')}，每 lane 并发 ${laneParallel}（总 ${laneParallel * laneKeys.length}），超时 ${timeoutS}s，重试 ${retryN}`);
+  say(`开始：${tasks.length} 个任务，lanes ${laneKeys.join(',')}，每 lane 并发 ${laneKeys.map((k) => `${k}=${laneParallelOf(k)}`).join(' ')}，超时 ${timeoutS}s，重试 ${retryN}`);
 
   const sharedQueue = [];
   const laneBuckets = new Map(laneKeys.map((k) => [k, []]));
@@ -882,6 +1172,10 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     };
     if (res.ok) rec.result = res.text;
     else rec.error = `${res.kind}: ${res.error || ''}`;
+    if (res.rawStream) {
+      // cline lane：原始 NDJSON 事件流全文落盘，供回放与解析器迭代（RESEARCH 设计 §3.2-5）
+      await fsp.writeFile(path.join(job.dir, `${sanitizeId(task.id)}.cline-stream.jsonl`), res.rawStream, 'utf8');
+    }
     results[task.index] = rec;
     await writeTaskRecord(job.dir, rec);
     say(`${task.id}${fallbackFrom ? `（${fallbackFrom}→${usedLane} 回退）` : `@${usedLane}`} -> ${rec.status}（${fmtMs(rec.durationMs)}，尝试 ${attempts}）`);
@@ -897,7 +1191,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
 
   const workers = [];
   for (const lane of laneKeys) {
-    const n = Math.min(laneParallel, tasks.length);
+    const n = Math.min(laneParallelOf(lane), tasks.length);
     for (let i = 0; i < n; i++) workers.push(runWorker(lane));
   }
   await Promise.all(workers);
@@ -905,7 +1199,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
   const totalMs = Date.now() - t0;
   const okCount = results.filter((r) => r.status === 'success').length;
   await finalizeJob(job.dir, { total: tasks.length, ok: okCount, durationMs: totalMs });
-  const md = buildSummaryMd({ type: 'fanout', tasks, results, totalMs, laneKeys, laneParallel, timeoutS: timeoutS / 1000, retry: retryN, jobId: job.id });
+  const md = buildSummaryMd({ type: 'fanout', tasks, results, totalMs, laneKeys, laneParallel, timeoutS, retry: retryN, jobId: job.id });
   await fsp.writeFile(path.join(job.dir, 'summary.md'), md, 'utf8');
   return { jobId: job.id, jobDir: job.dir, okCount, total: tasks.length, results };
 }
@@ -1058,15 +1352,17 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
   const routeNote = dl === 'auto' ? 'auto（ai 免费优先）' : dl;
   step('route', null, `default-lane=${routeNote}${disabled.length ? `；disabled-lanes=[${disabled.join(',')}]` : ''}${dl !== 'auto' && disabled.includes(dl) ? '（⚠ default-lane 指向的 lane 已禁用，实际按 auto 处理）' : ''}`);
 
-  // 5) 模板缓存（登录前置条件）
+  // 5) 模板缓存（登录前置条件；cline 走独立认证，无模板概念）
   for (const key of LANE_ORDER) {
+    if (key === 'cline') continue;
     const id = IDENTITIES[key];
     const has = fs.existsSync(id.templatePath);
     if (!has) say(`[SKIP] 模板    lane ${key} 缺 ${id.templatePath}（修复：启动一次${id.label}桌面版）`);
   }
 
-  // 6) 每 lane 凭证 + 探测
+  // 6) 每 lane 凭证 + 探测（ai/cn；cline 在第 7 段单独体检）
   for (const key of LANE_ORDER) {
+    if (key === 'cline') continue;
     const info = laneStatusInfo(key);
     const id = IDENTITIES[key];
     say('');
@@ -1102,6 +1398,48 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
     }
   }
 
+  // 7) cline lane（可选：未安装=WARN+安装指引，不影响 exit 0 —— 「至少一个 lane 可用」逻辑不变）
+  {
+    const cinfo = laneStatusInfo('cline');
+    say('');
+    say(`--- lane cline（Cline CLI · 按量微付费${cinfo.disabled ? ' · 已禁用' : ' · 可选 lane'}）---`);
+    if (cinfo.disabled) {
+      steps.push({ name: 'lane-cline', good: null, detail: '已禁用（disabled-lanes）' });
+      say('[SKIP] 可选lane  已禁用（disabled-lanes），路由/回退链跳过该 lane');
+      laneRows.push(cinfo);
+    } else if (!cinfo.installed) {
+      steps.push({ name: 'lane-cline', good: null, detail: '未安装（可选，不影响本桥）' });
+      say('[WARN] 可选lane  cline 未安装（可选能力，不影响 ai/cn）。安装：npm install -g cline，然后 wbx login --identity cline');
+      laneRows.push(cinfo);
+    } else if (!cinfo.credential) {
+      steps.push({ name: 'lane-cline', good: null, detail: '未登录（OAuth）' });
+      say('[SKIP] 凭证     未登录 -> node wbx.mjs login --identity cline（浏览器完成 OAuth 设备授权）');
+      laneRows.push(cinfo);
+    } else {
+      const cfgC = loadConfig();
+      const ver = await spawnBin(resolveClinePath(), ['--version'], { env: clineSpawnEnv(), timeoutMs: 30000 });
+      const verStr = ansiStrip(ver.stdout || '').trim().split(/\r?\n/)[0] || '?';
+      say(`[OK]   凭证     已登录（OAuth，provider=${cfgC['cline-provider']}，model=${cfgC['cline-model'] || 'provider 默认'}，thinking=${cfgC['cline-thinking']}，compaction=${cfgC['cline-compaction']}，cline v${verStr}，隔离目录 ${clineHomeDir()}）`);
+      steps.push({ name: 'lane-cline', good: true, detail: `已登录（cline v${verStr}，model=${cfgC['cline-model'] || '默认'}）` });
+      if (!probe) { laneRows.push({ ...cinfo, probe: null }); }
+      else {
+        say('lane cline 模型探测中（tiny ask）…');
+        const p = await askOnce({ lane: 'cline', prompt: '请只回复两个字符 OK', timeoutMs: 180000 });
+        if (p.ok) {
+          const detail = `${p.model} 可用，${fmtMs(p.durationMs)}，tokens in/out = ${p.usage.in ?? '?'}/${p.usage.out ?? '?'}`;
+          steps.push({ name: 'lane-cline-probe', good: true, detail });
+          say(`[OK]   模型探测 ${detail}`);
+          laneRows.push({ ...cinfo, probe: { good: true, detail } });
+        } else {
+          const detail = `${p.kind}: ${p.error}${p.hint === 'login' ? '（凭证疑似过期 -> 重新 wbx login --identity cline）' : ''}`;
+          steps.push({ name: 'lane-cline-probe', good: null, detail });
+          say(`[WARN] 模型探测 ${detail}（可选 lane，不影响 exit 0）`);
+          laneRows.push({ ...cinfo, probe: { good: false, detail } });
+        }
+      }
+    }
+  }
+
   const ready = loggedLanes().filter((k) => !isLaneDisabled(k));
   if (!ready.length) fail++;
   const probeable = laneRows.filter((r) => r.probe);
@@ -1122,27 +1460,28 @@ export function userBlockText(bridgeScriptPath) {
   const wbx = `node "${bridgeScriptPath}"`;
   return [
     USER_BLOCK_BEGIN,
-    '## wbx 外部算力桥（全局主动分派）',
+    '## wbx 外部算力桥（三 lane 子代理：默认分派，放开用）',
     '',
-    `本机装有 wbx 桥（入口 "${bridgeScriptPath}"）：把「相互独立、自包含、单轮可完成」的子任务`,
-    '并行分派给 WorkBuddy 账号下的 DeepSeek V4.1 Flash（国际版免费 / 国内版近免费）。任何项目可用。',
-    '自包含（v4）：全部输入可由你打包进提示词（材料先行）、输出可独立校验即可外包——含代码模块编写：',
+    `本机装有 wbx 桥（入口 "${bridgeScriptPath}"）：三个外部 Agent 当作你的子代理，高频、放量调用`,
+    '（几乎免费，不必为省 token 收着用）。lane：ai/cn = WorkBuddy 双 lane 的 DeepSeek V4.1 Flash',
+    '（国际版免费/国内版近免费）；cline = Cline CLI（可选第三 lane，按量微付费实测单次 $0.001 级，thinking=xhigh）。',
+    '自包含（v4 公理）：全部输入可由你打包进提示词（材料先行）、输出可独立校验即可外包——含代码模块编写：',
     '',
     '```bash',
-    `${wbx} doctor                     # 先自检；凭证红 -> 提示用户 login，任务自己做`,
-    `${wbx} ask --file <p.txt>           # 单条（--as ai|cn 指定 lane，默认路由见 config，失败自动回退）`,
+    `${wbx} doctor                     # 先自检；可用 lane 全红 -> 提示用户 login，任务自己做`,
+    `${wbx} ask --file <p.txt>           # 单条（--as ai|cn|cline 指定 lane，默认路由见 config，失败自动回退）`,
     `${wbx} fanout --file <tasks.json>   # 并行批量（任务可用 files:[路径] 拼材料；结果落 ~/.wbx/jobs/<jobId>/）`,
     '```',
     '',
-    '主动分派时机（无需用户明说「外包/并行」）：',
-    '- 需要并行调研/对比 >= 2 个对象（竞品、库、工具、软件）→ 每对象一个 worker 任务，要求带来源清单',
-    '- 批量文本：翻译、摘要、改写、变体生成、结构化抽取、分类打标',
-    '- 代码实现：接口清晰、材料可贴、可独立验证的模块（如一个文件拆五部分、外包两三部分）',
-    '  → 你定义接口契约，材料先行分派，负责集成与审查；产物必须审查/运行后才进交付物',
+    '默认分派（v5 基线反转）：凡自包含任务（输入可打包、输出可校验）即为候选——单个调研、翻译、',
+    '抽取、模块实现也直接派，不必凑「≥2 对象/≥3 模块」。消耗豁免：不为省 token 压低 effort 或裁剪材料',
+    '（裁剪只为信噪比）。关键产物（关键代码模块/文案）并行 2 份择优（T8 best-of-N）；代码模块集成前',
+    '默认过一道评审批判（T7）——多一次免费调用换质量下限。fanout ≥6 任务或结果很长时，用自己的子代理',
+    '管理整批、主上下文只收摘要（层级 ≤2）。',
     '',
-    '规则：worker 提示词用「角色+任务+材料+输出硬约束+无工具声明」模板（详见桥 PROMPTS.md，含代码模板 T1）；',
-    '结果必须校验后使用；涉密/隐私/凭证绝不外包；doctor FAIL、连续 >= 2 失败或限流 -> 停止外包，',
-    '改由自己完成并如实告知用户。完整文档/卸载：桥项目文件夹内 WBX.md、UNINSTALL.md。',
+    '防护不变：结果必校验后才用；涉密/隐私/凭证绝不外包；worker 无工具（提示词用「角色+任务+材料+',
+    '输出硬约束+无工具声明」模板，详见桥 PROMPTS.md v2，模板 T1–T9）；doctor FAIL、连续 >= 2 失败或',
+    '限流 -> 停止外包，改由自己完成并如实告知用户。完整文档/卸载：桥项目文件夹内 WBX.md、UNINSTALL.md。',
     USER_BLOCK_END,
   ].join('\n');
 }

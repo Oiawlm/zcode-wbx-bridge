@@ -1,39 +1,42 @@
-# WBX — ZCode ↔ WorkBuddy AI 联动桥（v4：能力外包）
+# WBX — ZCode ↔ 外部算力联动桥（v5：三 lane 子代理化高频调度）
 
-> **v4**：定位重写——外包对象从「文本杂活」扩展为**自包含任务**（含代码模块编写），核心交付
-> 提示词工程体系（[PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md)）、fanout `files` 材料拼接、
-> 长提示词 stdin 通道（解除 ~25k 命令行长度限制）。
-> v3：job 可观测（ask 也落盘 + `history` 回放）、用户级全局安装（任何项目 + `/wbx` 命令 +
-> `~/.wbx/` 全局运行时）、本地 Web UI（`wbx ui`）、分发打包（`export-bundle`）。
-> v2：双 lane + 主动分派。卸载见 [UNINSTALL.md](UNINSTALL.md)。
+> **v5**：三条 lane（WorkBuddy 双 lane + 可选 Cline CLI）、把三个外部 Agent 当作 ZCode 的
+> **子代理**高频调用（默认分派/消耗豁免/best-of-N/评审常规化）、提示词知识库
+> [PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md) v2（原则 12 条 + 模板 T1–T9 + 经验条目库 + 沉淀闭环）。
+> **v4**：定位重写——外包对象从「文本杂活」扩展为**自包含任务**（含代码模块编写），fanout
+> `files` 材料拼接、长提示词 stdin 通道。**v3**：job 可观测（ask 也落盘 + `history` 回放）、
+> 用户级全局安装、本地 Web UI、分发打包。**v2**：双 lane + 主动分派。卸载见 [UNINSTALL.md](UNINSTALL.md)。
 >
-> **临时工具声明**：本桥的存在意义是「把合适的子任务并行外包给 WorkBuddy 账号下的
-> DeepSeek V4.1 Flash（免费/极低成本）」。当该免费/低价期结束、或账号策略变化导致
-> 不再划算时，直接卸载（见 UNINSTALL.md），不要恋战。
+> **临时工具声明**：本桥的存在意义是「把合适的子任务并行外包给几乎免费的算力」。当该
+> 免费/低价期结束、或账号策略变化导致不再划算时，直接卸载（见 UNINSTALL.md），不要恋战。
 
 ## 这是什么
 
-在 ZCode 会话里，把**相互独立、自包含、单轮可完成**的子任务并行分派给 WorkBuddy 账号下的
-`deepseek-v4.1-flash` 执行。**自包含**（v4 新公理）：任务的全部输入（含代码上下文）可由编排器
-（ZCode）打包进提示词、输出可独立校验，即可外包——包括**代码模块编写**（ZCode 负责接口定义、
-集成与审查），不限于文本杂活。典型任务：多对象调研、翻译、摘要、结构化抽取、代码模块实现。
-v2 起为**双 lane**，并配主动分派层（SKILL.md + AGENTS.md），ZCode 会话无需用户提示即可分派。
+在 ZCode 会话里，把**相互独立、自包含、单轮可完成**的子任务并行分派给外部算力执行。
+**自包含**（v4 公理）：任务的全部输入（含代码上下文）可由编排器（ZCode）打包进提示词、
+输出可独立校验，即可外包——包括**代码模块编写**（ZCode 负责接口定义、集成与审查）。
+v5 把三个外部 Agent（WorkBuddy 国内版 / WorkBuddy AI / Cline）定位为 **ZCode 的子代理**：
+几乎免费 → **默认分派**（单个自包含任务也直接派）、材料给足（裁剪只为信噪比）、
+关键产物 best-of-N 双份择优、集成前默认过评审批判（T7）。
 
 ```
-ZCode ──> node wbx.mjs fanout --lanes ai,cn ──> 并行 CodeBuddy CLI 进程（deepseek-v4.1-flash）
-   ai lane = 国际版（x0.00 免费）      cn lane = 国内版（x0.03 近免费）        └─ 结果写 .wbx/tasks/<时间戳>/
+ZCode ──> node wbx.mjs fanout [--lanes ai,cn,cline] ──> 并行 worker 进程
+   ai lane  = WorkBuddy AI 国际版（deepseek-v4.1-flash x0.00 免费）
+   cn lane  = WorkBuddy 国内版（x0.03 近免费）
+   cline    = Cline CLI（可选：deepseek/deepseek-v4.1-flash 按量微付费，thinking=xhigh）
+   └─ 结果写 <运行时根>/jobs/<jobId>/（cline 任务另有原始事件流 .cline-stream.jsonl）
 ```
 
-### 双 lane 与默认路由（决策点 2 结论）
+### 三 lane 与默认路由
 
-| lane | 身份 | endpoint | deepseek-v4.1-flash | 凭证文件 |
-|---|---|---|---|---|
-| `ai` | 国际版 WorkBuddy AI | www.workbuddy.ai | **x0.00 完全免费** | `.wbx/sessions/ai.json` + `.wbx/product/ai.json` |
-| `cn` | 国内版 | copilot.tencent.com | x0.03 近免费 | `.wbx/sessions/cn.json` + `.wbx/product/cn.json` |
+| lane | 身份 | endpoint | 默认模型 | 成本 | 凭证 |
+|---|---|---|---|---|---|
+| `ai` | 国际版 WorkBuddy AI | www.workbuddy.ai | deepseek-v4.1-flash | **x0.00 完全免费** | `.wbx/sessions/ai.json` + `.wbx/product/ai.json` |
+| `cn` | 国内版 | copilot.tencent.com | deepseek-v4.1-flash | x0.03 近免费 | `.wbx/sessions/cn.json` + `.wbx/product/cn.json` |
+| `cline` | Cline CLI（**可选**） | Cline provider（OAuth） | deepseek/deepseek-v4.1-flash | 按量微付费（实测单次 $0.0003-0.004） | `~/.wbx/cline-home/.cline/data/settings/providers.json`（OAuth，settings.auth.accessToken） |
 
-**默认路由：ai 已登录 → ai（免费），否则 cn；任一 lane 失败/限流自动改投另一 lane（各一次）。**
-理由（成本表）：同等任务 ai 成本 0、cn 近免费、ZCode 自身消耗订阅额度，故回退链
-**ai → cn → ZCode 自己做**。cn 同时是兜底首选（微信扫码登录路径实测稳定）。
+**默认路由：ai 已登录 → ai（免费），否则 cn；回退链 ai → cn → cline → ZCode 自己做**
+（各一次；cline 未装/无凭证直接跳过不耗重试额度；`auto` 下 cline 永远排最后）。
 
 ## 运行时布局（v3：两种形态，均 gitignore）
 
@@ -516,3 +519,153 @@ v4.0.0（scripts + examples + PROMPTS.md + docs）、用户级 skill SKILL.md + 
 `/wbx` 命令 v4 文案、`~/.zcode/AGENTS.md` 标记块刷新为 v4 公理（自包含、含代码实现时机）、
 `~/.wbx/` 凭证原样未动（ai/cn 双绿）。清理了一个 v3 时期遗留的过时 PLAN.md 全局副本
 （现项目内 PLAN.md 已移入 internal/，不再随装）。
+
+## v5 章：三 lane（+Cline CLI）· 子代理化高频调度 · 提示词知识库
+
+### v5 定位变更说明
+
+v4 已解决「能不能外包、怎么外包」。v5 定案（用户决策）解决三件事：
+
+1. **第三条 lane（Cline CLI）**：独立于 WorkBuddy 的上游，同源限流/停服时多一份真实冗余；
+   调用参数定案 `--thinking xhigh --compaction off`（上下文与思考强度默认拉满，任务级 effort 不下调）。
+2. **提示词知识库（PROMPTS.md v2）**：把「每次派发现场手写提示词」的经验沉淀为可复用知识
+   （原则 12 条 + 模板 T1–T9 + 经验条目库 E-xxx 带来源 + 沉淀闭环 + 决策速查表）。
+3. **子代理化高频调度**：三个外部 Agent = ZCode 的子代理——「放开用」而非「省着用」：
+   默认分派（单个自包含任务也直接派）、消耗豁免（裁剪只为信噪比）、关键产物 best-of-N
+   双份择优（T8）、集成前默认评审批判（T7）。**不是**开启外部 Agent 自身的 agentic 模式
+   （用户定案：那「是另一回事」，v5 明确不做——不使用 `--yolo`/`--zen`，桥不加 agentic 配置键）。
+
+### 调研记录（Phase 0 实测，2026-09-25，cline 3.0.65 / Node v24.19.0 / Windows 11）
+
+策划期核实材料与来源 URL 见 `internal/RESEARCH-V5.md`（本节只记执行窗口实测结论）。
+关键来源：Cline CLI 官方 README（github.com/cline/cline 的 apps/cli）、先例项目
+tm-henningnt/cline-plugin-cc（验证 3.0.37/3.0.40）、r/CLine 免费模型帖
+（reddit.com/r/CLine/comments/1vdczm5）、DeepSeek 官方文档（api-docs.deepseek.com）。
+
+| # | 事项 | 实测结论 |
+|---|---|---|
+| 1 | 安装 | `npm install -g cline` → 3.0.65；postinstall 被 npm allow-scripts 拦截但平台包 `@cline/cli-windows-x64/bin/cline.exe`（Bun 编译，144MB）随依赖就位，桥直接 spawn 该 exe（launcher `bin/cline` 亦可用） |
+| 2 | 无凭证行为 | 非交互运行约 1s 快速失败（exit 1），事件流含 `type:"error"` + `finishReason:"error"` 的 `run_result`，stderr 另有一行 JSON error——回退链直接跳过，不耗重试 |
+| 3 | OAuth 登录 | `cline auth cline` 设备码流（打印 code + authkit.cline.bot URL，轮询等确认）。**浏览器有活跃 WorkOS 会话时新码自动批准（零点击复登实测两次）**。凭证形态：`providers.<id>.settings.auth.{accessToken,refreshToken,expiresAt}`（tokenSource=oauth；**不是** apiKey 字段） |
+| 4 | `--data-dir` 之坑 | **3.0.65 上不可用于本场景**：①放在 `auth` 子命令前被忽略——凭证误落默认 `~/.cline`（先例 3.0.37/3.0.40 可用的写法已变，升级脆弱性实锤）；②运行时带 `--data-dir` 认证加载被破坏——同一凭证同一路径，不带 flag 可用、带 flag 即 401（疑其自动启用的沙箱；CLINE_SANDBOX=0/CLINE_DISABLE_SANDBOX=1/CLINE_NO_SANDBOX=1 均无效） |
+| 5 | `--config` 之坑 | `cline auth cline --config <隔离根>` 非交互直接 exit 1 不等待，不可用 |
+| 6 | 隔离正解 | **HOME/USERPROFILE 覆盖**：spawn 时注入 `USERPROFILE=HOME=<运行时根>/cline-home`（并删 HOMEDRIVE/HOMEPATH 防拼接干扰），cline 解析的 `~/.cline` 整体落在桥目录——凭证、db、日志、会话全部隔离，比官方 flag 更彻底；登录后端到端实测通过 |
+| 7 | stdin 之坑 | cline 总会检查 stdin（支持 `cat file \| cline`）：异步 spawn 若不 `stdin.end()`，进程等 EOF 永久悬挂（spawnSync 因立即关管道而正常）——桥已在 spawnBin 统一「无数据也立即 EOF」 |
+| 8 | stdin 通道 | 长提示词 pipe 全文 + 短位置参数指令（"Complete the task described in the piped stdin content…"）实测可用：桥内 `ask --as cline` 21,979 字符（20,370 input tokens）7.4s 正确作答——沿用 v4 的 >12k 走 stdin 规则 |
+| 9 | 参数怪癖 | 位置参数提示词**至少含一个 ASCII 空格**：无空格短中文（如「回复OK」）被当未知子命令拒绝（"Unknown command or unquoted prompt"）；含空格即正常。真实 worker 提示词天然满足 |
+| 10 | NDJSON 事件全集 | `hook_event`(agent_start/agent_error)、`agent_event`(iteration_start/end、content_start/end——正文与 **reasoning 思考块**（`contentType:"reasoning"`）、error)、`run_result`(finishReason completed/error、**text=最终答案**、usage{inputTokens,outputTokens,cacheRead,cacheWrite,totalCost}、model.id、durationMs)、usage/effort/done/toggle。**解析取 run_result 即可，增量 event.text 仅回退**；无先例所述 `cline-run:` 尾行 |
+| 11 | 纯文本端点 | `--auto-approve false` 下全流无任何工具执行事件（流中 "tool" 字样仅为 reasoning 文本提到"我无工具"） |
+| 12 | thinking/compaction | `--thinking xhigh --compaction off` 被接受且生效（run_start 事件可见 thinking:on；compaction off） |
+| 13 | 模型 id 与费用 | 格式 `vendor/model`。可用：`deepseek/deepseek-v4.1-flash`（已设默认）、`deepseek/deepseek-v4-flash`、`deepseek/deepseek-v4-flash-0731`；不可用/不存在：`deepseek/deepseek-flash`、裸 `deepseek-v4-flash`（格式错）。**如实记录：CLI 侧未探测到零成本模型**——全部按量计费（tiny ask 实测 totalCost $0.0003–0.004/次；另探 openai/gpt-oss-120b、qwen/qwen3-coder、zai/glm-4.6、moonshotai/kimi-k2.7-code 亦均计费）。用户前提「Cline 软件内 V4.1 Flash 免费」可能对应 App 内另一计费面或促销额度；若 App `/settings` 见到标 Free 的 id，`config set cline-model` 一条命令切换 |
+| 14 | `-t` 超时 | `-t <秒>` 传整轮上限，桥侧 spawn 超时（timeoutMs+20s）独立兜底 |
+
+**隔离性验证**：以 HOME 覆盖运行多个真实任务后，用户 `~/.cline` 除其自身 hub 守护进程日志外
+零写入（静置观察复核）。**事故披露（如实记录）**：排查期间两处误触用户 `~/.cline`——①轮换
+登录循环用 `--data-dir` 前置写法，其中 12:19 的一次成功授权把 OAuth 凭证写进
+`~/.cline/data/settings/providers.json`（覆盖了用户 cline-app 11:47 写的同账号版本，其桌面程序
+仍可用，未删除该文件）；②12:33–12:35 的 2×2 对照矩阵两次以默认环境目录运行（定位根因所必需），
+刷新了该文件。此后（12:36 起）全部调用均隔离。教训已固化为 E-006 与红线复述。
+
+### 设计决策（Phase 1）
+
+1. **回退链位置**：ai → cn → cline，各一次；cline 排最后（稳定性待长期观察、微付费）；
+   `auto` 下 cline 永远在 ai/cn 之后；未装/无凭证 `laneReady=false` 直接跳过（不耗重试额度）。
+   `default-lane` 枚举扩 `cline`（用户可固定），`disabled-lanes` 支持三 lane。
+2. **cline 并发默认 1**（`cline-parallel` 键，1–8）：按量微付费 + 上游稳定性未知的保守起步；
+   `--parallel` 不抬升 cline（ai/cn 才受它控制）。实测稳定后可调。
+3. **任务级 effort 不下调 cline 思考档**（用户定案）：lane 一律 `--thinking <config>`（默认
+   xhigh）；fanout 任务的 `effort` 字段对 cline lane 忽略；全局调整只走 `cline-thinking` config。
+4. **不做 CI**（Phase 4 定案）：敏感审计模式含个人信息（账号名/邮箱/路径），写进公开
+   workflow 文件即泄漏；冻结的人工发布流程（白名单逐文件 add → ls-files 对照 →
+   `git grep --cached` 零命中 → push 后 `gh api` 复扫）已覆盖同等检查。
+5. **配置键全部可选、缺省=v4 零回退**：`cline-path/data-dir/provider/model/thinking/compaction/
+   parallel` 七键 + default-lane/disabled-lanes 扩展；未装 cline 时 doctor/ask/fanout/config
+   行为与 v4 一致（实测回归）。
+6. **SECURITY.md 上报渠道**：GitHub Security Advisories「Report a vulnerability」，不放个人邮箱。
+7. **对外口径如实**：cline lane 成本统一写「按量微付费（实测单次 $0.0003-0.004）」，
+   不写「免费」（Phase 0 #13 实测结论优先于策划期假设）。
+
+### 桥改动清单（Phase 1，融入现有四模块架构，不新建目录）
+
+- `wbx-core.mjs`：`WBX_VERSION` 5.0.0；`LANE_ORDER=['ai','cn','cline']`、`FALLBACK_ORDER=['cn','ai','cline']`；
+  cline 常量与 `clineSpawnEnv()`（HOME 覆盖）/`scanClineCandidates()`/`resolveClinePath()`/
+  `clineHomeDir()`/`clineHasCredential()`（查 `settings.auth.accessToken` 或 `apiKey`）；
+  `spawnBin()` 通用化（spawnNode 复用之）+ stdin 无数据也立即 EOF；`parseClineNdjson()` 纯函数
+  （**外包产出**：wbx fanout job `20260925-120106-jh7`，ZCode 审查修订后集成——run_result 优先、
+  增量文本回退、错误优先级、BOM/CRLF/非 JSON 行容错）；`askOnceCline()`（`--json -P <provider>
+  [-m <model>] --auto-approve false --thinking <cfg> --compaction <cfg> -t <秒> -c <空workdir> "<提示词>"`，
+  禁 `--zen`/`--yolo`，>12k 走 stdin 通道，原始 NDJSON 全文随 job 落盘 `<id>.cline-stream.jsonl`）；
+  `runClineAuth()`（spawn `cline auth <provider>` + 隔离 env，stdio inherit）；doctor 第 7 段
+  （未装=WARN+指引 / 已登录+可选探测，全部不影响 exit 0；输出只报凭证存在性）；
+  `laneStatusInfo('cline')` / `laneReady('cline')` / `parseLane` 扩展；config 七个 cline-* 键与容错；
+  fanout `laneParallelOf()`（cline 单独受 `cline-parallel`）；用户级 AGENTS.md 标记块 v5 措辞。
+- `wbx.mjs`：login `--identity cline` 分支；models `--as cline`（探测+指引）；`--lanes ai,cn,cline`；
+  HELP 三 lane。
+- `wbx-ui.mjs`：三 lane 卡（cline 含 未安装（可选）/未登录（OAuth）/已登录 三态 + 模型/思考档/
+  二进制路径）、路由 pill + 禁用 cline 开关、ask/fanout 的 lane 选项、登录页 cline 指引卡。
+- `wbx-setup.mjs`：/wbx 命令 v5 文案；INSTALL-README 可选 cline 段；bundle 根目录与 zip 名 v5。
+- 发布物：README 三 lane/故障排查速查表/FAQ 增补；UNINSTALL 登记全部新增物；
+  新增 SECURITY.md / CONTRIBUTING.md / CHANGELOG.md。
+
+### v5 实测附录（Phase 5 验收记录，2026-09-25）
+
+**1. Phase 0 清单逐项结论**：见上「调研记录」14 项表格，全部有实测结论；无止损触发
+（OAuth 打通、V4.1 Flash 可用——但「免费」未证实，见 #13 如实口径）。附带事故与教训
+（`--data-dir` 前置误写用户 `~/.cline`、对照矩阵刷新其 providers.json）已在调研记录披露。
+
+**2. 三 lane doctor 全绿 + 卸载演练**：
+- `doctor`（含探测）：ai 8.9s / cn 4.8s / cline 4.6s（deepseek/deepseek-v4.1-flash）全绿，exit 0。
+- 卸载演练：`npm uninstall -g cline` → doctor 显示 `[WARN] 可选lane cline 未安装（可选能力，
+  不影响 ai/cn）` 且 exit 0；期间 ask 照常走 ai 成功（9.4s）；`npm install -g cline` 重装后
+  cline 立即恢复「已登录」（凭证在 `~/.wbx/cline-home/` 未随卸载删除）。
+- `config set disabled-lanes ["cline"]` 写入/读回/恢复 round-trip 通过（早前实测）。
+
+**3. 三 lane fanout 分布**（编排侧子代理消费同步验收）：fresh 子代理实例管理 6 任务批次
+（构造 tasks.json → fanout → 逐份校验 → 仅回传摘要），job `20260925-130324-82m`：
+**6/6 成功、13.2s、ai×2 + cn×2 + cline×2 三 lane 均匀分布、零回退零重试**；cline 任务
+6.5–6.6s/5.5k tokens 级。子代理还独立发现并上报了 summary 超时显示 bug（已修）与
+「全局形态当时仍为 v4、应改用项目 v5 入口」的执行偏差——管理层效率模式（主会话只收
+25 行摘要）实效成立。
+
+**4. cline 命令行落地证据**（thinking=xhigh/compaction=off）：job `20260925-125152-d3z`
+的 `ask.cline-stream.jsonl`（21,979 字符 stdin 通道）与 job `20260925-130529-fgy`（T7 评审
+×2）均由桥以 `--json -P cline -m deepseek/deepseek-v4.1-flash --auto-approve false
+--thinking xhigh --compaction off -t N -c <workdir>` 发出；原始事件流随 job 落盘可回放。
+
+**5. PROMPTS.md v2 + 自举记录**：原则 12 条（P1–P8 原文未动 + P9–P12）、模板 T1–T9（含填好
+示例）、经验条目 E-001–E-010（全部带真实来源，含本窗口新踩的 E-005 错误样例误判、E-006
+cline 四坑）、沉淀闭环、决策速查表 + 3 项 checklist。实施期自举外包任务（≥3 要求，实际 5 批）：
+| job | 任务 | 用途 |
+|---|---|---|
+| `20260925-115826-idp` | p2-t7t9-templates（✅）、p2-t8-template（✅）、p1-ndjson-parser（❌ 见 E-005） | PROMPTS v2 的 T7/T9/T8 初稿 + NDJSON 解析器初稿 |
+| `20260925-120106-jh7` | p1-ndjson-parser（✅） | NDJSON 解析纯函数（审查修订后集成进 wbx-core） |
+| `20260925-121458-hyq` | p4-security/contributing/changelog（✅✅✅）、p4-readme-additions（❌ E-005） | SECURITY/CONTRIBUTING/CHANGELOG 初稿 |
+| `20260925-125953-mij` | luhn-a/luhn-b（✅✅） | T8 best-of-N 双份生成 |
+| `20260925-130529-fgy` | t7-luhn-a/t7-luhn-b（✅✅） | T7 评审批判 ×2（走 cline lane） |
+
+**6. best-of-N 与评审常规化实效**（评审记录全文：实施期临时产物
+`%TEMP%\wbx-v5\reviews\luhn-best-of-n.md`）：lib/luhn.js 同契约双份（A 可读性侧重@ai、
+B 边界完备侧重@cn），**两份均 12/12 契约断言独立运行通过**；T7 评审（cline lane）A 份
+1 建议 0 阻断、B 份 3 建议+1 UNKNOWN 0 阻断；按「契约通过率→边界覆盖→可读性」**选 B**
+（边界显式枚举完胜、可读性微弱劣势不抵），落选份归档不删，三条建议逐条处置。
+T7/T8/T9 模板与防护（择优必走 T7、单一写者接管）全部按 PROMPTS.md 执行。
+
+**7. 全命令回归（改桥后）**：4 脚本 `node --check` 通过；doctor（含/不含探测）、config 七个
+cline-* 键 round-trip、`default-lane cline` 写读恢复、ask 短提示词（ai 9.0s）、models 探测、
+history 列表+双向回放（含 cline 任务）、fanout `files` 字段回归（材料读档正确、答案核对通过）、
+UI 冒烟（/api/status 三 lane ready、/api/history 37 条）、export-bundle（11 文件、零凭证断言
+**比对 9 个 token**——v5 起含 cline OAuth token）、发现并修复 v4 遗留 summary「单任务超时」
+二次除法显示 bug（600s 显示 0.6s）。
+
+**8. 全局形态幂等同步**：项目 v5 `self-install` → `~/.zcode/wbx-bridge/` v5.0.0（scripts +
+examples + PROMPTS.md + docs）、用户级 skill SKILL.md + PROMPTS.md v2、`/wbx` 命令 v5 文案、
+`~/.zcode/AGENTS.md` 标记块 v5（三 lane 子代理 + 默认分派措辞，核验 2 处命中）、`~/.wbx/`
+凭证原样（ai/cn/cline 三绿）；全局入口 doctor 通过；重跑覆写幂等。
+
+**9. 触发面静态核验**：项目 AGENTS.md（4 处）、项目 SKILL.md（6 处）、用户级标记块模板（2 处）、
+/wbx 命令模板（1 处）均含「默认分派/单个也直接派」意图；止损与涉密防护措辞逐处保留。
+
+**10. GitHub 发布与审计**：见下方发布记录（白名单逐文件 add、`git grep --cached` 敏感审计
+零命中（模式 + `cline` 凭证路径）、push 后 `gh api` 复扫、tag `v5.0.0` + release + topics）。
+
+**11. 「新人 10 分钟」走查**：见下方走查记录（按发布后 README 从 clone 到第一条 ask 逐步自查）。

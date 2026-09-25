@@ -27,6 +27,7 @@ import path from 'node:path';
 import {
   WBX_VERSION, SCRIPT_DIR, PROJECT_ROOT, RUNTIME_ROOT, JOBS_DIR, LEGACY_TASKS_DIR,
   IDENTITIES, LANE_ORDER, CONFIG_DEFS,
+  clineReady, clineProvidersFile, clineHomeDir, runClineAuth,
   sleep, die, redact, brief, fmtMs, ansiStrip,
   ensureDirs, readStdin, migrateIfNeeded,
   loadConfig, setConfig, parseConfigValue,
@@ -57,7 +58,29 @@ async function cmdDoctor(opts) {
 // ---------- 子命令：login ----------
 async function cmdLogin(opts) {
   ensureDirs();
-  const identity = opts.identity ? (() => { const k = parseLane(opts.identity); if (!k) die(`--identity 只支持 ai | cn（收到 ${opts.identity}）`); return k; })() : 'cn';
+  const identity = opts.identity ? (() => { const k = parseLane(opts.identity); if (!k) die(`--identity 只支持 ai | cn | cline（收到 ${opts.identity}）`); return k; })() : 'cn';
+
+  // cline lane：OAuth 设备授权流（spawn cline auth，stdio 直通，用户在浏览器完成）
+  if (identity === 'cline') {
+    if (clineReady() && !opts.force) {
+      console.log(`[OK] lane cline 已登录（${clineProvidersFile()} 存在有效凭证）。加 --force 重新登录`);
+      return;
+    }
+    console.error('[1/2] 启动 cline OAuth 设备授权（浏览器完成，桥不代输任何凭证）…');
+    try {
+      const r = await runClineAuth();
+      if (r.ok) {
+        console.error(`[2/2] 完成：cline 凭证已落隔离目录 ${clineHomeDir()}（.cline/data/settings/providers.json，绝不在用户 ~/.cline）`);
+        console.error('验证：node wbx.mjs doctor（lane cline 段应全绿）。模型建议：wbx models --as cline --probe "<候选id>" 探测后 config set cline-model "<免费模型 id>"');
+      } else {
+        die(`cline 登录未完成（auth 退出码 ${r.exitCode}，凭证未落盘）。常见原因：浏览器未在有效期内确认设备码。重新运行本命令即可`);
+      }
+    } catch (e) {
+      die(e.message);
+    }
+    return;
+  }
+
   const id = IDENTITIES[identity];
   if (laneReady(identity) && !opts.force) {
     console.log(`[OK] lane ${identity}（${id.label}）已登录（sessions/${identity}.json 存在）。加 --force 重新登录`);
@@ -179,7 +202,7 @@ async function cmdFanout(opts) {
   let lanes = null;
   if (opts.lanes) {
     lanes = opts.lanes.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-    for (const k of lanes) if (!IDENTITIES[k]) die(`--lanes 只支持 ai,cn 的组合（收到 "${k}"）`);
+    for (const k of lanes) if (!(IDENTITIES[k] || k === 'cline')) die(`--lanes 只支持 ai,cn,cline 的组合（收到 "${k}"）`);
     if (!lanes.length) die('--lanes 不能为空');
   }
 
@@ -227,7 +250,22 @@ async function readProductConfigModels(laneKey) {
 
 async function cmdModels(opts) {
   ensureDirs();
-  const lane = opts.as ? (() => { const k = parseLane(opts.as); if (!k) die(`--as 只支持 ai | cn（收到 ${opts.as}）`); return k; })() : resolveDefaultLane();
+  const lane = opts.as ? (() => { const k = parseLane(opts.as); if (!k) die(`--as 只支持 ai | cn | cline（收到 ${opts.as}）`); return k; })() : resolveDefaultLane();
+  if (lane === 'cline') {
+    const cfg = loadConfig();
+    console.error(`lane = cline（provider=${cfg['cline-provider']}，thinking=${cfg['cline-thinking']}，compaction=${cfg['cline-compaction']}）`);
+    const list = (opts.probe ? opts.probe.split(',').map((s) => s.trim()).filter(Boolean) : [cfg['cline-model'] || '']).filter(Boolean);
+    if (!list.length) console.log('（cline-model 为空=provider 默认模型；要探测候选 id 用 --probe "id1,id2"，免费 DeepSeek id 以实测为准）');
+    let allOk = true;
+    for (const m of list) {
+      process.stdout.write(`探测 ${m} … `);
+      const r = await askOnce({ lane: 'cline', model: m, prompt: '请只回复 OK', timeoutMs: 180000 });
+      if (r.ok) console.log(`可用（${fmtMs(r.durationMs)}，tokens ${r.usage.in ?? '?'}/${r.usage.out ?? '?'}）`);
+      else { allOk = false; console.log(`不可用（${r.kind}: ${brief(r.error, 160)}）`); }
+    }
+    await exitWith(allOk ? 0 : 1);
+    return;
+  }
   console.error(`lane = ${lane}（${IDENTITIES[lane].label}）`);
   const list = (opts.probe ? opts.probe.split(',').map((s) => s.trim()).filter(Boolean) : [resolveModel()]);
   let allOk = true;
@@ -446,25 +484,30 @@ function parseArgs(argv) {
   return opts;
 }
 
-const HELP = `wbx — ZCode <-> WorkBuddy (CodeBuddy CLI) 联动桥（v${WBX_VERSION} 能力外包：自包含任务 + 代码模块 + stdin 长材料）
+const HELP = `wbx — ZCode <-> 外部算力联动桥（v${WBX_VERSION} 三 lane：WorkBuddy 双 lane + 可选 Cline CLI）
 
 lane：ai = 国际版 WorkBuddy AI（deepseek-v4.1-flash x0.00 免费）
       cn = 国内版 WorkBuddy（x0.03 近免费）
-默认路由：config default-lane（auto=ai 免费优先）；失败/限流自动跨 lane 回退（各一次）。
+      cline = Cline CLI（可选第三 lane：免费额度轮换模型组，--thinking xhigh --compaction off）
+默认路由：config default-lane（auto=ai 免费优先，cline 永远排最后）；失败/限流自动跨 lane 回退
+（ai→cn→cline 各一次）；cline 未装/未登录直接跳过，不影响其余功能。
 运行时根：WBX_HOME env -> ~/.wbx/（装过 self-install 即全局形态） -> 项目 .wbx/
+cline 隔离：桥的 cline 状态只在 <运行时根>/cline/（--data-dir），绝不读写用户 ~/.cline。
 
 用法：
-  node wbx.mjs doctor  [--no-probe]                 自检向导：node/CLI 探测/模板/两 lane 凭证+模型探测
-  node wbx.mjs login   [--identity cn|ai] [...]     登录引导（默认 cn 微信扫码；ai 有 state 修补锦囊）
+  node wbx.mjs doctor  [--no-probe]                 自检向导：node/CLI 探测/模板/两 lane 凭证+模型探测 + cline 可选段
+  node wbx.mjs login   [--identity cn|ai|cline] [...] 登录引导（默认 cn 微信扫码；ai 有 state 修补锦囊；
+                     cline 为 OAuth 设备授权，浏览器完成）
                      [--wait 300] [--no-open] [--force]
   node wbx.mjs ask     --file t.txt | --text "..."  单次调用（落盘为 job）；stdout=结果，stderr=用量/lane
-                     [--as ai|cn] [--model M] [--effort low] [--timeout 300] [--json] [--stdin]
+                     [--as ai|cn|cline] [--model M] [--effort low] [--timeout 300] [--json] [--stdin]
   node wbx.mjs fanout  --file tasks.json            并发池批量执行；任务可用 files:[路径] 拼材料；结果写 <运行时根>/jobs/<jobId>/
-                     [--lanes ai,cn] [--parallel 2] [--timeout 300] [--retry 1]
-  node wbx.mjs models  [--as cn|ai] [--probe "m1,m2"]   探测模型可用性并列出产品配置中的模型
+                     [--lanes ai,cn,cline] [--parallel 2] [--timeout 300] [--retry 1]
+  node wbx.mjs models  [--as cn|ai|cline] [--probe "m1,m2"]   探测模型可用性并列出产品配置中的模型
   node wbx.mjs config  list | get <key> | set <key> <value>
-                                                   配置：default-lane=auto|ai|cn、disabled-lanes=["cn"]、
-                                                   parallel-per-lane、model、cli-path（存 <运行时根>/config.json）
+                                                   配置：default-lane=auto|ai|cn|cline、disabled-lanes=["cn"]、
+                                                   parallel-per-lane、model、cli-path、cline-path/data-dir/provider/
+                                                   model/thinking/compaction、cline-parallel（存 <运行时根>/config.json）
   node wbx.mjs history [--last 10]                 历史列表（时间/类型/任务数/成功率/lane 分布/目录）
   node wbx.mjs history <jobId> [--task <id>]       完整回放一次 job 的双向对话（prompt+回复全文）
   node wbx.mjs ui      [--port 7788] [--no-open]   本地 Web UI（仅 127.0.0.1；状态/路由/ask/fanout/历史/登录）
@@ -475,9 +518,10 @@ lane：ai = 国际版 WorkBuddy AI（deepseek-v4.1-flash x0.00 免费）
   node wbx.mjs export-bundle [--out <dir|.zip>]    生成分发 zip（零凭证自检；含 INSTALL-README.md）
   node wbx.mjs install-user | uninstall-user       向 ~/.zcode/AGENTS.md 注入/移除全局分派标记块（v2 兼容）
 
-tasks.json 格式：[{"id":"t1","prompt":"...","as?":"ai|cn","model?":"...","effort?":"low","file?":"p.txt"}]
+tasks.json 格式：[{"id":"t1","prompt":"...","as?":"ai|cn|cline","model?":"...","effort?":"low","file?":"p.txt","files?":["a.js"]}]
 
-环境变量（均可选）：WBX_HOME（运行时根）、WBX_CLI、WBX_MODEL、WBX_PROJECT_ROOT、WBX_PRODUCT_CONFIG（login 模板）`;
+环境变量（均可选）：WBX_HOME（运行时根）、WBX_CLI、WBX_CLINE（cline 二进制）、WBX_MODEL、
+WBX_PROJECT_ROOT、WBX_PRODUCT_CONFIG（login 模板）`;
 
 async function main() {
   const argv = process.argv.slice(2);
