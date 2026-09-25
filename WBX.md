@@ -1110,9 +1110,18 @@ v6-regression.mjs` **24/24**；全命令冒烟通过（doctor --no-probe/ask/fan
 API 断言（v8 ④+v7 ⑤cd）确认 /api/history type 英文原值、job 详情字段原样；v7 ③ 安全面
 7 断言（Host/Origin/token 攻击）全过。
 
-**4. 发布与全局形态**：（回填于 tag 后）白名单逐文件 add → ls-files 对照 → 敏感审计零命中 →
-commit/push → tag **v5.3.0** + release（notes 引 CHANGELOG，附 export-bundle zip）→ self-install
-幂等同步 → 全局形态复测 --detach/自启链路与页面。
+**4. 发布与全局形态**：白名单逐文件 `git add`（6 个文件：wbx-core.mjs[仅 WBX_VERSION 一行]/
+wbx-ui.mjs/CHANGELOG.md/WBX.md/README.md/AGENTS.md；`git ls-files` 17 项逐一对照一致、无新增
+跟踪文件，`.zcode/plans/` 非本项目产物未纳入）→ staged 敏感审计（人名/账号、邮箱正则、
+`D:\Download`、`C:\Users\Lenovo`、uin 脱敏、accessToken 值形态、JWT 形态、本机 ui.json token
+实值）**零实际命中**（仅 WBX.md 对审计模式本身的文档引用，v5.2 先例一致）→ commit `e7d6c6a`
+→ push → `gh api` 分支 sha 与本地一致（e7d6c6a903c7…）→ 远端拉回 diff 为空（identical）+
+远端敏感复扫零命中 → tag **v5.3.0** → release
+（notes 引 CHANGELOG + 回归摘要 + 安装指引；附件 `wbx-bridge-v5.3.0-20260925.zip` 427.0KB/
+12 文件/零凭证断言比对 9 token）→ `self-install` 幂等同步（全局入口 v5.3.0）→ **全局形态
+复测**：stop 清场 → --detach 冷启动（pid 40504）→ 二次 --detach 复用同 pid → /__health
+v5.3.0 → 页面 200 含 v5.3 标记（ovw/单条调用（ask）等 16 处命中）→ --status 运行中 → 自启
+钩子交付态（hooks.enabled=true、SessionStart 含 wbx 命令）。
 
 ### 5. 自举记录（wbx 外包，材料先行，逐份校验后采用）
 
