@@ -984,7 +984,18 @@ URL 可达；`--remove-autostart` 后与安装前 diff 逐字节一致；重装�
 **5. Phase 0 待实测点**：全部实测通过（结论见本管第 2 节表格）；7788 端口发现并清理了一个
 v4.0.0 时代的 ui 孤儿进程（守护化要解决的问题的活案例）。
 
-**6. 发布证据**：（发布后回填）
+**6. 发布证据**：白名单逐文件 `git add`（11 个文件：10 改 1 增——新增
+`.zcode/skills/wb-bridge/scripts/wbx-daemon.mjs`；`git ls-files` 17 项逐一对照一致；
+`.zcode/plans/` 非本项目产物未纳入）→ staged 敏感审计（人名/账号、邮箱正则、`D:\Download`、
+`C:\Users\Lenovo`、uin 脱敏、`usr-01M2X`、cline 凭证实值形态、accessToken 值形态、本机
+ui.json token 实值）**零实际命中**（①③④⑤⑥ 仅命中 WBX.md v5.1 附录对审计模式本身的文档引用，
+先例一致）→ commit `1acce03` → push → `gh api` 分支 sha 与本地一致（1acce036b705…）→
+**origin/main 拉回复扫零命中** → tag `v5.2.0` → release
+（notes 引 CHANGELOG + 回归摘要 + 安装指引；附件 `wbx-bridge-v5.2.0-20260925.zip` 372.6KB/
+12 文件/零凭证断言比对 9 token）→ `self-install` 终态同步（全局形态 v5.2.0，用户级 AGENTS 块
+含 ui --detach 行）→ **全局入口复测**：stop 清场 → --detach 冷启动（pid 49480）→ 二次 --detach
+复用同 pid → 页面 200、/api/status v5.2.0 → --status 运行中 → 钩子交付态（enabled=true、
+SessionStart 1 组）。
 
 **7. 自举记录（wbx 外包，材料先行，逐份校验后采用）**：
 
