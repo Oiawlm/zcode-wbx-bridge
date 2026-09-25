@@ -152,6 +152,8 @@ node .zcode/skills/wb-bridge/scripts/wbx.mjs fanout --file tasks.json [--lanes a
 | `wbx config list\|get\|set` | 配置：default-lane（auto/ai/cn/cline）、disabled-lanes、parallel-per-lane、model、cli-path、cline-*（path/data-dir/provider/model/thinking/compaction/parallel） |
 | `wbx models [--as cn\|ai\|cline]` | 探测模型可用性 + 列出产品配置模型；`--as cline --free` 列当前免费模型组（端点实时） |
 | `wbx ui [--port 7788]` | 本地 Web UI（127.0.0.1）：三 lane 状态/路由开关/免费模型选择/ask/fanout/历史/登录引导 |
+| `wbx ui --detach / --stop / --status` | 控制台后台守护（幂等复用绝不新起）/ 停止（HTTP 优雅优先）/ 三态查看；日志 `~/.wbx/logs/ui.log` |
+| `wbx ui --install-autostart / --remove-autostart` | 装/摘 ZCode SessionStart 自启钩子（新开会话自动拉起控制台；config.json 只做读-改-写合并，摘除逐键还原） |
 | `wbx self-install / self-uninstall` | 用户级全局安装（/wbx 命令 + 用户级 skill + ~/.wbx）/ 一键还原 |
 | `wbx install-user / uninstall-user` | 仅向 `~/.zcode/AGENTS.md` 注入/移除全局主动分派块 |
 

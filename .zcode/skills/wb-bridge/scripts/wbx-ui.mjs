@@ -1,8 +1,9 @@
 /**
- * wbx-ui — wbx 桥本地 Web UI（v3 Phase 3）
+ * wbx-ui — wbx 桥本地 Web UI（v3 Phase 3；v5.2 守护化 + 安全校验）
  *
  * 零第三方依赖（原生 node:http），只监听 127.0.0.1，内嵌单页前端（HTML/CSS/vanilla JS，
- * 不引任何外部 CDN，离线可用）。`wbx ui` 启动后自动开浏览器，Ctrl+C 即退，无常驻服务。
+ * 不引任何外部 CDN，离线可用）。`wbx ui` 前台启动（自动开浏览器，Ctrl+C 即退）；
+ * `wbx ui --detach` 幂等拉起守护进程（生命周期见 wbx-daemon.mjs）。
  *
  * API（全 JSON）：
  *   GET  /api/status                 概览（lane 状态/到期倒计时/配置/形态）——不含任何凭证
@@ -14,6 +15,12 @@
  *   POST /api/config                 {key, value} -> 写 <运行时根>/config.json
  *   POST /api/login/start            {lane} -> {authUrl, tips}（登录流在 server 侧跑）
  *   GET  /api/login/poll             登录轮询状态
+ *   GET  /__health                   健康检查 -> {app:'wbx-ui', pid, port, version}（前台/守护都有）
+ *   POST /__shutdown                 {token} 优雅关闭（仅守护模式；token 存 run/ui.json，绝不外泄）
+ *
+ * 安全校验（v5.2，前台/守护一律生效）：
+ *   - Host 头白名单：仅 127.0.0.1(:port) / localhost(:port)，其余 403（防 DNS rebinding）
+ *   - POST 一律校验 Origin：同源或无 Origin（非浏览器客户端），其余 403
  *
  * 红线：任何响应绝不包含 accessToken/refreshToken（laneStatusInfo 只产昵称/脱敏 uin/到期）。
  */
@@ -22,6 +29,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import {
   WBX_VERSION, RUNTIME_ROOT, JOBS_DIR,
   LANE_ORDER, CONFIG_DEFS, bridgeForm,
@@ -31,6 +39,12 @@ import {
   startLogin, pollLoginToken, fetchAccountInfo, persistLogin,
   openBrowser, ensureDirs,
 } from './wbx-core.mjs';
+import { hostHeaderAllowed, originAllowed } from './wbx-daemon.mjs';
+
+// 守护上下文与监听端口（startUiServer 时设置；handler 里做安全校验与 shutdown 用）
+let LISTEN_PORT = 7788;
+let DAEMON_CTX = null;   // { token, persist(state), clear(), onShutdown() }
+let SERVER = null;
 
 // ---------- 内嵌前端（单文件，无外部资源） ----------
 const HTML = `<!doctype html>
@@ -123,17 +137,17 @@ a{color:var(--acc)}
     <h3>路由</h3>
     <div class="row">
       <span class="pill" id="route-pill">
-        <button data-v="auto">auto（ai 免费优先）</button>
-        <button data-v="ai">固定 ai</button>
-        <button data-v="cn">固定 cn</button>
-        <button data-v="cline">固定 cline</button>
+        <button data-v="auto">自动（WorkBuddy AI 免费优先）</button>
+        <button data-v="ai">固定 WorkBuddy AI</button>
+        <button data-v="cn">固定 WorkBuddy</button>
+        <button data-v="cline">固定 Cline</button>
       </span>
-      <label class="switch"><input type="checkbox" id="dis-ai"> 禁用 ai</label>
-      <label class="switch"><input type="checkbox" id="dis-cn"> 禁用 cn</label>
-      <label class="switch"><input type="checkbox" id="dis-cline"> 禁用 cline</label>
+      <label class="switch"><input type="checkbox" id="dis-ai"> 禁用 WorkBuddy AI</label>
+      <label class="switch"><input type="checkbox" id="dis-cn"> 禁用 WorkBuddy</label>
+      <label class="switch"><input type="checkbox" id="dis-cline"> 禁用 Cline</label>
       <span class="hint" id="route-hint"></span>
     </div>
-    <div class="hint">写 <b>config.json</b>（default-lane / disabled-lanes），doctor、ask、fanout、回退链即时生效。</div>
+    <div class="hint">写 <b>config.json</b>（default-lane / disabled-lanes），体检、单条调用、批量并行、回退链即时生效。</div>
   </div>
   <div class="card">
     <h3>体检（doctor）</h3>
@@ -144,31 +158,31 @@ a{color:var(--acc)}
 
 <section id="tab-run">
   <div class="card">
-    <h3>ask 单条调用</h3>
+    <h3>单条调用（ask）</h3>
     <textarea id="ask-prompt" placeholder="提示词（完整 worker 提示词：角色+任务+材料+输出硬约束+无工具声明）"></textarea>
     <div class="row">
-      <label>lane
-        <select id="ask-lane" style="width:110px">
-          <option value="">auto</option><option value="ai">ai</option><option value="cn">cn</option><option value="cline">cline</option>
+      <label>通道
+        <select id="ask-lane" style="width:150px">
+          <option value="">自动（默认）</option><option value="ai">WorkBuddy AI</option><option value="cn">WorkBuddy</option><option value="cline">Cline</option>
         </select></label>
-      <label>effort
+      <label>思考档
         <select id="ask-effort" style="width:110px">
-          <option value="">默认</option><option>low</option><option>medium</option><option>high</option>
+          <option value="">默认</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option>
         </select></label>
-      <label>model <input type="text" id="ask-model" placeholder="默认取 config.model" style="width:170px"></label>
+      <label>模型 <input type="text" id="ask-model" placeholder="默认取 config.model" style="width:170px"></label>
       <label>超时(s) <input type="text" id="ask-timeout" value="300" style="width:70px"></label>
-      <button class="primary" id="ask-btn">执行 ask</button>
+      <button class="primary" id="ask-btn">执行单条调用</button>
     </div>
     <div id="ask-out"></div>
   </div>
   <div class="card">
-    <h3>fanout 批量并行</h3>
+    <h3>批量并行（fanout）</h3>
     <div id="fan-rows"></div>
     <div class="row">
       <button class="ghost" id="fan-add">+ 添加任务行</button>
-      <label>每 lane 并发 <input type="text" id="fan-parallel" value="2" style="width:60px"></label>
+      <label>每通道并发 <input type="text" id="fan-parallel" value="2" style="width:60px"></label>
       <label>超时(s) <input type="text" id="fan-timeout" value="300" style="width:70px"></label>
-      <button class="primary" id="fan-btn">执行 fanout</button>
+      <button class="primary" id="fan-btn">执行批量并行</button>
     </div>
     <div id="fan-out"></div>
   </div>
@@ -176,10 +190,10 @@ a{color:var(--acc)}
 
 <section id="tab-history">
   <div class="card">
-    <h3>job 历史（新 jobs/ + 旧 tasks/ 兼容）</h3>
+    <h3>任务历史（新 jobs/ + 旧 tasks/ 兼容）</h3>
     <div class="row"><button class="ghost" id="hist-refresh">刷新</button><span class="hint" id="hist-count"></span></div>
     <div style="overflow:auto"><table id="hist-table">
-      <thead><tr><th>时间</th><th>类型</th><th>任务数</th><th>成功率</th><th>lane 分布</th><th>jobId</th></tr></thead>
+      <thead><tr><th>时间</th><th>类型</th><th>任务数</th><th>成功率</th><th>通道分布</th><th>任务 ID</th></tr></thead>
       <tbody></tbody>
     </table></div>
   </div>
@@ -190,18 +204,18 @@ a{color:var(--acc)}
   <div class="card">
     <h3>登录引导（WorkBuddy SSO 凭证约 55 天有效）</h3>
     <div class="row">
-      <button class="primary" id="login-cn">开始登录 cn（国内版·微信扫码）</button>
-      <button class="primary" id="login-ai">开始登录 ai（国际版·邮箱/OneID）</button>
+      <button class="primary" id="login-cn">开始登录 WorkBuddy（国内版·微信扫码）</button>
+      <button class="primary" id="login-ai">开始登录 WorkBuddy AI（国际版·邮箱/OneID）</button>
     </div>
     <div id="login-out"></div>
   </div>
   <div class="card">
-    <h3>cline lane（可选·OAuth 设备授权）</h3>
-    <p class="hint">cline 登录是设备码流程，需在终端里跑（浏览器完成授权，凭证落隔离目录 <b>&lt;运行时根&gt;/cline-home/</b>，与用户 ~/.cline 无关）：</p>
+    <h3>Cline 通道（可选·OAuth 设备授权）</h3>
+    <p class="hint">Cline 登录是设备码流程，需在终端里跑（浏览器完成授权，凭证落隔离目录 <b>&lt;运行时根&gt;/cline-home/</b>，与用户 ~/.cline 无关）：</p>
     <div class="copyline">node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" login --identity cline</div>
     <p class="hint">登录后默认免费调 DeepSeek（cline-free/deepseek-v4.1-flash 孪生，限时轮换+每日配额）；
-    免费模型可在「状态」页 cline 卡下拉选择，或 <b>wbx models --as cline --free</b> 查清单后 config set。
-    thinking 默认 xhigh / compaction 默认 off / 并发默认 1。
+    免费模型可在「状态」页 Cline 卡下拉选择，或 <b>wbx models --as cline --free</b> 查清单后 config set。
+    思考档默认 xhigh / 上下文压缩默认 off / 并发默认 1。
     隐私注：免费用量可能被 Cline 用于改进模型（官方披露）。</p>
   </div>
 </section>
@@ -209,6 +223,26 @@ a{color:var(--acc)}
 </main>
 <script>
 'use strict';
+// ---------- 渲染层中文化映射表（v5.2：唯一翻译点；数据值/config 键/API 字段一律不动） ----------
+const LANE_LABEL={ai:'WorkBuddy AI',cn:'WorkBuddy',cline:'Cline',auto:'自动'};            // 短称：下拉/表格列/回退
+const LANE_TITLE={ai:'WorkBuddy AI（国际版）',cn:'WorkBuddy（国内版）',cline:'Cline CLI（可选通道）'}; // 全称：卡片标题
+const TYPE_LABEL={ask:'单条调用',fanout:'批量并行',unknown:'未知'};                        // 历史「类型」列
+const TASK_STATUS_LABEL={success:'成功',failed:'失败'};
+const JOB_STATUS_LABEL={done:'已完成',running:'进行中',pending:'等待中'};
+function laneLabel(k){return LANE_LABEL[k]||k||''}
+function laneTitle(k){return LANE_TITLE[k]||LANE_LABEL[k]||k||''}
+function typeLabel(t,legacy){return (legacy?'旧版·':'')+(TYPE_LABEL[t]||t||'')}
+function taskStatusLabel(s){return TASK_STATUS_LABEL[s]||s||''}
+function jobStatusLabel(s){return JOB_STATUS_LABEL[s]||s||''}
+function fallbackText(from,to){return from?(laneLabel(from)+' → '+laneLabel(to)):laneLabel(to)}
+// v5.1 超额状态机的 UI 侧提示（与 CLI hintText 同源语义；原始错误原文保留，只追加友好提示）
+function errorHint(text){
+  var t=String(text||'');
+  if(/Daily free model limit reached/i.test(t))return '（Cline 免费额度今日已达上限 → 稍后再试，或到「状态」页 Cline 卡换免费模型）';
+  if(/Free model promotion ended/i.test(t))return '（该免费模型促销已结束/被轮换下线 → 到「状态」页 Cline 卡换当前免费模型）';
+  if(/model not found|not a valid model/i.test(t))return '（模型 id 不存在或已被轮换下线 → 到「状态」页 Cline 卡换当前免费模型）';
+  return '';
+}
 // ---------- 基础工具 ----------
 function $(id){return document.getElementById(id)}
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -258,10 +292,9 @@ function md(src){
 }
 function taskHead(r){
   if(!r)return '<span class="badge dim">无记录</span>';
-  var lane=r.fallbackFrom?(r.fallbackFrom+' → '+r.lane):r.lane;
-  return '<span class="badge '+(r.status==='success'?'ok':'err')+'">'+esc(r.status)+'</span>'
-    +'<span>lane <b>'+esc(lane)+'</b></span><span>'+fmtMs(r.durationMs)+'</span>'
-    +'<span>tokens '+(r.usage&&r.usage.in!=null?r.usage.in:'?')+' / '+(r.usage&&r.usage.out!=null?r.usage.out:'?')+'</span>'
+  return '<span class="badge '+(r.status==='success'?'ok':'err')+'">'+esc(taskStatusLabel(r.status))+'</span>'
+    +'<span>通道 <b>'+esc(fallbackText(r.fallbackFrom,r.lane))+'</b></span><span>'+fmtMs(r.durationMs)+'</span>'
+    +'<span>Token 数 '+(r.usage&&r.usage.in!=null?r.usage.in:'?')+' / '+(r.usage&&r.usage.out!=null?r.usage.out:'?')+'</span>'
     +'<span>尝试 '+r.attempts+'</span><span>'+esc(r.model||'')+'</span>';
 }
 // ---------- tab 切换 ----------
@@ -301,7 +334,7 @@ async function loadStatus(){
             +'<span class="hint">切换即写 config cline-model（当前 '+esc(l.model||'provider 默认')+'）</span>'
           :'<span class="hint">（免费清单不可用：'+esc(s.clineFreeModelsNote||'未知原因')+'；命令行：wbx models --as cline --free）</span>';
         var freeNote=s.clineFreeModelsNote?'<span class="hint">'+esc(s.clineFreeModelsNote)+'</span>':'';
-        lanesHtml+='<div class="card"><h3>lane cline · Cline CLI（可选） '+cState+'</h3>'
+        lanesHtml+='<div class="card"><h3>'+esc(laneTitle('cline'))+' '+cState+'</h3>'
           +'<div class="kv">'
           +'<b>成本</b><span>免费（cline-free 孪生，限时轮换+每日配额；计费 id 才按量扣费）</span>'
           +'<b>模型</b><span>'+esc(l.model||'provider 默认')+'</span>'
@@ -315,7 +348,7 @@ async function loadStatus(){
       var stateBadge=l.disabled?'<span class="badge warn">已禁用</span>'
         :(l.ready?'<span class="badge ok">已登录</span>':'<span class="badge err">未登录</span>');
       var exp=l.expiresAt?('约 <b>'+l.expiresInDays+'</b> 天后过期（'+l.expiresAt.slice(0,10)+'）'):'—';
-      lanesHtml+='<div class="card"><h3>lane '+esc(l.key)+' · '+esc(l.label)+' '+stateBadge+'</h3>'
+      lanesHtml+='<div class="card"><h3>'+esc(laneTitle(l.key))+' '+stateBadge+'</h3>'
         +'<div class="kv">'
         +'<b>成本</b><span>'+esc(l.cost)+'</span>'
         +'<b>账号</b><span>'+esc(l.nickname||'—')+(l.uinMasked?(' · uin '+esc(l.uinMasked)):'')+'</span>'
@@ -329,8 +362,8 @@ async function loadStatus(){
     for(var b=0;b<btns.length;b++)btns[b].classList.toggle('on',btns[b].dataset.v===s.config['default-lane']);
     $('dis-ai').checked=s.config['disabled-lanes'].indexOf('ai')>=0;
     $('dis-cn').checked=s.config['disabled-lanes'].indexOf('cn')>=0;
-    $('route-hint').textContent='当前生效默认路由：'+(s.defaultLane==='auto'?'auto → '+s.effectiveLane:s.defaultLane)
-      +'；可用 lane：'+(s.readyCount>0?s.readyCount+' 个':'0 个');
+    $('route-hint').textContent='当前生效默认路由：'+(s.defaultLane==='auto'?'自动 → '+laneLabel(s.effectiveLane):laneLabel(s.defaultLane))
+      +'；可用通道：'+(s.readyCount>0?s.readyCount+' 个':'0 个');
     var cfs=$('cline-free-select');
     if(cfs)cfs.onchange=function(){
       api('POST','/api/config',{key:'cline-model',value:cfs.value}).then(loadStatus)
@@ -352,14 +385,14 @@ function onDisChange(){
 $('dis-ai').onchange=onDisChange;$('dis-cn').onchange=onDisChange;$('dis-cline').onchange=onDisChange;
 $('doctor-btn').onclick=function(){
   var btn=this;btn.disabled=true;
-  $('doctor-out').innerHTML='<p><span class="spin"></span>体检中（每 lane 一次 tiny ask，约 10-30s）…</p>';
+  $('doctor-out').innerHTML='<p><span class="spin"></span>体检中（每通道一次 tiny ask，约 10-30s）…</p>';
   api('GET','/api/doctor?probe=1').then(function(d){
     btn.disabled=false;
     var h='<p>'+(d.ok?'<span class="badge ok">通过</span>':'<span class="badge err">未通过</span>')
       +' 运行时 '+esc(d.runtimeRoot)+'</p><pre>';
     for(var i=0;i<d.steps.length;i++){
       var st=d.steps[i];
-      h+=(st.good===null?'[SKIP] ':st.good?'[OK]   ':'[FAIL] ')+st.name+'  '+st.detail+'\\n';
+      h+=(st.good===null?'[跳过]   ':st.good?'[通过]   ':'[失败] ')+st.name+'  '+st.detail+'\\n';
     }
     h+='</pre>';
     $('doctor-out').innerHTML=h;
@@ -389,8 +422,8 @@ $('ask-btn').onclick=function(){
       var h='<div class="task-card"><div class="hd">'+taskHead(rec)+'</div>';
       if(j.error)h+='<div class="err-box">'+esc(j.error)+'</div>';
       if(rec&&rec.result!=null)h+=md(rec.result);
-      if(rec&&rec.error)h+='<div class="err-box">'+esc(rec.error)+'</div>';
-      h+='<div class="hint">job '+esc(j.id)+' · '+esc(j.dir)+'（wbx history '+esc(j.id)+' 可回放）</div></div>';
+      if(rec&&rec.error)h+='<div class="err-box">'+esc(rec.error)+' '+esc(errorHint(rec.error))+'</div>';
+      h+='<div class="hint">任务 '+esc(j.id)+' · '+esc(j.dir)+'（wbx history '+esc(j.id)+' 可回放）</div></div>';
       $('ask-out').innerHTML=h;
     },function(j){
       $('ask-out').innerHTML='<p><span class="spin"></span>执行中… '+(j.done||0)+'/'+(j.total||'?')+'</p>';
@@ -409,8 +442,8 @@ function renderFanRows(){
   for(var i=0;i<fanRows.length;i++){
     var r=fanRows[i];
     h+='<div class="fan-row">'
-      +'<input type="text" data-i="'+i+'" data-f="id" value="'+esc(r.id)+'" placeholder="任务 id">'
-      +'<select data-i="'+i+'" data-f="lane"><option value="">auto</option><option'+(r.lane==='ai'?' selected':'')+'>ai</option><option'+(r.lane==='cn'?' selected':'')+'>cn</option><option'+(r.lane==='cline'?' selected':'')+'>cline</option></select>'
+      +'<input type="text" data-i="'+i+'" data-f="id" value="'+esc(r.id)+'" placeholder="任务 ID">'
+      +'<select data-i="'+i+'" data-f="lane"><option value="">自动</option><option value="ai"'+(r.lane==='ai'?' selected':'')+'>WorkBuddy AI</option><option value="cn"'+(r.lane==='cn'?' selected':'')+'>WorkBuddy</option><option value="cline"'+(r.lane==='cline'?' selected':'')+'>Cline</option></select>'
       +'<textarea data-i="'+i+'" data-f="prompt" style="min-height:44px" placeholder="worker 提示词">'+esc(r.prompt)+'</textarea>'
       +'<button class="ghost" data-del="'+i+'">×</button></div>';
   }
@@ -441,14 +474,14 @@ $('fan-btn').onclick=function(){
       var h='<p>完成：成功 '+(j.ok==null?'?':j.ok)+'/'+(j.total==null?'?':j.total)+'</p>';
       for(var t=0;t<(j.tasks||[]).length;t++){
         var task=j.tasks[t];
-        h+='<div class="task-card"><details><summary>task '+esc(task.id)+' · PROMPT</summary><pre>'+esc(task.prompt||'')+'</pre></details>'
+        h+='<div class="task-card"><details><summary>任务 '+esc(task.id)+' · 提示词</summary><pre>'+esc(task.prompt||'')+'</pre></details>'
           +'<div class="hd">'+taskHead(task.record)+'</div>';
         if(task.record&&task.record.result!=null)h+=md(task.record.result);
-        if(task.record&&task.record.error)h+='<div class="err-box">'+esc(task.record.error)+'</div>';
+        if(task.record&&task.record.error)h+='<div class="err-box">'+esc(task.record.error)+' '+esc(errorHint(task.record.error))+'</div>';
         h+='</div>';
       }
       if(j.error)h+='<div class="err-box">'+esc(j.error)+'</div>';
-      h+='<div class="hint">job '+esc(j.id)+' · '+esc(j.dir)+'（wbx history '+esc(j.id)+' 可回放）</div>';
+      h+='<div class="hint">任务 '+esc(j.id)+' · '+esc(j.dir)+'（wbx history '+esc(j.id)+' 可回放）</div>';
       $('fan-out').innerHTML=h;
     },function(j){
       $('fan-out').innerHTML='<p><span class="spin"></span>执行中… 完成 '+(j.done||0)+'/'+(j.total||'?')+'</p>';
@@ -467,8 +500,8 @@ async function loadHistory(){
       var tr=document.createElement('tr');
       tr.className='clickable';
       var when=j.createdAt?new Date(j.createdAt).toLocaleString('zh-CN',{hour12:false}):j.id;
-      var dist='';for(var k in j.laneDist)dist+=esc(k)+'×'+j.laneDist[k]+' ';
-      tr.innerHTML='<td>'+esc(when)+'</td><td>'+esc(j.type)+(j.legacy?'（旧）':'')+'</td>'
+      var dist='';for(var k in j.laneDist)dist+=esc(laneLabel(k))+'×'+j.laneDist[k]+' ';
+      tr.innerHTML='<td>'+esc(when)+'</td><td>'+esc(typeLabel(j.type,j.legacy))+'</td>'
         +'<td>'+(j.total==null?'?':j.total)+'</td><td>'+(j.successRate==null?'?':j.successRate+'%')+'</td>'
         +'<td>'+dist+'</td><td>'+esc(j.id)+'</td>';
       tr.onclick=(function(id){return function(){showJob(id)}})(j.id);
@@ -481,15 +514,15 @@ $('hist-refresh').onclick=loadHistory;
 async function showJob(id){
   try{
     var j=await api('GET','/api/job/'+id);
-    var h='<h3>job '+esc(j.id)+'（'+esc(j.type)+(j.legacy?'，旧 tasks/ 兼容':'')+'）</h3>'
-      +'<div class="kv"><b>状态</b><span>'+esc(j.status)+'</span><b>目录</b><span>'+esc(j.dir)+'</span>'
+    var h='<h3>任务 '+esc(j.id)+'（'+esc(typeLabel(j.type,j.legacy))+(j.legacy?'，旧 tasks/ 兼容':'')+'）</h3>'
+      +'<div class="kv"><b>状态</b><span>'+esc(jobStatusLabel(j.status))+'</span><b>目录</b><span>'+esc(j.dir)+'</span>'
       +'<b>成功率</b><span>'+(j.successRate==null?'?':j.successRate+'%')+'</span></div>';
     for(var t=0;t<(j.tasks||[]).length;t++){
       var task=j.tasks[t];
-      h+='<div class="task-card"><details open><summary>task '+esc(task.id)+' · PROMPT（点击折叠）</summary><pre>'+esc(task.prompt||'（无 tasks-input，旧格式）')+'</pre></details>'
+      h+='<div class="task-card"><details open><summary>任务 '+esc(task.id)+' · 提示词（点击折叠）</summary><pre>'+esc(task.prompt||'（无 tasks-input，旧格式）')+'</pre></details>'
         +'<div class="hd">'+taskHead(task.record)+'</div>';
       if(task.record&&task.record.result!=null)h+=md(task.record.result);
-      if(task.record&&task.record.error)h+='<div class="err-box">'+esc(task.record.error)+'</div>';
+      if(task.record&&task.record.error)h+='<div class="err-box">'+esc(task.record.error)+' '+esc(errorHint(task.record.error))+'</div>';
       h+='</div>';
     }
     if(j.summaryMd)h+='<details><summary>summary.md</summary><pre>'+esc(j.summaryMd)+'</pre></details>';
@@ -500,7 +533,7 @@ async function showJob(id){
 var loginTimer=null;
 function startLoginUi(lane){
   if(loginTimer){clearInterval(loginTimer);loginTimer=null}
-  $('login-out').innerHTML='<p><span class="spin"></span>申请登录 state…</p>';
+  $('login-out').innerHTML='<p><span class="spin"></span>正在申请登录…</p>';
   api('POST','/api/login/start',{lane:lane}).then(function(r){
     var h='<p>在浏览器完成登录（点击打开）：</p><p><a href="'+esc(r.authUrl)+'" target="_blank" rel="noopener">'+esc(r.authUrl)+'</a></p>';
     if(r.tips&&r.tips.length){
@@ -516,7 +549,7 @@ function startLoginUi(lane){
         if(p.status==='pending'){el.innerHTML='<span class="spin"></span>等待登录完成…（'+Math.round((Date.now()-p.startedAt)/1000)+'s）';return}
         clearInterval(loginTimer);loginTimer=null;
         if(p.status==='done'){
-          el.innerHTML='<span class="badge ok">登录成功</span> lane '+esc(p.lane)+'（'+esc(p.nickname||'')+'）；<a href="#" onclick="location.reload();return false">刷新状态</a>';
+          el.innerHTML='<span class="badge ok">登录成功</span> 通道 '+esc(laneLabel(p.lane))+'（'+esc(p.nickname||'')+'）；<a href="#" onclick="location.reload();return false">刷新状态</a>';
         }else if(p.status==='timeout'){
           el.innerHTML='<span class="badge err">超时未完成</span> 请重新发起登录';
         }else{
@@ -593,6 +626,33 @@ async function handler(req, res) {
   const u = new URL(req.url, 'http://127.0.0.1');
   const p = u.pathname;
   try {
+    // 安全校验（v5.2）：Host 白名单防 DNS rebinding；POST 一律校验 Origin（同源或空）
+    if (!hostHeaderAllowed(req.headers.host, LISTEN_PORT)) {
+      return sendJson(res, 403, { error: 'Host 头不允许（本控制台仅限 127.0.0.1 / localhost 访问）' });
+    }
+    if (req.method === 'POST' && !originAllowed(req.headers.origin, LISTEN_PORT)) {
+      return sendJson(res, 403, { error: 'Origin 不允许（本控制台仅限同源访问）' });
+    }
+    if (req.method === 'GET' && p === '/__health') {
+      sendJson(res, 200, { app: 'wbx-ui', pid: process.pid, port: LISTEN_PORT, version: WBX_VERSION });
+      return;
+    }
+    if (req.method === 'POST' && p === '/__shutdown') {
+      if (!DAEMON_CTX) return sendJson(res, 404, { error: '前台模式不支持 /__shutdown（Ctrl+C 退出）' });
+      const b = await readBody(req);
+      const tok = Buffer.from(typeof b.token === 'string' ? b.token : '', 'utf8');
+      const expect = Buffer.from(DAEMON_CTX.token, 'utf8');
+      const good = tok.length === expect.length && crypto.timingSafeEqual(tok, expect);
+      if (!good) return sendJson(res, 403, { error: 'token 不正确' });
+      sendJson(res, 200, { ok: true, message: '正在优雅关闭' });
+      setTimeout(() => {
+        try {
+          SERVER && SERVER.close(() => DAEMON_CTX && DAEMON_CTX.onShutdown());
+          setTimeout(() => DAEMON_CTX && DAEMON_CTX.onShutdown(), 3000); // close 被长连接卡住时兜底退出
+        } catch { DAEMON_CTX && DAEMON_CTX.onShutdown(); }
+      }, 150);
+      return;
+    }
     if (req.method === 'GET' && (p === '/' || p === '/index.html')) {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       res.end(HTML);
@@ -636,7 +696,7 @@ async function handler(req, res) {
     let m;
     if (req.method === 'GET' && (m = /^\/api\/job\/([A-Za-z0-9_-]+)$/.exec(p))) {
       const j = await getJob(m[1]);
-      if (!j) return sendJson(res, 404, { error: `job ${m[1]} 不存在` });
+      if (!j) return sendJson(res, 404, { error: `任务 ${m[1]} 不存在` });
       if (u.searchParams.get('brief') === '1') return sendJson(res, 200, briefJob(j));
       sendJson(res, 200, j);
       return;
@@ -644,11 +704,11 @@ async function handler(req, res) {
     if (req.method === 'POST' && p === '/api/ask') {
       const b = await readBody(req);
       const prompt = typeof b.prompt === 'string' ? b.prompt.trim() : '';
-      if (!prompt) return sendJson(res, 400, { error: '缺少 prompt' });
+      if (!prompt) return sendJson(res, 400, { error: '缺少提示词（prompt）' });
       let as = null;
       if (b.lane && b.lane !== 'auto') {
         as = parseLane(b.lane);
-        if (!as) return sendJson(res, 400, { error: `lane 只支持 auto|ai|cn|cline（收到 ${b.lane}）` });
+        if (!as) return sendJson(res, 400, { error: `lane 取值只支持 auto|ai|cn|cline（ai=WorkBuddy AI，cn=WorkBuddy，cline=Cline；收到 ${b.lane}）` });
       }
       const jobId = newJobId();
       runAskJob({
@@ -672,7 +732,7 @@ async function handler(req, res) {
         model: t.model || null,
       }));
       const bad = tasksIn.find((t) => !t.prompt.trim());
-      if (bad) return sendJson(res, 400, { error: `任务 ${bad.id} 缺少 prompt` });
+      if (bad) return sendJson(res, 400, { error: `任务 ${bad.id} 缺少提示词（prompt）` });
       let lanes = null;
       if (Array.isArray(b.lanes) && b.lanes.length) lanes = b.lanes;
       else if (typeof b.lanes === 'string' && b.lanes.trim()) lanes = b.lanes.split(',').map((s) => s.trim()).filter(Boolean);
@@ -689,7 +749,7 @@ async function handler(req, res) {
     }
     if (req.method === 'POST' && p === '/api/config') {
       const b = await readBody(req);
-      if (!b.key || !(b.key in CONFIG_DEFS)) return sendJson(res, 400, { error: `未知配置键 ${b.key}` });
+      if (!b.key || !Object.prototype.hasOwnProperty.call(CONFIG_DEFS, b.key)) return sendJson(res, 400, { error: `未知配置键 ${b.key}` });
       try {
         const r = await setConfig(b.key, b.value === undefined ? '' : String(b.value));
         sendJson(res, 200, { ok: true, key: r.key, value: r.value });
@@ -703,12 +763,18 @@ async function handler(req, res) {
       const lane = parseLane(b.lane);
       if (!lane) return sendJson(res, 400, { error: 'lane 只支持 ai|cn' });
       if (loginState.status === 'pending') return sendJson(res, 409, { error: `已有登录流程进行中（lane ${loginState.lane}）` });
-      const ctx = await startLogin(lane);
-      loginState.status = 'pending';
+      loginState.status = 'pending'; // 先占位防并发登录流（TOCTOU），失败回滚
       loginState.lane = lane;
       loginState.startedAt = Date.now();
       loginState.error = null;
       loginState.nickname = null;
+      let ctx;
+      try { ctx = await startLogin(lane); }
+      catch (e) {
+        loginState.status = 'error';
+        loginState.error = redact(e.message);
+        return sendJson(res, 500, { error: redact(e.message) });
+      }
       (async () => {
         const { authToken, pending } = await pollLoginToken(ctx, 300000);
         if (!authToken) { loginState.status = 'timeout'; return; }
@@ -728,22 +794,33 @@ async function handler(req, res) {
       sendJson(res, 200, out);
       return;
     }
-    sendJson(res, 404, { error: 'not found' });
+    sendJson(res, 404, { error: '未找到' });
   } catch (e) {
     sendJson(res, 500, { error: redact(e.message) });
   }
 }
 
-export async function startUiServer({ port = 7788, open = true } = {}) {
+export async function startUiServer({ port = 7788, open = true, daemon = null } = {}) {
   ensureDirs();
+  LISTEN_PORT = port;
   const server = http.createServer(handler);
+  SERVER = server;
   await new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, '127.0.0.1', resolve);
+    server.listen({ port, host: '127.0.0.1', exclusive: true }, resolve);
   });
   const url = `http://127.0.0.1:${port}`;
-  console.log(`[OK] wbx ui 已启动：${url}（仅监听本机回环；Ctrl+C 退出，无常驻服务）`);
-  console.error(`运行时根：${RUNTIME_ROOT}`);
-  if (open) openBrowser(url);
+  if (daemon) {
+    // 守护模式：写状态文件（bind 成功 = 单实例赢家），关闭时清理
+    DAEMON_CTX = daemon;
+    daemon.persist({ pid: process.pid, port, startedAt: Date.now(), token: daemon.token, version: WBX_VERSION });
+    server.on('close', () => { try { daemon.clear(); } catch { /* 尽力而为 */ } });
+    console.log(`[OK] wbx ui 守护进程已就绪：${url}（pid ${process.pid}，仅监听本机回环）`);
+    console.error(`运行时根：${RUNTIME_ROOT}；停止：wbx ui --stop`);
+  } else {
+    console.log(`[OK] wbx ui 已启动：${url}（仅监听本机回环；Ctrl+C 退出，无常驻服务）`);
+    console.error(`运行时根：${RUNTIME_ROOT}`);
+    if (open) openBrowser(url);
+  }
   return server;
 }

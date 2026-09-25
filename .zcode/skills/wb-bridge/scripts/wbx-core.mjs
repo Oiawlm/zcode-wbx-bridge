@@ -23,7 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '5.1.0';
+export const WBX_VERSION = '5.2.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -85,6 +85,8 @@ export const IDENTITIES = {
   },
 };
 export const LANE_ORDER = ['ai', 'cn', 'cline']; // 默认路由顺序：免费优先，cline（可选）排最后
+// v5.2 命名公式：品牌（版本）全称——doctor/CLI 人读输出用；数据层 label 字段不变
+export const LANE_BRAND = { ai: 'WorkBuddy AI（国际版）', cn: 'WorkBuddy（国内版）', cline: 'Cline CLI' };
 const FALLBACK_ORDER = ['cn', 'ai', 'cline'];     // 回退顺序：国内版兜底，cline 最末（稳定性待实测）
 
 const DEFAULT_CLI_PATH = 'D:\\App\\WorkBuddyAI\\resources\\app.asar.unpacked\\cli\\bin\\codebuddy';
@@ -1505,7 +1507,7 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
     if (key === 'cline') continue;
     const id = IDENTITIES[key];
     const has = fs.existsSync(id.templatePath);
-    if (!has) say(`[SKIP] 模板    lane ${key} 缺 ${id.templatePath}（修复：启动一次${id.label}桌面版）`);
+    if (!has) say(`[SKIP] 模板    lane ${key} 缺 ${id.templatePath}（修复：启动一次${LANE_BRAND[key]}桌面版）`);
   }
 
   // 6) 每 lane 凭证 + 探测（ai/cn；cline 在第 7 段单独体检）
@@ -1514,7 +1516,7 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
     const info = laneStatusInfo(key);
     const id = IDENTITIES[key];
     say('');
-    say(`--- lane ${key}（${id.label} · ${id.cost}${info.disabled ? ' · 已禁用' : ''}）---`);
+    say(`--- 通道 ${LANE_BRAND[key]} · ${id.cost}${info.disabled ? ' · 已禁用' : ''} ---`);
     if (info.disabled) {
       steps.push({ name: `lane-${key}`, good: null, detail: '已禁用（disabled-lanes）' });
       say('[SKIP] 凭证     已禁用（disabled-lanes），路由/回退链跳过该 lane');
@@ -1530,7 +1532,7 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
     say(`[OK]   凭证     已登录（${info.nickname || '昵称未知'}${info.uinMasked ? ` · uin ${info.uinMasked}` : ''}，凭证约 ${info.expiresInDays ?? '?'} 天后过期）`);
     steps.push({ name: `lane-${key}`, good: true, detail: `已登录（${info.nickname || '?'}，${info.expiresInDays ?? '?'} 天后过期）` });
     if (!probe) { laneRows.push({ ...info, probe: null }); continue; }
-    say(`lane ${key} 模型探测中（tiny ask）…`);
+    say(`${LANE_BRAND[key]} 模型探测中（tiny ask）…`);
     const p = await askOnce({ lane: key, prompt: '请只回复两个字符：OK', effort: 'low', timeoutMs: 120000 });
     if (p.ok) {
       const detail = `${p.model} 可用，${fmtMs(p.durationMs)}，tokens in/out = ${p.usage.in ?? '?'}/${p.usage.out ?? '?'}`;
@@ -1550,7 +1552,7 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
   {
     const cinfo = laneStatusInfo('cline');
     say('');
-    say(`--- lane cline（Cline CLI · 免费孪生${cinfo.disabled ? ' · 已禁用' : ' · 可选 lane'}）---`);
+    say(`--- 通道 Cline CLI · 免费孪生${cinfo.disabled ? ' · 已禁用' : ' · 可选通道'} ---`);
     if (cinfo.disabled) {
       steps.push({ name: 'lane-cline', good: null, detail: '已禁用（disabled-lanes）' });
       say('[SKIP] 可选lane  已禁用（disabled-lanes），路由/回退链跳过该 lane');
@@ -1594,7 +1596,7 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
 
       if (!probe) { laneRows.push({ ...cinfo, probe: null }); }
       else {
-        say('lane cline 模型探测中（tiny ask）…');
+        say('Cline CLI 模型探测中（tiny ask）…');
         const p = await askOnce({ lane: 'cline', prompt: '请只回复两个字符 OK', timeoutMs: 180000 });
         if (p.ok) {
           const cost = p.usage && typeof p.usage.cost === 'number' ? p.usage.cost : null;
@@ -1609,7 +1611,7 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
             : '';
           const detail = `${p.kind}: ${p.error}${extra}`;
           steps.push({ name: 'lane-cline-probe', good: null, detail });
-          say(`[WARN] 模型探测 ${detail}（可选 lane，不影响 exit 0）`);
+          say(`[WARN] 模型探测 ${detail}（可选通道，不影响 exit 0）`);
           laneRows.push({ ...cinfo, probe: { good: false, detail } });
         }
       }
@@ -1648,6 +1650,8 @@ export function userBlockText(bridgeScriptPath) {
     `${wbx} doctor                     # 先自检；可用 lane 全红 -> 提示用户 login，任务自己做`,
     `${wbx} ask --file <p.txt>           # 单条（--as ai|cn|cline 指定 lane，默认路由见 config，失败自动回退）`,
     `${wbx} fanout --file <tasks.json>   # 并行批量（任务可用 files:[路径] 拼材料；结果落 ~/.wbx/jobs/<jobId>/）`,
+    `${wbx} ui --detach                 # 常开网页控制台 http://127.0.0.1:7788（幂等后台守护；--stop 停止；`,
+    '                                   #  --install-autostart 随 ZCode 新会话自动拉起，--remove-autostart 摘除）',
     '```',
     '',
     '默认分派（v5 基线反转）：凡自包含任务（输入可打包、输出可校验）即为候选——单个调研、翻译、',

@@ -33,6 +33,10 @@ token 收着用。**自包含**（v4 公理）：任务的全部输入（含代�
   存在性校验；`free-limit`/`free-promotion-ended`/`model-not-found` 错误分类与提示；UI 免费模型
   下拉选择器；存量 config 一次性迁移（仅旧值恰为计费孪生时改写）。隐私：免费用量可能被 Cline
   用于改进模型（官方披露）。
+- v5.2 新增：控制台常开可用——`ui --detach` 幂等后台守护（浏览器开 http://127.0.0.1:7788 即用）、
+  `--stop`/`--status`、`--install-autostart`/`--remove-autostart` ZCode 会话自启钩子（对
+  `~/.zcode/cli/config.json` 只做读-改-写合并）；UI 全面中文化 + 通道品牌命名（WorkBuddy AI（国际版）/
+  WorkBuddy（国内版）/Cline CLI；展示层映射，数据层零改动）。
 - 使用前先 `doctor`；用法与 worker 提示词模板见 `.zcode/skills/wb-bridge/SKILL.md` 与
   `.zcode/skills/wb-bridge/PROMPTS.md`（v2 知识库：原则 12 条 + 模板 T1–T9 + 经验条目 E-xxx +
   决策速查表；ZCode 会话会自动命中该 Skill）。

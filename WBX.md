@@ -1,4 +1,4 @@
-# WBX — ZCode ↔ 外部算力联动桥（v5.1：三 lane 子代理化高频调度 · cline 免费孪生）
+# WBX — ZCode ↔ 外部算力联动桥（v5.2：三 lane 子代理化高频调度 · cline 免费孪生 · 控制台常开可用）
 
 > **v5.1**：cline lane 默认免费调用 DeepSeek V4.1 Flash（`cline-free/` 免费孪生，计价 $0 实测；
 > 限时轮换+每日配额）——v5「CLI 侧无免费模型」结论勘误；免费清单可观测可选
@@ -834,3 +834,163 @@ examples + PROMPTS.md + docs）、用户级 skill、`/wbx` 命令、`~/.zcode/AG
 **7. 如实声明**：免费额度边界未实测到（当日 20 次成功调用全部 $0，节约模式即停）；超额
 错误形态（消息模板与类名）取自 cline 3.0.65 二进制内证，状态机按真实消息字符串设计——
 若线上实际报文与此不符，`hint` 兜底为通用 `ratelimit` 分类（仍能触发跨 lane 回退），不崩溃。
+
+## v5.2 章：控制台常开可用（守护化 + 随 ZCode 自启）· 全面中文化与命名统一
+
+> 版本 v5.2.0（2026-09-25，GOAL-V7）。策划材料：`internal/RESEARCH-V7.md`（含四份外部算力调研原文
+> `internal/v7-research-*.md`，fanout job `20260925-150220-x87`）。一句话：本地控制台从「输命令才可用」
+> 变为「浏览器直接开 127.0.0.1:7788 就在、打开 ZCode 自动拉起」，界面全面中文化、通道命名统一为品牌名。
+
+### 1. 第一性原理与方案选型
+
+- 「打开网址就能用」的本质是**服务已在你需要之前存在**。三条路径（系统常驻 / 宿主拉起 / 按需手动）中
+  选**宿主拉起**：ZCode 已有 SessionStart 钩子机制，把启动做成宿主的幂等副作用是最小充分解——
+  不装服务、不写注册表、不动环境变量（被否决备选见 RESEARCH-V7 附录 A.1）。
+- 钩子是内联执行的（官方文档明示 `async` 无运行时效果），钩子命令必须秒回——后台化由 `ui --detach`
+  在 Node 内部完成（detached spawn + unref）。这决定了「**永远复用绝不新起**」的幂等性是全方案
+  最关键性质：没有它，每次会话启动都会泄漏一个进程。
+- Jupyter 式端口顺延明确不做：固定 7788 是「浏览器直接开网址」的前提（A.2）。端口被外程序占用时
+  fail fast 明确报错，不静默换端口。
+- 中文化只动**展示层**：数据层（manifest.type='ask'、API 字段、config 键）一律不动——历史回放、
+  文档、脚本兼容全靠它；翻译集中在 wbx-ui.mjs 前端一处映射表。
+- 命名公式：**品牌（版本）全称**用于卡片标题（WorkBuddy AI（国际版）/ WorkBuddy（国内版）/
+  Cline CLI（可选通道）），**品牌短称**用于窄栏位（WorkBuddy AI / WorkBuddy / Cline）；同一概念
+  全站唯一译法；中文界面不出现裸 lane/ai/cn/cline（必要处用「通道」）。
+- 项目形态定性（写进 README）：Skill（带脚本）+ Node CLI + AGENTS.md 常驻块 +（v5.2 起可选）
+  SessionStart 自启钩子，四层职责分离；非 MCP/plugin/command（论证见 RESEARCH-V7 1.1 与
+  v7-research-skill-vs-plugin.md §2）。
+
+### 2. Phase 0 待实测点结论（全部实测通过，探测脚本 internal/v7-phase0-probe.mjs）
+
+| 待实测点 | 实测结论 |
+|---|---|
+| `process.kill(pid,0)` 语义 | 自身 pid 探测成功；死 pid/已退出子进程均报 **ESRCH**（EPERM=存在但无权限，判活按「非 ESRCH 即活」） |
+| NTFS `wx` 互斥竞态 | 对已存在文件 3 次并发打开全部 EEXIST；**3 进程竞态恰好 1 个赢家**（CreateDisposition CREATE_NEW 语义，跨进程互斥成立） |
+| `listen exclusive:true` 跨进程 | 子进程监听后父进程再绑同端口报 **EADDRINUSE**（fail fast 可行；也再次实证了端口被占的明确报错路径） |
+| windowsHide+detached | 子进程存活、unref 后父进程可独立退出；窗口可见性属人眼项，以 windowsHide 语义为准 |
+| 绑 127.0.0.1 防火墙弹窗 | 回环绑定不注册防火墙关注面（设计层结论；本机全程未见弹窗） |
+| 睡眠唤醒后套接字存活 | 无法程序化复现；设计上由三条件判活 + startedAt 跨重启判废自愈兜底（接受重启机器为最终回收） |
+| 基线 | doctor 三 lane 全绿；ui 前台模式（GET / 200、/api/status 正常）；清理了 7788 端口上一个 **v4.0.0 时代的 ui 孤儿进程**（守护化要解决的孤儿问题的活案例）；`~/.zcode/cli/config.json` 仅 `plugins` 键无 hooks |
+
+### 3. 设计与实现
+
+新增脚本 `scripts/wbx-daemon.mjs`（纯函数集 + 生命周期 + 钩子安装器）；`wbx-ui.mjs` 加安全校验与
+health/shutdown；`wbx.mjs` 加 CLI 分派；`wbx-setup.mjs` 文件清单 + 卸载顺序。
+
+- **状态文件** `~/.wbx/run/ui.json`：`{pid, port, startedAt, token, version}`。三条件判活（状态文件
+  parseUiState 通过 + `kill(pid,0)` 存活 + `GET /__health` 返回 `{app:'wbx-ui'}` 且 pid 匹配）+
+  `startedAt < now - os.uptime()` 判跨重启残留。决策真值表 `decideExisting` →
+  none（直接起）/ reuse（永远复用）/ replace（清残留重起）/ conflict（绝不杀未知 pid，交给 --stop/人工）。
+- **`ui --detach`**：探测 → reuse 即复用返回；replace 清状态；spawn
+  `node wbx.mjs ui --daemon --port N`（detached+unref+windowsHide，stdio 全落
+  `~/.wbx/logs/ui.log`，绝不 shell）；等就绪预算 3.5s（钩子 timeoutMs 5000 内必须返回）；子进程
+  EADDRINUSE 退出（码 78）时复探——命中则「复用」（并发 --detach 竞态自洽），否则明确报错。
+  **永远 exit 0**（它是 SessionStart 钩子路径，异常只落日志/stderr）。
+- **`--daemon`**（内部）：uncaughtException 落盘+清状态+exit 1；unhandledRejection 只落盘；
+  bind 成功后才写状态文件（bind 即单实例互斥赢家）；每小时检查日志 >10MB 截断。
+- **`--stop`**：HTTP `/__shutdown {token}` 优雅关闭优先；kill 兜底**仅当能正向证明 pid 归属**
+  （health OK 且 pid 匹配——Windows pid 复用下绝不误杀无辜进程，证明不了就清状态+人工指引）。
+- **安全校验**（前台/守护一律生效）：Host 头白名单恰为 `127.0.0.1(:port)/localhost(:port)`
+  （大小写不敏感，拒 IPv6/尾点/userinfo/其他端口——防 DNS rebinding）；POST 一律 Origin 校验
+  （同源或空）；`/__shutdown` token 用 Buffer 字节长度对齐 + timingSafeEqual；只绑 127.0.0.1 +
+  `listen exclusive:true`。
+- **自启钩子**：`--install-autostart` 对 `~/.zcode/cli/config.json` 读-改-写合并，追加
+  `hooks.events.SessionStart` `{matcher:'^startup$', hooks:[{type:'process', command:<node.exe>,
+  args:[<全局形态 wbx.mjs>,'ui','--detach','--no-open'], timeoutMs:5000, statusMessage:'wbx 控制台保活'}]}`。
+  合并铁律：既有键绝不删除/改写；按 command 路径幂等去重（我们自己的旧条目允许更新对齐）；
+  既有结构类型异常（SessionStart 非数组等）中止且不写文件；`hooks.enabled` 仅当键**缺失**且无其他
+  钩子时置 true（用户显式 false 一律不翻转，如实告警），并以 marker 文件
+  `~/.wbx/run/autostart-enabled-by-wbx` 记录 `enabledBefore`，`--remove-autostart` 按记录逐键还原。
+  钩子命令输出走 stderr、stdout 保持空（宿主对钩子 stdout 按 JSON 严格 schema 解析）。
+- **中文化映射**（前端一处）：`LANE_LABEL/LANE_TITLE/TYPE_LABEL/TASK_STATUS_LABEL/JOB_STATUS_LABEL`
+  五表 + `errorHint`（v5.1 超额三类错误的 UI 侧友好提示，与 CLI hintText 同源语义）；
+  effort 选项译低/中/高（补显式 value 属性防提交值漂移——worker 映射清单抓到的关键坑）；
+  D3：doctor 人读输出通道段统一品牌全称（`--- 通道 WorkBuddy AI（国际版） · x0.00（免费） ---`），
+  机器可读输出（steps/laneRows JSON）不动。
+- **纯函数质量流程**：parseUiState/isStaleState/hostHeaderAllowed/originAllowed/decideExisting
+  契约 72 断言测试台（internal/v7-pure-tests.mjs）跑三份实现——T8 双份 worker（各 69/72：多余字段
+  丢弃、host 空格不容忍、origin 大小写不归一）vs 编排器参考实现（72/72，含多余字段保留的向前兼容），
+  择优采纳后者；T7 评审批判报 2 阻断 + 6 建议**全部修复**（stopUi 误杀风险、marker 原值记录与
+  显式 false 不翻转、token 字节对齐、login TOCTOU、config 键原型链、钩子超时预算、daemon import
+  归 try、日志增长防护）。
+
+### 4. 实测门禁记录（真机）
+
+- 守护链路：status 未运行 → detach 冷启动 → 二次 detach 复用同 pid（幂等）→ status 运行中
+  （pid/port/version/startedAt）→ 恶意 Host 403 / 恶意 Origin POST 403 / 错 token shutdown 403 /
+  同源 POST 200 → 裸 `ui` 打印 URL 退出 → `--stop` 优雅关闭端口释放 → status 未运行。
+- 陈旧自愈两型：伪造死 pid 状态 → status「残留（可自愈）」→ --detach 清理重起；taskkill 硬杀
+  daemon 后 --detach 复起成功。
+- 钩子合并/还原：临时副本五场景 24 断言全过（internal/v7-merge-tests.mjs）——全新 config（装→幂等→
+  摘除**逐字节还原**）；存量他人钩子 + enabled:true（他人条目原样、enabled 不动、逐字节还原）；
+  enabled:false（不擅自翻转）；畸形结构（中止不写）；未装时摘除（无操作不写）。
+- 真机钩子：安装后 config.json 与官方 schema 逐字段一致（zcode-guide:diagnosing-hooks 核对）；
+  以宿主执行方式（直接 spawn node.exe + 参数向量）实测钩子命令：冷启动 **477ms**、二次 **146ms**
+  （均 < 2s 门禁），exit 0、stdout 为空；URL http://127.0.0.1:7788 可达；
+  `--remove-autostart` 后与安装前 **diff 逐字节一致**，重装即交付态。
+- 如实声明：「随 ZCode 自启」的完整链路（宿主真实触发 SessionStart → 钩子拉起）中，宿主侧触发
+  无法在本会话内自证（需要新开一个 ZCode 窗口观察）——配置格式按本地官方指南逐字段核对、命令
+  执行/时序/幂等均已按宿主执行方式实测；降级路径：即使钩子不触发，手动 `wbx ui --detach` 一次
+  即等效（幂等常驻）。
+
+### 5. 红线遵守
+
+daemon 只绑 127.0.0.1；不装服务/不写注册表/不加计划任务/不动系统环境变量；config.json 只做
+读-改-写合并且卸载可逐键还原（diff 实证）；token 只存 ui.json（gitignore 运行时目录），绝不打印
+/不入库；中文化仅展示层（数据层/API 字段/config 键零改动，旧 job 回放验证见验收附录）；
+v5.1 对外行为零回退（免费孪生默认、迁移、超额 hint、非 DeepSeek 禁回退均未触碰）。
+
+### 6. 验收附录（证据回填）
+
+**1. 四类新断言回归（internal/v7-regression.mjs，27/27 全过）**：
+- ①幂等/复用：清场后连续 `--detach` 两次——首次「已后台启动 pid X」、二次「复用 pid X」（同 pid）；
+  状态文件 pid 稳定；`netstat` 7788 单监听；`/__health` 返回 `{app:'wbx-ui',pid,port,version:'5.2.0'}`
+  且 pid 匹配。
+- ②陈旧自愈两型：伪造死 pid（4194303）状态 → `--status` 报「残留（可自愈）」→ `--detach` 清理重起
+  （新 pid）；伪造「存活但无关」pid（回归进程自身 pid）→ `--detach` 走 conflict 报告、绝不杀该进程
+  （进程存活自证）→ 清状态后正常起。
+- ③安全攻击面：恶意 Host（evil.com）403、正常 Host 200；伪造 Origin（http://evil.com）POST 403、
+  同源 localhost 形态 POST 200；错 token / 无 token `POST /__shutdown` 均 403 且守护存活；
+  IPv6 Host 形态（[::1]:7788）403。
+- ④钩子合并/还原：临时副本五场景 24 断言全过（internal/v7-merge-tests.mjs，独立脚本被回归
+  以子进程调用）——全新 config 装→幂等→摘除**逐字节还原**；存量他人钩子+enabled:true 他人条目
+  原样、enabled 不动、逐字节还原；显式 enabled:false 不擅自翻转；畸形结构中止不写；未装时摘除
+  无操作不写。
+
+**2. 纯函数契约与择优记录**：契约测试台 72 断言（internal/v7-pure-tests.mjs）跑三份实现——
+worker A 69/72、worker B 69/72（共性失分：多余字段丢弃、host 空格不容忍、origin 大小写不归一）、
+编排器参考实现 72/72（含多余字段保留向前兼容）→ 择优采纳后者，worker 版本留档
+internal/worker-daemon-pure-*.mjs。T7 评审批判报 2 阻断（stopUi 误杀风险、marker 原值）+
+6 建议（token 字节对齐、login TOCTOU、config 键原型链、钩子超时预算、daemon import 归 try、
+日志增长防护）**全部修复后**复测全绿。
+
+**3. v5.1 全命令回归零回退**：internal/v6-regression.mjs 复跑 **24/24 全过**（存量迁移、免费 id
+缺失降级、超额状态机八断言、非 DeepSeek 禁回退四断言、token 不泄漏）；命令批实调——doctor 全探测
+通过（三通道段品牌名 + v5.2.0）、`ask --text` 实调成功（lane=ai 9.1s）、`fanout` 2 任务 2/2、
+`models --as cline --free` 实时清单 5 项（当前值标 *）、`config set/get` 回环一致、`history` 列表
+与 `history <jobId>` 回放正常（**旧 job 20260924-210540-k5e（legacy）回放可读——展示映射兼容
+数据层**）、`export-bundle` 12 文件（含 wbx-daemon.mjs）零凭证断言通过、`self-install` 幂等
+（用户级 AGENTS 块刷新含 ui --detach 行）。UI 展示/数据层分离断言：页面含品牌全称与中文术语，
+`/api/history` 59 个 job 的 `type` 字段仍为英文原始值、job 详情字段原样。
+
+**4. 钩子真机门禁**：安装后 config.json 与官方指南（zcode-guide:diagnosing-hooks）逐字段核对一致
+（type:process + args 参数向量 + timeoutMs + statusMessage + matcher '^startup\$'）；按宿主执行
+方式直接 spawn node.exe 实测：冷启动 477ms / 二次 146ms（<2s），exit 0，stdout 空、输出走 stderr；
+URL 可达；`--remove-autostart` 后与安装前 diff 逐字节一致；重装为交付态。
+如实声明：宿主侧 SessionStart 真实触发需新开 ZCode 窗口观察，本会话无法自证——配置格式已按官方
+文档核对、命令行为已按宿主执行方式实测；降级路径：钩子即使不触发，手动 `wbx ui --detach` 一次
+即等效（幂等常驻）。
+
+**5. Phase 0 待实测点**：全部实测通过（结论见本管第 2 节表格）；7788 端口发现并清理了一个
+v4.0.0 时代的 ui 孤儿进程（守护化要解决的问题的活案例）。
+
+**6. 发布证据**：（发布后回填）
+
+**7. 自举记录（wbx 外包，材料先行，逐份校验后采用）**：
+
+| job | 任务 | 用途 |
+|---|---|---|
+| `20260925-152646-m4c` | daemon-pure-a（✅ 69/72）、daemon-pure-b（✅ 69/72）、ui-l10n-map（✅） | 纯函数双份（T8）+ UI 全量文案映射清单（映射已逐条终审集成；effort 选项补 value 属性的关键坑即来自该清单） |
+| `20260925-153554-8wl` | t7-daemon-review（✅） | wbx-daemon/wbx-ui 评审批判（T7）：2 阻断 + 6 建议全部修复 |
+| `20260925-154530-3uf` | readme-form-section（✅）、changelog-52-draft（✅） | README 形态/控制台两节 + CHANGELOG 5.2.0 初稿（ZCode 终审微调后集成） |
+

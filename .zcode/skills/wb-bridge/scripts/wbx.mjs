@@ -463,8 +463,55 @@ async function cmdExportBundle(opts) {
   }
 }
 
-// ---------- 子命令：ui ----------
+// ---------- 子命令：ui（v5.2：守护化 + 自启钩子） ----------
 async function cmdUi(opts) {
+  const daemon = await import('./wbx-daemon.mjs');
+  if (opts.installAutostart) {
+    try {
+      const r = await daemon.installAutostart();
+      console.log(`[OK] ${r.message}`);
+    } catch (e) { die(e.message); }
+    await exitWith(0);
+  }
+  if (opts.removeAutostart) {
+    try {
+      const r = await daemon.removeAutostart();
+      console.log(`[OK] ${r.message}`);
+    } catch (e) { die(e.message); }
+    await exitWith(0);
+  }
+  if (opts.stop) {
+    const r = await daemon.stopUi();
+    console.log(`${r.ok ? '[OK] ' : '[FAIL] '}${r.message}`);
+    await exitWith(r.ok ? 0 : 1);
+  }
+  if (opts.status) {
+    const s = await daemon.statusUi();
+    if (opts.json) console.log(JSON.stringify(s, null, 2));
+    else {
+      console.log(`状态：${s.state === 'running' ? '运行中' : s.state === 'stale' ? '残留（可自愈）' : '未运行'}`);
+      console.log(`说明：${s.message}`);
+      if (s.url) console.log(`地址：${s.url}`);
+      console.log(`日志：${s.log}`);
+    }
+    await exitWith(0);
+  }
+  if (opts.detach) {
+    // 钩子路径（SessionStart 也走这里）：必须秒回且永远 exit 0，失败只打印/落日志。
+    // 输出走 stderr：宿主会把钩子 stdout 按 JSON 严格 schema 解析，保持 stdout 为空最稳。
+    const r = await daemon.detachUi({ port: opts.port ?? 7788 });
+    console.error(`${r.ok ? '[OK] ' : '[FAIL] '}${r.message}`);
+    await exitWith(0);
+  }
+  if (opts.daemon) return daemon.daemonMain({ port: opts.port ?? 7788 }); // 内部：由 --detach spawn
+  // 裸 `wbx ui`：守护进程已在跑 -> 打印 URL + 开浏览器 + exit 0；否则维持前台模式（v3 行为）
+  const probe = await daemon.probeExisting();
+  if (probe.decision === 'reuse') {
+    const url = `http://127.0.0.1:${probe.state.port}`;
+    console.log(`[OK] wbx 控制台守护进程已在运行：${url}（pid ${probe.state.pid}，wbx ui --stop 停止）`);
+    if (!opts.noOpen) openBrowser(url);
+    await exitWith(0);
+  }
   const { startUiServer } = await import('./wbx-ui.mjs');
   await startUiServer({ port: opts.port ?? 7788, open: !opts.noOpen });
   // startUiServer 自己 keep-alive；此处不 exit
@@ -496,6 +543,12 @@ function parseArgs(argv) {
       case '--last': opts.last = parseInt(next(i), 10); i++; break;
       case '--task': opts.task = next(i); i++; break;
       case '--port': opts.port = parseInt(next(i), 10); i++; break;
+      case '--detach': opts.detach = true; break;
+      case '--stop': opts.stop = true; break;
+      case '--status': opts.status = true; break;
+      case '--daemon': opts.daemon = true; break;
+      case '--install-autostart': opts.installAutostart = true; break;
+      case '--remove-autostart': opts.removeAutostart = true; break;
       case '--out': opts.out = next(i); i++; break;
       case '--json': opts.json = true; break;
       case '--stdin': opts.stdin = true; break;
@@ -546,6 +599,10 @@ cline 隔离：桥的 cline 状态只在 <运行时根>/cline-home/（HOME 覆�
   node wbx.mjs history [--last 10]                 历史列表（时间/类型/任务数/成功率/lane 分布/目录）
   node wbx.mjs history <jobId> [--task <id>]       完整回放一次 job 的双向对话（prompt+回复全文）
   node wbx.mjs ui      [--port 7788] [--no-open]   本地 Web UI（仅 127.0.0.1；状态/路由/免费模型选择/ask/fanout/历史/登录）
+                     [--detach]                    后台守护启动（幂等：已在跑则复用，绝不重复拉起；日志 ~/.wbx/logs/ui.log）
+                     [--stop] / [--status]         停止守护进程（HTTP 优雅优先）/ 查看三态（运行中/残留/未运行）
+                     [--install-autostart]         装 ZCode SessionStart 钩子：新开会话自动拉起控制台（需全局形态）
+                     [--remove-autostart]          摘除自启钩子（config.json 其余键原样保留）
   node wbx.mjs self-install [--adopt] [--no-keep-project]
                                                    全局安装：~/.zcode/wbx-bridge + 用户级 skill + /wbx 命令
                                                    + AGENTS.md 标记块 + ~/.wbx 运行时（--adopt 迁移项目凭证）

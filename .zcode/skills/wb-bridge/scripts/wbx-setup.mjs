@@ -256,14 +256,14 @@ export async function selfInstall({ adopt = false, keepProject = true } = {}) {
   const dstScripts = path.join(GLOBAL_BRIDGE_DIR, 'scripts');
 
   // 0. 源完整性
-  for (const f of ['wbx.mjs', 'wbx-core.mjs', 'wbx-setup.mjs']) {
+  for (const f of ['wbx.mjs', 'wbx-core.mjs', 'wbx-setup.mjs', 'wbx-daemon.mjs']) {
     if (!fs.existsSync(path.join(srcScripts, f))) throw new Error(`桥源不完整：缺 ${path.join(srcScripts, f)}`);
   }
 
   // 1. 桥本体 → ~/.zcode/wbx-bridge/
   await fsp.mkdir(dstScripts, { recursive: true });
   const copiedScripts = [];
-  for (const f of ['wbx.mjs', 'wbx-core.mjs', 'wbx-setup.mjs', ...(fs.existsSync(path.join(srcScripts, 'wbx-ui.mjs')) ? ['wbx-ui.mjs'] : [])]) {
+  for (const f of ['wbx.mjs', 'wbx-core.mjs', 'wbx-setup.mjs', 'wbx-daemon.mjs', ...(fs.existsSync(path.join(srcScripts, 'wbx-ui.mjs')) ? ['wbx-ui.mjs'] : [])]) {
     await fsp.copyFile(path.join(srcScripts, f), path.join(dstScripts, f));
     copiedScripts.push(f);
   }
@@ -355,6 +355,17 @@ export async function selfUninstall({ purge = false } = {}) {
     try { await fsp.rm(p, { recursive: true, force: true }); report.push(`已删除 ${label}（${p}）`); }
     catch { report.push(`跳过 ${label}（${p} 不存在或不可删）`); }
   };
+  // v5.2：先停守护进程、摘自启钩子（都在删桥本体之前，保证可执行文件还在时完成清理）
+  try {
+    const { stopUi } = await import('./wbx-daemon.mjs');
+    const r = await stopUi();
+    report.push(`${r.ok ? '已停止控制台守护进程' : '控制台守护进程清理'}：${r.message}`);
+  } catch (e) { report.push(`跳过守护进程停止（${e && e.message}）`); }
+  try {
+    const { removeAutostart } = await import('./wbx-daemon.mjs');
+    const r = await removeAutostart();
+    report.push(`${r.removed ? '已摘除' : '无需摘除'}自启钩子：${r.message}`);
+  } catch (e) { report.push(`跳过自启钩子摘除（${e && e.message}；如曾 --install-autostart 请手动检查 ~/.zcode/cli/config.json 的 hooks`); }
   await rm(GLOBAL_BRIDGE_DIR, '桥本体 ~/.zcode/wbx-bridge/');
   await rm(path.join(HOME, '.zcode', 'skills', 'wb-bridge'), '用户级 skill ~/.zcode/skills/wb-bridge/');
   try {
@@ -381,7 +392,7 @@ function collectBundleEntries() {
   // 根入口 stub（安装命令可写 node wbx.mjs self-install）
   add(`${root}wbx.mjs`, '#!/usr/bin/env node\n// 分发包根入口：转发到 scripts/wbx.mjs（真正入口在同目录 scripts/ 下）\nimport("./scripts/wbx.mjs");\n');
   // scripts/
-  for (const f of ['wbx.mjs', 'wbx-core.mjs', 'wbx-setup.mjs', 'wbx-ui.mjs']) {
+  for (const f of ['wbx.mjs', 'wbx-core.mjs', 'wbx-setup.mjs', 'wbx-daemon.mjs', 'wbx-ui.mjs']) {
     const p = path.join(SCRIPT_DIR, f);
     if (fs.existsSync(p)) add(`${root}scripts/${f}`, fs.readFileSync(p));
   }

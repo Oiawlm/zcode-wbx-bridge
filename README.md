@@ -38,6 +38,48 @@
 - 技术上：桥以无界面（headless）方式驱动 WorkBuddy 桌面版自带的 CodeBuddy CLI 与 Cline CLI，关闭其全部工具执行（cline 用 `--auto-approve false`，非终端环境下全部工具调用自动拒绝），只当纯文本模型端点用，因此不会碰你的文件系统和网络。worker 需要的代码上下文由编排器（你的 AI 助手）先读好、完整贴进提示词（「材料先行」）；超长材料走 stdin 通道自动传输，不受命令行长度限制。
 - **隔离边界**：桥的所有状态（凭证、配置、历史）只存在 `.wbx/`（全局形态为 `~/.wbx/`）；cline lane 的状态只存在 `~/.wbx/cline-home/` 隔离目录——**绝不读写你自己的 `~/.cline`**，也不写 `~/.workbuddy*`、不改系统环境变量。
 
+## 项目形态：这是什么、不是什么
+
+wbx 桥是给 ZCode 用的一个**临时工具**，只在 **Windows** 上跑，且**非官方**——不是 WorkBuddy、Cline 或 ZCode 官方出品。它由四层组成，职责分离：
+
+| 层 | 载体 | 职责 |
+| --- | --- | --- |
+| 技能层 | `.zcode/skills/wb-bridge/`（SKILL.md + PROMPTS.md） | 模型感知：让 ZCode 知道何时、如何分派 |
+| CLI 层 | `scripts/wbx.mjs` 等 5 个 Node 脚本 | 执行逻辑：分派、回退、落盘、控制台 |
+| 常驻指令层 | 用户级 `~/.zcode/AGENTS.md` 标记块 | 用户资产：跨项目、跨会话可见的调度规则 |
+| 自启钩子（v5.2 起可选） | `~/.zcode/cli/config.json` SessionStart 钩子 | 常驻可见性补充：新开 ZCode 会话自动拉起本地控制台 |
+
+> 电梯介绍：wbx 桥是 ZCode 技能加一个 Node 命令行：让 Agent 把调研、翻译、代码模块等自包含任务并行分派给三个外部模型通道（WorkBuddy 国际版/国内版、Cline），几乎免费。安装即复制技能目录加一条常驻指令，状态、历史、路由都有本地控制台可查。
+
+**为什么不是 MCP server**：桥不需要向 Agent 注入新的工具协议，worker 是纯文本进出，走 CLI 落盘就能回放，省掉一个常驻协议进程。
+
+**为什么不是 plugin**：plugin 适合把五类资源打包走 marketplace 分发，但项目还在迭代，保留「可读可改的目录」更实用；双轨分发等稳定后再谈。
+
+**为什么不是 slash command**：单条 md 只能显式触发，装不下分派准则和提示词模板库。
+
+## 本地控制台（v5.2 起常开可用）
+
+控制台用来查通道状态、翻历史、改路由、发起任务，三种用法挑一种就行。
+
+**手动后台启动**：跑一次即可常驻，命令是幂等的，重复执行不会起第二个进程。
+```bash
+wbx ui --detach
+```
+之后浏览器直接开 `http://127.0.0.1:7788` 就能用；查看运行状态用 `wbx ui --status`，停止用 `wbx ui --stop`。
+
+**装自启钩子**：让新开的 ZCode 会话自动拉起控制台，不用每次手敲（需先 `wbx self-install` 全局安装）。
+```bash
+wbx ui --install-autostart
+```
+注意口径：这是「ZCode 会话启动时拉起」，**不是**「随系统开机自启」（不装系统服务、不写注册表、不动环境变量）；不想要了 `wbx ui --remove-autostart` 一条命令摘除，配置逐键还原。
+
+**传统前台模式**：想看着日志就用这个，关掉终端/Ctrl+C 就停（v5.2 之前的老行为）。
+```bash
+wbx ui
+```
+
+**安全说明**：控制台只监听 `127.0.0.1`（本机回环），并校验请求的 Host 头与 Origin（防 DNS rebinding 和跨站请求）；守护模式的关闭端点带随机 token，只有本机的 wbx 命令能触发。日志在 `~/.wbx/logs/ui.log`。
+
 ## 适合 / 不适合
 
 **✅ 适合外包的任务**（相互独立、自包含、一轮能答完——全部输入可打包进提示词、输出可独立校验；v5 起单个也默认派）：
@@ -174,7 +216,8 @@ node .zcode\skills\wb-bridge\scripts\wbx.mjs config set cline-model "<免费模�
 | `wbx history --last 10` / `wbx history <jobId>` | 历史列表 / 回放某次任务的完整双向对话 |
 | `wbx config list` / `set <key> <value>` | 路由与并发配置（default-lane、disabled-lanes、parallel-per-lane、cline-* 等） |
 | `wbx models` | 探测模型可用性、列出账号下全部模型（`--as cline --free` 列当前免费模型组） |
-| `wbx ui` | 本地可视化控制台（浏览器打开 127.0.0.1:7788，Ctrl+C 即退） |
+| `wbx ui --detach` / `--stop` / `--status` | 常开可视化控制台（幂等后台守护，浏览器开 127.0.0.1:7788）/ 停止 / 查看三态 |
+| `wbx ui --install-autostart` | 装 ZCode 会话自启钩子（新开会话自动拉起控制台；`--remove-autostart` 摘除） |
 | `wbx self-install --adopt` | 全局安装：任何项目可用 + `/wbx` 斜杠命令 |
 | `wbx self-uninstall [--purge]` | 全局卸载一键还原（`--purge` 连凭证一起删） |
 | `wbx export-bundle` | 生成零凭证分发包 zip，可发给同事在其他机器安装 |
@@ -204,7 +247,7 @@ node .zcode\skills\wb-bridge\scripts\wbx.mjs config set cline-model "<免费模�
 无关联。这是个人开发的非官方工具：借 WorkBuddy 桌面版自带的 CLI、Cline CLI 与它们的免费模型策略工作，ZCode 只是它服务的 AI 编程助手之一。WorkBuddy 是腾讯系产品，智谱是 ZCode 的开发方，Cline 是独立产品，均未参与、不知晓本项目。
 
 **会动我电脑上的 WorkBuddy、Cline 或其他软件吗？**
-不会。桥对 WorkBuddy 桌面版只读（借用 CLI 与配置模板）；对你的 Cline（`~\.cline`）**从不读写**（桥自己的 cline 状态在 `~\.wbx\cline-home\` 隔离目录）；不写任何桌面版文件、不改系统环境变量、无常驻后台进程（`wbx ui` 是前台进程，关终端即退）。
+不会。桥对 WorkBuddy 桌面版只读（借用 CLI 与配置模板）；对你的 Cline（`~\.cline`）**从不读写**（桥自己的 cline 状态在 `~\.wbx\cline-home\` 隔离目录）；不写任何桌面版文件、不改系统环境变量。`wbx ui` 默认是前台进程（关终端即退）；v5.2 起可用 `--detach` 起后台守护、用 `--install-autostart` 让新开 ZCode 会话自动拉起——守护一条命令 `wbx ui --stop` 停止，钩子一条命令摘除还原，**不装系统服务、不写注册表、无系统级开机自启**。
 
 **免费额度用尽怎么办？**
 表现：任务失败、错误里出现 quota / 429 / 限流字样。处置顺序：降并发（`fanout --parallel 1`）稍后再试 → 换 lane（`ask --as <lane>` 或 `config set default-lane`，比如 ai 限流就改走 cn）→ 启用 cline lane 作第三算力 → 都不行就先停用外包，由主力模型自己做。免费策略随时可能变化，不再划算就卸载（[UNINSTALL.md](UNINSTALL.md)）。
@@ -234,6 +277,9 @@ v5 的调度模式：关键产物（关键代码模块/对外文案）用**同�
 | cline 报「model not found」或「Free model promotion ended」 | 该免费模型已被轮换下线 | `wbx models --as cline --free` 查当前清单，`config set cline-model "<新免费 id>"` |
 | doctor 提示「cline-model 不在当前免费组」 | 默认免费模型被轮换或设了计费 id | 按提示换当前免费组里的 id；确认免费：`models --as cline --probe` 看计价 |
 | cline 段显示「未安装（可选）」 | 没装 Cline CLI | 想用就 `npm install -g cline`；不用可无视（不影响 ai/cn） |
+| `ui --detach` 报「端口 7788 已被其他程序占用」 | 其他程序占了固定端口（fail fast，不换端口） | `netstat -ano \| findstr :7788` 查占用者；确属残留的旧 wbx 实例先 `wbx ui --stop`，别的程序就用 `--port` 换端口或让出 7788 |
+| `ui --status` 显示「残留（可自愈）」 | 守护进程崩溃/机器重启后状态文件还在 | 无需处理；下次 `--detach` 自动清理重起，或 `wbx ui --stop` 立即清理 |
+| 装了自启钩子但控制台没起来 | 全局形态脚本缺失/版本过旧 | 先 `wbx self-install` 同步；再看 `~/.wbx/logs/ui.log`；手动验证 `wbx ui --detach` |
 | 任务失败报凭证错误，但 doctor 正常，且重试无效 | 材料里贴了错误样例原文，模型输出复述后被桥误判 | 把材料里的错误关键字换成中性占位符（如 `AUTH_SESSION_INVALID`）再派（详见 PROMPTS.md 经验条目） |
 
 ## 卸载

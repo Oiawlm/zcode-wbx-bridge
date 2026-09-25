@@ -1,4 +1,4 @@
-# UNINSTALL — wbx 联动桥卸载手册（v5：三 lane；兼容 v2/v3/v4 全部形态）
+# UNINSTALL — wbx 联动桥卸载手册（v5：三 lane；兼容 v2/v3/v4/v5.1/v5.2 全部形态）
 
 > 原则：桥有两种形态——**项目形态**（一切都在项目文件夹内，删目录即净）与
 > **全局形态**（`wbx self-install` 之后：`~/.zcode/` 四处 + `~/.wbx/` 运行时）。
@@ -13,24 +13,34 @@
 > v5.1 说明：新增运行时缓存 `~/.wbx/cline-free-models.json`（免费模型清单最近一次成功拉取的
 > 缓存，无凭证；随 `~/.wbx/` 一起删或随手删）。**无新的用户级安装物**——`self-install` 写入位置
 > 与 v5 完全一致，本节其余内容不变。
+> v5.2 说明：新增两件可选运行物（都不是系统级安装物，不装服务/不写注册表/不动环境变量）——
+> ① 控制台守护进程（`wbx ui --detach` 拉起的后台 node 进程 + 状态文件 `~/.wbx/run/ui.json`
+> + 日志 `~/.wbx/logs/`）：`wbx ui --stop` 即停并清理；② ZCode 会话自启钩子
+> （`wbx ui --install-autostart` 写入 `~/.zcode/cli/config.json` 的 `hooks` 键）：
+> `wbx ui --remove-autostart` 摘除并逐键还原（实测与安装前逐字节一致）。
+> `self-uninstall` 已自动先做这两步再删文件。
 
 ## 〇、全局形态卸载（装过 self-install 才需要）
 
 ```bash
+# v5.2 装过控制台守护/自启钩子的先手动收尾（self-uninstall 也会自动做，手动做一遍更直观）：
+node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" ui --stop                # 停掉后台守护进程（未在跑则提示无状态文件）
+node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" ui --remove-autostart    # 摘除 ZCode 会话自启钩子（config.json 逐键还原）
 # 用全局桥自己卸载（或用项目桥，等价）：
-node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" self-uninstall          # 移除 ~/.zcode/ 四处，保留 ~/.wbx/ 凭证
-node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" self-uninstall --purge  # 连 ~/.wbx/（含两 lane 凭证 + cline/ 隔离数据）一起删
+node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" self-uninstall          # 移除 ~/.zcode/ 四处（含自动停守护+摘钩子），保留 ~/.wbx/ 凭证
+node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" self-uninstall --purge  # 连 ~/.wbx/（含两 lane 凭证 + cline/ 隔离数据 + run/logs）一起删
 ```
 
 移除清单（self-uninstall 自动处理并逐项报告）：
 
 | 位置 | 内容 |
 |---|---|
-| `~/.zcode/wbx-bridge/` | 桥本体（scripts 四模块 + SKILL.md + PROMPTS.md + examples + docs 副本） |
+| `~/.zcode/wbx-bridge/` | 桥本体（scripts 五模块（v5.2 起 +wbx-daemon.mjs） + SKILL.md + PROMPTS.md + examples + docs 副本） |
 | `~/.zcode/skills/wb-bridge/` | 用户级 skill（SKILL.md + PROMPTS.md，遮蔽同名项目级 skill） |
 | `~/.zcode/commands/wbx.md` | `/wbx` 斜杠命令 |
 | `~/.zcode/AGENTS.md` | `<!-- wbx:begin/end -->` 标记块（文件只剩它时连文件删除，其余内容保留） |
-| `~/.wbx/` | 运行时：sessions/product **凭证**、config.json、jobs/ 历史、**cline-home/（可选 lane 隔离数据与 OAuth 凭证）**、cline-free-models.json（免费清单缓存，无凭证）（仅 `--purge` 删） |
+| `~/.zcode/cli/config.json` | **仅当装过 `ui --install-autostart`**：`hooks` 键里我们追加的 SessionStart 钩子（`--remove-autostart` / `self-uninstall` 摘除；其余键从未被改写） |
+| `~/.wbx/` | 运行时：sessions/product **凭证**、config.json、jobs/ 历史、**cline-home/（可选 lane 隔离数据与 OAuth 凭证）**、cline-free-models.json（免费清单缓存，无凭证）、run/（ui.json 守护状态，含随机 token，无账号凭证）、logs/（ui.log 控制台日志）（仅 `--purge` 删；不 purge 时 run/logs 留着无害） |
 
 卸载后项目桥自动回到项目形态（运行时根变回 `<项目>/.wbx/`）。
 若全局桥已被手动删除，用下面项目桥路径运行亦可：`node "<项目>\.zcode\skills\wb-bridge\scripts\wbx.mjs" self-uninstall`。
@@ -93,8 +103,16 @@ v3 的 `self-uninstall` 会顺带做同一件事，无需重复执行。
 
 ## 四、UI 进程与分发产物
 
-- `wbx ui` 启动的是一个**前台 node 进程**（仅监听 127.0.0.1:7788）：关掉终端 / Ctrl+C 即退，
-  **无常驻服务、无开机自启、无后台进程**；卸载不需要任何额外操作。
+- `wbx ui`（不带参数）启动的是一个**前台 node 进程**（仅监听 127.0.0.1:7788）：关掉终端 /
+  Ctrl+C 即退，无需清理。
+- v5.2 起 `wbx ui --detach` 可拉起**后台守护进程**（常驻到你 `--stop` 或关机）：卸载前先跑
+  `wbx ui --stop`（HTTP 优雅关闭，进程退出、端口释放、状态文件 `~/.wbx/run/ui.json` 删除）；
+  若桥已删干净而进程还在（罕见），`netstat -ano | findstr :7788` 找 pid 后
+  `taskkill /PID <pid> /F`，再删 `~/.wbx/run/` 与 `~/.wbx/logs/` 即净。
+- v5.2 起 `wbx ui --install-autostart` 会在 `~/.zcode/cli/config.json` 追加 SessionStart 钩子：
+  卸载用 `wbx ui --remove-autostart`（只摘我们那条，其余键原样保留；实测与安装前逐字节一致）。
+  若桥已删而钩子还在，手动编辑该文件删掉 `hooks.events.SessionStart` 里 `args` 含
+  `wbx-bridge\scripts\wbx.mjs` 的那条；`hooks` 里再无别的内容时可整体删去 `hooks` 键。
 - `wbx export-bundle` 生成的 zip（默认在 `~/Desktop/wbx-bridge-v5-*.zip`）是**零凭证**分发包
   （导出时逐成员比对本地 accessToken 做过断言），可随手删除或外发。
 - 在别处用分包装过的机器：在那台机器上运行 `node scripts\wbx.mjs self-uninstall [--purge]`
@@ -124,7 +142,7 @@ v3 的 `self-uninstall` 会顺带做同一件事，无需重复执行。
 | WorkBuddy 安装目录（如 `%LOCALAPPDATA%\Programs\WorkBuddy*`） | 未修改 ✅ |
 | `%LOCALAPPDATA%\CodeBuddyExtension` | 未修改 ✅ |
 | 系统环境变量 / PATH | 从未改动（所有 env 只在 spawn 时注入）✅ |
-| ZCode 全局配置 `~/.zcode/cli/config.json` | 未改动 ✅ |
+| ZCode 全局配置 `~/.zcode/cli/config.json` | 未装过自启钩子时从未改动；装过则 `--remove-autostart`/`self-uninstall` 摘除后逐键还原（实测 diff 逐字节一致）✅ |
 | `~/.zcode/` 其他内容 | self-uninstall 后四目标位置零残留（实测），其余未触碰 ✅ |
 
 ## 七、只停用、不删除（临时停用）
