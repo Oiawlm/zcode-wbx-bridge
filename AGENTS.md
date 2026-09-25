@@ -37,6 +37,9 @@ token 收着用。**自包含**（v4 公理）：任务的全部输入（含代�
   `--stop`/`--status`、`--install-autostart`/`--remove-autostart` ZCode 会话自启钩子（对
   `~/.zcode/cli/config.json` 只做读-改-写合并）；UI 全面中文化 + 通道品牌命名（WorkBuddy AI（国际版）/
   WorkBuddy（国内版）/Cline CLI；展示层映射，数据层零改动）。
+- v5.3 新增：控制台界面产品化（只动展示层，行为零变化）——状态页首屏健康总览条（3 秒判总体
+  状态）+ 通道卡扫读/详情/排障三层 + 停用开关在通道卡 + 体检空态与分组结果；视觉 token 化；
+  全站 toast 替代弹窗。守护/安全面/API/config 键/术语表全部不动。
 - 使用前先 `doctor`；用法与 worker 提示词模板见 `.zcode/skills/wb-bridge/SKILL.md` 与
   `.zcode/skills/wb-bridge/PROMPTS.md`（v2 知识库：原则 12 条 + 模板 T1–T9 + 经验条目 E-xxx +
   决策速查表；ZCode 会话会自动命中该 Skill）。
