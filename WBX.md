@@ -1253,7 +1253,23 @@ wbx-core 的 API handler），由 D 族抽样（D1/D2/D4）+v8 ④b 同面断言
 自举记录）；README 控制台节一句指向 UI-SPEC.md；SKILL/AGENTS 无需改动（契约由 FROZEN+SPEC
 治理，不进常驻指令）。
 
-**6. 零回退与发布**：（Phase 4 执行后回填）
+**6. 零回退与发布**（2026-09-25 执行）：四门禁终版全绿——v6 **24/24** + v7 **27/27** + v8 **22/22** +
+contract **19/19**（含 tokens-sha 复算 `efeee49b0e` 一致）；全命令冒烟通过（doctor --no-probe/ask[stdin
+通道「好」]/fanout 1 任务 100%/models --as cline --free[免费组 5 个实时]/config get default-lane=auto/
+history/ui --status·--detach 幂等复用同 pid·--stop/export-bundle 430.7KB·12 文件·零凭证断言过[比对 9 个
+本地 accessToken 值均未出现；UI-SPEC.md 不进 bundle，符合 P1 裁决]）。发布：白名单逐文件 `git add`
+（6 个文件：wbx-ui.mjs[改名+哨兵]/wbx-core.mjs[仅 WBX_VERSION 一行]/UI-SPEC.md[**新增，白名单第 16
+项，共 18 项逐一对照一致**]/CHANGELOG.md/README.md/WBX.md；`.zcode/plans/` 非本项目产物未纳入）→
+staged 敏感审计（人名/账号、邮箱正则、`D:Download`、`C:UsersLenovo`、uin 脱敏、
+accessToken/JWT 值形态、本机 ui.json token 实值比对 `internal/v9-audit-token.mjs`）**零实际命中**
+（仅 WBX.md v5.2 章对审计模式本身的文档引用，v5.3 先例一致）→ commit `afa9084` → push → `gh api`
+远端 sha 与本地一致（afa9084978ba…）→ 拉回 diff 空（identical）→ 远端敏感复扫非 WBX.md 零命中 →
+tag **v5.4.0** → release
+（notes 引 CHANGELOG + 验证摘要 + 安装指引；附件 `wbx-bridge-v5.4.0-20260925.zip` 441010B）→
+`self-install` 幂等同步（全局入口 v5.4.0）→ **全局形态复测**：--stop 清场 → --detach 冷启动
+（pid 26972）→ 二次 --detach 复用同 pid → /__health v5.4.0 → 页面 200 含 v5.4 标记 3 处
+（tokens:begin/单条调用（ask）/批量并行（fanout））→ 自启钩子交付态（hooks.enabled=true；
+SessionStart 含 wbx.mjs ui --detach --no-open，matcher ^startup$，timeoutMs 5000）。
 
 ### 4. 自举记录（wbx 外包，材料先行，逐份校验后采用）
 
