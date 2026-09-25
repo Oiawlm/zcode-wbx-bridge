@@ -71,7 +71,7 @@ async function cmdLogin(opts) {
       const r = await runClineAuth();
       if (r.ok) {
         console.error(`[2/2] 完成：cline 凭证已落隔离目录 ${clineHomeDir()}（.cline/data/settings/providers.json，绝不在用户 ~/.cline）`);
-        console.error('验证：node wbx.mjs doctor（lane cline 段应全绿）。模型建议：wbx models --as cline --probe "<候选id>" 探测后 config set cline-model "<免费模型 id>"');
+        console.error('验证：node wbx.mjs doctor（lane cline 段应全绿）。模型建议：wbx models --as cline --probe "<vendor/model 候选id>" 探测后 config set cline-model "<模型 id>"');
       } else {
         die(`cline 登录未完成（auth 退出码 ${r.exitCode}，凭证未落盘）。常见原因：浏览器未在有效期内确认设备码。重新运行本命令即可`);
       }
