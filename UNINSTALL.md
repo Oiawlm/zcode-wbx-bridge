@@ -145,6 +145,7 @@ v3 的 `self-uninstall` 会顺带做同一件事，无需重复执行。
 | 系统环境变量 / PATH | 从未改动（所有 env 只在 spawn 时注入）✅ |
 | ZCode 全局配置 `~/.zcode/cli/config.json` | 未装过自启钩子时从未改动；装过则 `--remove-autostart`/`self-uninstall` 摘除后逐键还原（实测 diff 逐字节一致）✅ |
 | `~/.zcode/` 其他内容 | self-uninstall 后四目标位置零残留（实测），其余未触碰 ✅ |
+| 豆包桌面端（`D:\App\Doubao\`、`%LOCALAPPDATA%\Doubao\`） | v12 只读探测 + 带参启动复用官方调试开关，未修改任何应用文件与用户数据 ✅ |
 
 ## 七、只停用、不删除（临时停用）
 
@@ -155,3 +156,19 @@ v3 的 `self-uninstall` 会顺带做同一件事，无需重复执行。
   doctor 标注「已禁用」）；或删除对应 lane 的凭证文件（doctor 显示 [SKIP]）；
   cline lane 也可直接 `npm uninstall -g cline`（未装=WARN，不影响 exit 0）。
 - wbx 无任何常驻进程/服务/定时任务（`wbx ui` 是前台进程，关终端即退），不删也不耗资源。
+
+## 八、v12 豆包桥接工具（tools/doubao-bridge/，2026-09-30 新增安装物）
+
+v12 交付的豆包桌面端驱动工具（`launch.ps1` / `doubao.mjs` / `anchors.json` / `README.md`），
+唯一新增安装物是本目录内的 npm 包：
+
+| 位置 | 内容 | 清理命令 |
+|---|---|---|
+| `tools\doubao-bridge\node_modules\playwright-core` | npm 包（`npm install playwright-core`，**未下载任何浏览器二进制**——只用 connectOverCDP 连既有客户端） | `cd tools\doubao-bridge && npm uninstall playwright-core` 或直接删 `tools\doubao-bridge\` 整目录 |
+| `tools\doubao-bridge\package.json` + `package-lock.json` | npm 清单（记录该依赖） | 随目录一起删 |
+
+- 完全卸载 = 删除 `tools\doubao-bridge\` 整个目录（四件套 + node_modules 一并移除），零残留。
+- 该工具未装任何全局包、未改注册表/系统环境变量/PATH、未装 Windows 服务、无常驻进程；
+  调试端口 9225 只在 `launch.ps1` 启动的豆包进程存活期间监听，正常重启豆包即消失。
+- 豆包桌面端本体（`D:\App\Doubao\`）未修改任何文件——只以 `--remote-debugging-port` 启动参数
+  复用官方调试开关，正常重启（无参）即恢复出厂行为。

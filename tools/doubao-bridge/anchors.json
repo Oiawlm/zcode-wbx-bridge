@@ -1,0 +1,73 @@
+{
+  "newWorkTaskButton": [
+    "[data-testid=create_office_task_button]",
+    "nav >> text=新工作任务"
+  ],
+  "workHomePage": [
+    "[data-testid=flow_chat_guidance_page]",
+    "[data-testid=chat_input_action_mode]:has-text(\"本地电脑\")"
+  ],
+  "workTabButton": [
+    "#conversation-mode-switch button:has-text(\"工作\")",
+    "button:has-text(\"工作\")"
+  ],
+  "modeButton": [
+    "[data-testid=chat_input_action_mode]",
+    "#chat_input button:has-text(\"本地电脑\")"
+  ],
+  "modelButton": [
+    "[data-testid=chat_input_action_model]",
+    "#chat_input button[aria-haspopup=\"menu\"]"
+  ],
+  "modelMenuContainer": [
+    "[data-radix-popper-content-wrapper] [role=menu]",
+    "[role=menu]"
+  ],
+  "menuItemSelector": [
+    "[role=menuitem], [role=menuitemradio], [role=menuitemcheckbox]"
+  ],
+  "modelItems": {
+    "auto": "自动",
+    "lite": "豆包 2.1 Lite",
+    "turbo": "豆包 2.1 Turbo",
+    "pro": "豆包 2.1 Pro"
+  },
+  "reasoningMenuItem": [
+    "[role=menuitem]:has-text(\"推理强度\")",
+    "[data-radix-popper-content-wrapper] [role=menuitem]:has-text(\"推理强度\")"
+  ],
+  "reasoningLevels": {
+    "低": "低",
+    "中": "中",
+    "高": "高"
+  },
+  "editor": [
+    ".tiptap.ProseMirror",
+    "[data-testid=chat_input_input] .tiptap"
+  ],
+  "sendButton": [
+    "[data-testid=chat_input_send_button]",
+    "#chat_input button:near(.tiptap) >> visible=true"
+  ],
+  "messageList": [
+    "[data-testid=message-list]",
+    "[data-testid=message_list]",
+    "[class*=\"message-list\"]"
+  ],
+  "sentMessage": [
+    "[data-testid=send_message]",
+    "[data-testid=send-message]"
+  ],
+  "receivedMessage": [
+    "[data-testid=receive_message]",
+    "[data-testid=receive-message]"
+  ],
+  "messageTextContent": [
+    "[data-testid=message_text_content]",
+    "[data-testid=message-text-content]"
+  ],
+  "settingsEntry": [
+    "[data-testid=sidebar_footer_setting_entry]",
+    "[data-testid=sidebar_footer_settings_entry]"
+  ]
+}
