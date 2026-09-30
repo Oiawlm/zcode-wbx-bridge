@@ -8,6 +8,7 @@
  * API（全 JSON）：
  *   GET  /api/status                 概览（lane 状态/到期倒计时/配置/形态）——不含任何凭证
  *   GET  /api/doctor?probe=1         体检（probe=1 含模型探测，较慢）
+ *   GET  /api/doubao                 豆包桥工具状态（Doubao.exe 进程态 + 9225 CDP 探测；v12.1）
  *   GET  /api/history                job 列表（含旧 .wbx/tasks/ 兼容条目）
  *   GET  /api/job/:id[?brief=1]      job 详情（brief 不含 prompt/回复正文，用于轮询）
  *   POST /api/ask                    {prompt, lane, model, effort, timeout, caps} -> {jobId}（caps=L0|L1|L2，v6）
@@ -26,6 +27,7 @@
  */
 
 import http from 'node:http';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -365,6 +367,47 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
     <div class="card__hd"><span class="card__title">体检</span><span class="card__sub">doctor</span></div>
     <div class="card__bd" id="doctor-zone"></div>
   </div>
+  <div class="card" id="doubao-card">
+    <div class="card__hd"><span class="card__title">豆包桥工具 · 工作任务模式</span><span class="badge neutral" id="doubao-badge">检测中…</span><span class="card__sub">tools/doubao-bridge</span></div>
+    <div class="card__bd">
+      <div class="kv">
+        <span class="k">客户端进程</span><span class="v" id="doubao-proc">检测中…</span>
+        <span class="k">调试口 9225</span><span class="v" id="doubao-cdp">检测中…</span>
+      </div>
+      <div class="copyline"><span class="t">node doubao.mjs ask "任务文本"</span><button class="copybtn" data-copy='node doubao.mjs ask "任务文本"'>复制</button></div>
+      <p class="hint">cd 到本仓库 tools/doubao-bridge/ 目录后执行；一条命令=新工作任务→显式配 Pro+推理「高」→发送→取回结果。</p>
+      <details>
+        <summary>使用说明与排障</summary>
+        <div class="dbd">
+          <p class="hint">诚实声明（三处必读）：① 这是临时工具——依托豆包客户端当前 UI 结构（data-testid 锚点）工作，客户端升级随时可能失效；② Windows-only——依赖 Windows 进程模型、netstat 与 PowerShell，未在其他平台验证；③ 非官方——豆包官方未公开桌面端编程接口，本工具走 Chromium 官方调试开关（CDP）驱动已登录客户端，与字节跳动无关，不属于任何受支持的集成方式。</p>
+          <p class="hint">前置条件：Windows 10/11 + Node.js ≥ 18（playwright-core 已在本目录 npm install，无需下载浏览器）；豆包桌面端已登录（登录态由你在豆包 GUI 内自理，本工具不做任何凭证自动化，脚本与文档零凭证）；豆包需以调试端口运行。工具位置=本仓库 tools/doubao-bridge/。</p>
+          <p class="hint">启动方式（检测到豆包已运行时，需 -Force 才会结束它们；请先保存豆包里未发送的草稿）：</p>
+          <div class="copyline"><span class="t">powershell -ExecutionPolicy Bypass -File launch.ps1 -Force</span><button class="copybtn" data-copy='powershell -ExecutionPolicy Bypass -File launch.ps1 -Force'>复制</button></div>
+          <div class="warn-box">调试口开放期间=本地攻击面：本机任意进程可经 9225 接管已登录客户端；launch.ps1 已校验只绑 127.0.0.1。用完正常退出豆包、再普通启动，即恢复无调试态。</div>
+          <p class="hint">分步命令速查（先 cd 到本仓库 tools/doubao-bridge/ 目录后执行）：</p>
+          <div class="copyline"><span class="t">node doubao.mjs status</span><button class="copybtn" data-copy='node doubao.mjs status'>复制</button></div>
+          <p class="hint">status — CDP 是否可达、当前模型/推理档/环境。</p>
+          <div class="copyline"><span class="t">node doubao.mjs new-task</span><button class="copybtn" data-copy='node doubao.mjs new-task'>复制</button></div>
+          <p class="hint">new-task — 新建工作任务（注意：新会话会把推理档重置回「中」）。</p>
+          <div class="copyline"><span class="t">node doubao.mjs configure</span><button class="copybtn" data-copy='node doubao.mjs configure'>复制</button></div>
+          <p class="hint">configure — 显式选「豆包 2.1 Pro」+「高」（可 --model / --reasoning 覆盖）。</p>
+          <div class="copyline"><span class="t">node doubao.mjs send "任务文本"</span><button class="copybtn" data-copy='node doubao.mjs send "任务文本"'>复制</button></div>
+          <p class="hint">send — 发送（发送前自动重验配置，不符则先重配）。</p>
+          <div class="copyline"><span class="t">node doubao.mjs read</span><button class="copybtn" data-copy='node doubao.mjs read'>复制</button></div>
+          <p class="hint">read — 轮询取回最新回复（--wait-ms / --poll-ms 可调）。</p>
+          <p class="hint">输出与退出码：所有命令输出单行 JSON；退出码 0 成功 / 2 锚点失配（立即停止，不硬重试）/ 3 CDP 不可达 / 4 配置校验失败 / 5 读结果超时 / 1 其他。</p>
+          <p class="hint">已知坑（实测）：</p>
+          <ul>
+            <li class="hint">① 新会话可能重置推理档：点「新工作任务」后推理档可能从「高」跳回「中」（实测不稳定复现，模型档 Pro 一般保留）——所以 send/ask 在发送前都会重读状态栏并按需重配；直接手工操作时也请发送前瞄一眼状态栏。</li>
+            <li class="hint">② 侧栏收起时：侧栏里的「新工作任务」按钮在视口外不可点——doubao.mjs 会自动回退到应用内置快捷键 Ctrl+N，并校验落入工作模式首页。</li>
+            <li class="hint">③ 选择器脆弱：锚点均集中在 anchors.json（每锚点 ≥2 候选），豆包升级改 UI 即可能失配；全候选失配时 CLI 立即以退出码 2 停止，绝不盲目重试——按 README 锚点修复流程重跑勘探，更新 anchors.json 后再跑一次 status 与无害小任务验证。</li>
+            <li class="hint">④ 单行道：工作模式与普通对话在会话中途不可互切（切了上下文作废）——工具只用「新工作任务」开新会话，不动你既有会话。</li>
+          </ul>
+          <p class="hint">工作模式耗额度明显快于普通对话（官方口径）。</p>
+        </div>
+      </details>
+    </div>
+  </div>
 </section>
 
 <section id="tab-run">
@@ -589,7 +632,7 @@ function activateTab(name){
   document.querySelectorAll('nav button').forEach(function(b){b.classList.toggle('active',b.dataset.tab===name)});
   document.querySelectorAll('main section').forEach(function(s){s.classList.toggle('on',s.id==='tab-'+name)});
   if(name==='history')loadHistory();
-  if(name==='status')loadStatus();
+  if(name==='status'){loadStatus();loadDoubao();}
 }
 document.querySelector('nav').addEventListener('click',function(e){
   const b=e.target.closest('button');if(b&&b.dataset.tab)activateTab(b.dataset.tab);
@@ -652,6 +695,48 @@ async function loadStatus(){
     $('status-error').style.display='block';
     $('status-retry').onclick=loadStatus;
     $('hdr-meta').textContent='加载失败';
+  }
+}
+// ---------- 豆包桥工具卡（v12.1；运行状态来自 /api/doubao，失败静默降级不 toast） ----------
+async function loadDoubao(){
+  try{
+    const d=await api('GET','/api/doubao');
+    renderDoubao(d);
+  }catch(e){
+    // 降级：不弹 toast，控制台静默记一条；徽标 absent「状态未知」，动态槽写明失败原因（esc 过）
+    const why='状态未知：'+((e&&e.message)?e.message:String(e));
+    const bd=$('doubao-badge');
+    if(bd){bd.className='badge absent';bd.textContent='状态未知';}
+    const pr=$('doubao-proc');
+    const cd=$('doubao-cdp');
+    if(pr)pr.innerHTML=esc(why);
+    if(cd)cd.innerHTML=esc(why);
+    if(window.console&&console.warn)console.warn('doubao: GET /api/doubao 失败 — '+why);
+  }
+}
+function renderDoubao(d){
+  d=d||{};
+  const win=(d.platform==='win32');
+  const running=(d.process===true);
+  const online=(d.cdp===true);
+  const browser=(typeof d.browser==='string')?d.browser.trim():'';
+  const bd=$('doubao-badge');
+  const pr=$('doubao-proc');
+  const cd=$('doubao-cdp');
+  // 徽标四态：非 win32 → absent；cdp → ok；进程在但没开调试口 → neutral；进程不在 → absent
+  let cls='badge absent', label='豆包未运行';
+  if(!win){cls='badge absent';label='仅 Windows';}
+  else if(online){cls='badge ok';label='调试口在线';}
+  else if(running){cls='badge neutral';label='未开调试口';}
+  if(bd){bd.className=cls;bd.textContent=label;}
+  if(pr){
+    if(!win){pr.textContent='非 Windows 平台，未探测';}
+    else{pr.textContent=running?'Doubao.exe 运行中':'未检测到 Doubao.exe';}
+  }
+  if(cd){
+    if(!win){cd.textContent='非 Windows 平台，未探测';}
+    else if(online){cd.innerHTML='可达 · 127.0.0.1:9225'+(browser?(' · <span class="mono">'+esc(browser)+'</span>'):'');}
+    else{cd.textContent=running?'127.0.0.1:9225 无响应':'127.0.0.1:9225 不可达';}
   }
 }
 function renderOvw(s){
@@ -1097,6 +1182,7 @@ $('login-cn').onclick=function(){startLoginUi('cn')};
 // ---------- 启动 ----------
 initAria();
 loadStatus();
+loadDoubao();
 renderDoctorEmpty();
 addFanRow('task-1','');
 addFanRow('task-2','');
@@ -1157,6 +1243,49 @@ function briefJob(j) {
     ok: j.ok, successRate: j.successRate, dir: j.dir,
     error: j.manifest?.error || null,
   };
+}
+
+// ---------- 豆包桥工具状态（v12.1；只读探测，不碰豆包进程与凭证，任何失败降级不抛错） ----------
+function doubaoStatus() {
+  const platform = process.platform;
+  // 非 Windows：不做任何探测（README 诚实声明②：Windows-only，未在其他平台验证）
+  if (platform !== 'win32') {
+    return Promise.resolve({ platform, process: false, cdp: false });
+  }
+  // 1) 进程探测：tasklist 过滤 Doubao.exe；超时 3s 封顶保护（实测毫秒级），异常一律降级 false
+  let running = false;
+  try {
+    const r = spawnSync('tasklist', ['/FI', 'IMAGENAME eq Doubao.exe', '/NH'], { timeout: 3000, encoding: 'utf8', windowsHide: true });
+    if (r && !r.error && r.stdout) running = /doubao\.exe/i.test(String(r.stdout));
+  } catch { running = false; }
+  // 2) CDP 探测：GET /json/version，900ms 封顶；200+合法 JSON+非空 Browser 才算在线
+  //    （9225 被其他进程占用时因 Browser 校验不过判 false）；总耗时 <1.5s
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    const down = () => finish({ platform, process: running, cdp: false });
+    let req = null;
+    try {
+      req = http.get('http://127.0.0.1:9225/json/version', (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => {
+          body += c;
+          if (body.length > 65536) { try { req.destroy(); } catch { /* 尽力而为 */ } down(); }
+        });
+        res.on('end', () => {
+          if (res.statusCode !== 200) return down();
+          let j = null;
+          try { j = JSON.parse(body); } catch { j = null; }
+          if (j && typeof j.Browser === 'string' && j.Browser.trim() !== '') finish({ platform, process: running, cdp: true, browser: j.Browser });
+          else down();
+        });
+        res.on('error', down);
+      });
+    } catch { down(); return; }
+    req.on('error', down);
+    req.setTimeout(900, () => { try { req.destroy(); } catch { /* 尽力而为 */ } down(); });
+  });
 }
 
 async function handler(req, res) {
@@ -1223,6 +1352,11 @@ async function handler(req, res) {
     if (req.method === 'GET' && p === '/api/doctor') {
       const probe = u.searchParams.get('probe') === '1';
       const d = await doctorStatus({ probe, onLine: null });
+      sendJson(res, 200, d);
+      return;
+    }
+    if (req.method === 'GET' && p === '/api/doubao') {
+      const d = await doubaoStatus();
       sendJson(res, 200, d);
       return;
     }

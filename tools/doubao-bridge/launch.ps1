@@ -206,6 +206,23 @@ Write-Note "参数: Port=$Port, DoubaoPath=$DoubaoPath, Force=$([bool]$Force)"
 
 # 步骤 0：先校验可执行文件。放在杀进程之前——否则"先杀后失败"会白毁掉用户正在编辑的会话
 if (-not (Test-Path -LiteralPath $DoubaoPath -PathType Leaf)) {
+    # 未显式指定 -DoubaoPath 时，对常见安装位置做一次自动探测；显式指定的路径不存在则直接报错
+    # （静默改道可能启动另一个豆包副本，不可接受）
+    if (-not $PSBoundParameters.ContainsKey('DoubaoPath')) {
+        $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Doubao\app\Doubao.exe'),
+            (Join-Path $env:LOCALAPPDATA 'Programs\Doubao\Doubao.exe'),
+            (Join-Path $env:ProgramFiles 'Doubao\Doubao.exe'),
+            (Join-Path ${env:ProgramFiles(x86)} 'Doubao\Doubao.exe')
+        )
+        $found = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+        if ($found) {
+            Write-Note "默认路径不存在，已自动探测到豆包: $found（可用 -DoubaoPath 固定指定）"
+            $DoubaoPath = $found
+        }
+    }
+}
+if (-not (Test-Path -LiteralPath $DoubaoPath -PathType Leaf)) {
     Write-Failure -Code 3 -Reason "找不到豆包可执行文件: $DoubaoPath" -Hint '用 -DoubaoPath 指定实际安装路径，例如 -DoubaoPath "D:\App\Doubao\app\Doubao.exe"'
 }
 

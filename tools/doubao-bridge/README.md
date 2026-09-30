@@ -18,7 +18,9 @@
 - **豆包桌面端已登录**（登录态由用户在 GUI 内自理，本工具不做任何凭证自动化，脚本与文档零凭证）。
 - 豆包正以调试端口运行。两种启动方式：
   - `powershell -ExecutionPolicy Bypass -File launch.ps1 -Force`（检测到已运行实例时需 `-Force` 才会
-    结束它们；先保存豆包里未发送的草稿）；
+    结束它们；先保存豆包里未发送的草稿）。未指定 `-DoubaoPath` 且默认路径不存在时，会自动探测
+    常见安装位置（`%LOCALAPPDATA%\Doubao`、`%LOCALAPPDATA%\Programs\Doubao`、`Program Files`）；
+    也可随时 `-DoubaoPath` 显式指定；
   - 或手动：完全退出豆包（含托盘）后
     `& "D:\App\Doubao\app\Doubao.exe" --remote-debugging-port=9225`。
 - 调试端口是**本地攻击面**：开放期间本机任意进程可经 9225 接管已登录客户端。launch.ps1 已校验
