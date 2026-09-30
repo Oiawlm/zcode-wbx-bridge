@@ -1386,3 +1386,43 @@ L1 工具白名单：`WebSearch,WebFetch,Read,Glob,Grep`。如实声明：WebFet
   （tr.job-inline / ask-caps / L2（未交付））在服务；`doctor` 全绿（v6.0.0，caps 步：
   default-caps=L0、L2 总闸=off、能力面 L1=仅 ai/cn）；L2 总闸复位确认 `caps-l2-enabled=false`、
   `default-caps="L0"`（出厂态）。
+
+## v6.1 章：桥报错观测修复（P1+P3）· 失败 attempt 全量落盘 + 错误 brief 首尾各半
+
+### 1. 背景与第一性定案
+
+- 观测盲区（v11.1 定因，RESEARCH-V11 §2.6）：失败分类 unparseable/cli-error 的错误文本取
+  combined（stdout+'\n'+stderr）头部 320 字符，而 combined 常以约 300 字符 Git Bash 环境横幅
+  （stderr 常驻噪声）开头——真实错误多在尾部被吞；且失败 attempt 的完整输出不落盘，
+  「stdout 空 vs 仅含横幅」无法判别。授权=用户 2026-09-29 裁决「P1+P3，P2 不做」。
+- 方案（P1，只修观测、零行为变更）：新增 `errorBrief()`——unparseable/cli-error 的错误 brief
+  超 320 字符改「首 160+尾 160+`…(省略 N 字符)…`」；失败返回值新增 `combined` 字段（只增不改名），
+  runAskJob/runFanoutJob 经 `dumpFailedAttempt` 把每次失败 attempt 的完整 combined 落盘
+  `<taskId>.attempt<N>.output.txt` 并在错误消息尾部追加文件指针；成功路径解析/落盘/exit 语义/
+  既有字段/cline lane 解析路径零触碰。改动仅 wbx-core.mjs 单文件 +44/−10。
+
+### 2. P3 复现（直接兑现 P1 价值，翻案 v11.1 根因）
+
+glm-prompting 原词 L1 单发（job `20260929-224047-4hz`）：ai/cn 双 lane 同因失败，全量落盘实证
+**stdout 空、stderr=横幅+`Max turns (8) exceeded`**（combined 恰 412 字符——旧 brief 头部 320
+恰好全是横幅，真因被截掉）。结论：L1 `--max-turns 8` 耗尽后 CLI exit 0 无 result JSON 是
+unparseable 的主因（v11.1 假设⑤由部分证伪翻转为证实），9/28-9/29 失败潮形态一致；缓解方向
+（回合上限行为变更）属下轮提案。归档 `internal/v11.2-repro-output.txt`（gitignored）。
+
+### 3. 质量门禁与发布
+
+- 回归：新增 `internal/v11.2-regression.mjs` 25/25（WBX_HOME 沙箱 + WBX_CLI 假 CLI 全离线：
+  errorBrief 首尾各半/空输出判别/attempt 落盘与指针/history 回放可见/成功路径零变化）；
+  v6-regression 与改动前基线结果完全一致（22 PASS/2 FAIL，两项失败为 cline 未装时 doctor
+  跳过免费模型校验的既有环境依赖项，非本版引入）。
+- T7 评审（wbx 外包，材料=契约+diff）：0 阻断 5 建议——接受 2（限流判定先于落盘防指针文本
+  污染；落盘 try/catch 防诊断失败中断主流程）已修复验；驳回 3 有据。记录
+  `internal/v11.2-t7-review.txt`（gitignored）。
+- 发布（2026-09-29）：版本常量/CHANGELOG/WBX.md 三处 6.1.0 一致；`self-install` 幂等同步全局
+  形态后 doctor 绿；FROZEN 语义冻结项零触碰；白名单审计零命中。git 不可用（本机无 git in PATH）
+  → commit/tag/push 列待办，发布物已落盘（弹性路径，不阻塞核心交付）。UNINSTALL.md 零改动
+  （attempt 输出文件属 job 目录正常产物，无新增安装物）。
+- 附带实测发现（下轮提案候选，本轮零改）：isAuthError 对回显提示词假阳性——提示词含
+  "Authentication required" 字样时（如评审材料的 diff 上下文）ai lane 被误分类 auth；
+  评审正文经 P1 全量转录找回（job `20260929-222658-wk6`）。
+

@@ -2,6 +2,22 @@
 
 本文件记录 zcode-wbx-bridge 的版本变更，格式参考 Keep a Changelog。
 
+## 6.1.0 - 2026-09-29
+
+新增（桥报错观测修复 P1+P3：授权=用户 2026-09-29 裁决「授权 P1+P3，P2 不做」；改动仅 `wbx-core.mjs` 单文件 +44/−10，成功路径解析/落盘/exit 语义/既有字段零改动，cline lane 解析路径零触碰）
+
+### Added
+- **失败 attempt 完整输出落盘**：任一 attempt 失败（含同 lane 重试与跨 lane 回退的每次失败）时，该次完整 combined（stdout+stderr）写入 job 目录 `<taskId>.attempt<N>.output.txt`；成功路径零新增落盘。失败返回值新增 `combined` 字段（只增不改名），落盘与指针由 runAskJob/runFanoutJob 统一经 `dumpFailedAttempt` 执行——落盘写失败仅告警不中断（诊断绝不影响主流程）；无进程输出的失败（caps 拒绝、未安装等）不落盘。
+- **错误消息尾部文件指针**：`（完整输出已存 <jobDir>/<taskId>.attempt<N>.output.txt）`，`wbx history` 回放者可直接定位（history 全文打印错误，指针可见）。
+
+### Changed
+- **unparseable/cli-error 的诊断 brief 改首尾各半**：combined 超 320 字符时由「头部 320 截断」改为「首 160 + 尾 160 + `…(省略 N 字符)…`」（新增 `errorBrief()`，仅用于该两类失败错误文本；既有 `brief()` 行为与其余展示路径零回退）。背景：combined 常以约 300 字符环境横幅开头，真实错误在尾部——旧截断在实测失败形态（combined 412 字符）下恰好把真因 `Max turns (8) exceeded` 整个吞掉。
+
+### 实证与回归
+- **P3 复现直接翻案**：glm-prompting 原词 L1 单发 ai/cn 双 lane 同因失败，P1 全量落盘实证 stdout 空、stderr=横幅+`Max turns (8) exceeded`——v11.1 假设⑤（L1 `--max-turns 8` 耗尽静默失败）由「部分证伪」翻转为**证实主因**；9/28-9/29 失败潮形态一致。归档 `internal/v11.2-repro-output.txt`（gitignored）。
+- 回归：新增 `internal/v11.2-regression.mjs` 25/25 全绿（errorBrief 首尾各半/空输出判别/attempt 落盘与指针/history 回放/成功路径零变化——WBX_HOME 沙箱 + WBX_CLI 假 CLI 全离线）；既有 v6-regression 与改动前基线结果完全一致（22 PASS/2 FAIL，两项失败为 cline 未装时 doctor 跳过免费模型校验的既有环境依赖项，非本版引入）。
+- T7 评审（wbx 外包，材料=契约+diff）：0 阻断 5 建议——接受 2（限流判定先于落盘防指针文本污染；落盘 try/catch 防诊断失败中断主流程）已修并复验全绿；驳回 3 有据。记录 `internal/v11.2-t7-review.txt`（gitignored）。
+
 ## 6.0.0 - 2026-09-25
 
 新增（两大特性：**caps 能力分级**（L0/L1/L2 显式契约）+ **历史页行内详情**；授权=用户 GOAL-V10 原话「我们要尽可能最大限度地发挥它们的性能，只要有需要，就可以让它们使用工具、联网」+「我点击一个条目，希望它的详细内容直接出现在条目下方，而不是要翻到界面最底下」。改动面：`wbx-core.mjs`（caps 管道+config 键+doctor 步）、`wbx.mjs`（--caps 参数+轨迹打印）、`wbx-ui.mjs`（行内详情+caps 三件）、[PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md) v3、[SKILL.md](.zcode/skills/wb-bridge/SKILL.md)、[AGENTS.md](AGENTS.md)、[UI-SPEC.md](UI-SPEC.md) v1.1.0、[WBX.md](WBX.md) v6.0 章、[README.md](README.md)、[UNINSTALL.md](UNINSTALL.md)。L0 路径参数序列字节级不变）

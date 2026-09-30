@@ -23,7 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '6.0.0';
+export const WBX_VERSION = '6.1.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -349,6 +349,17 @@ export function sanitizeId(s) {
 export function brief(s, n = 320) {
   const t = redact(ansiStrip(String(s || '')).trim());
   return t.length > n ? t.slice(0, n) + ' …(截断)' : t;
+}
+
+// v6.1 P1：失败诊断 brief 变体——超长时改「首 n/2 + 尾 n/2」各半，中段以省略标记连接。
+// 背景（v11 定因）：unparseable/cli-error 的 combined 常以环境横幅开头，头部截断会吞掉
+// 尾部的真实错误信息。仅用于错误文本展示；完整输出由失败 attempt 落盘承接（见 dumpFailedAttempt）。
+export function errorBrief(s, n = 320) {
+  const t = redact(ansiStrip(String(s || '')).trim());
+  if (t.length <= n) return t;
+  const half = Math.floor(n / 2);
+  const omitted = t.length - half * 2;
+  return t.slice(0, half) + `…(省略 ${omitted} 字符)…` + t.slice(t.length - half);
 }
 
 export function isAuthError(text) {
@@ -883,21 +894,24 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000,
   const combined = stdout + '\n' + stderr;
 
   if (r.timedOut) {
-    return { ok: false, kind: 'timeout', error: `执行超时（> ${Math.round(timeoutMs / 1000)}s）`, durationMs };
+    return { ok: false, kind: 'timeout', error: `执行超时（> ${Math.round(timeoutMs / 1000)}s）`, durationMs, combined };
   }
   if (isAuthError(combined)) {
-    return { ok: false, kind: 'auth', error: '未登录或凭证已过期（Authentication required）', durationMs, hint: 'login' };
+    return { ok: false, kind: 'auth', error: '未登录或凭证已过期（Authentication required）', durationMs, hint: 'login', combined };
   }
 
   const parsedFull = extractJson(stdout);
   const j = normalizeResult(parsedFull);
   if (!j) {
+    // v6.1 P1：unparseable/cli-error 的诊断 brief 改首尾各半（横幅常驻头部、真实错误多在尾部），
+    // 完整 combined 随失败结果返回，由编排器落盘（成功路径零变化）
     return {
       ok: false,
       kind: r.code === 0 ? 'unparseable' : 'cli-error',
-      error: brief(combined) || `exit=${r.code}，无输出`,
+      error: errorBrief(combined) || `exit=${r.code}，无输出`,
       durationMs,
       hint: isRateLimit(combined) ? 'ratelimit' : undefined,
+      combined,
     };
   }
 
@@ -905,7 +919,7 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000,
     (typeof j.subtype === 'string' && j.subtype.startsWith('error'));
   if (isErr) {
     const msg = String(j.result ?? j.error ?? j.message ?? JSON.stringify(j).slice(0, 300));
-    return { ok: false, kind: 'result-error', error: brief(msg), durationMs, hint: isRateLimit(msg) ? 'ratelimit' : undefined };
+    return { ok: false, kind: 'result-error', error: brief(msg), durationMs, hint: isRateLimit(msg) ? 'ratelimit' : undefined, combined };
   }
 
   let text = j.result ?? j.text ?? j.content ?? j.message;
@@ -1034,16 +1048,16 @@ export async function askOnceCline({ prompt, model = null, timeoutMs = 300000, c
   const stderr = ansiStrip(r.stderr || '');
   const parsed = parseClineNdjson(stdout);
   const rawStream = stdout;   // 原始 NDJSON 全文，供 job 目录落盘回放
+  const combined = stdout + '\n' + stderr;   // v6.1 P1：失败 attempt 全量输出（随失败结果返回，编排器落盘）
 
   if (r.timedOut) {
-    return { ok: false, kind: 'timeout', error: `执行超时（> ${Math.round(timeoutMs / 1000)}s，桥侧兜底 kill）`, durationMs, rawStream };
+    return { ok: false, kind: 'timeout', error: `执行超时（> ${Math.round(timeoutMs / 1000)}s，桥侧兜底 kill）`, durationMs, rawStream, combined };
   }
   if (r.code === -1 && !parsed.events) {
-    return { ok: false, kind: 'cli-error', error: `cline 进程启动/执行失败：${brief(stderr || '无输出')}`, durationMs, rawStream, hint: 'not-installed' };
+    return { ok: false, kind: 'cli-error', error: `cline 进程启动/执行失败：${brief(stderr || '无输出')}`, durationMs, rawStream, hint: 'not-installed', combined };
   }
-  const combined = stdout + '\n' + stderr;
   if (isAuthError(parsed.error || '') || isAuthError(combined)) {
-    return { ok: false, kind: 'auth', error: 'cline 凭证无效或未登录（Unauthorized）', durationMs, rawStream, hint: 'login' };
+    return { ok: false, kind: 'auth', error: 'cline 凭证无效或未登录（Unauthorized）', durationMs, rawStream, hint: 'login', combined };
   }
   const failed = r.code !== 0 || parsed.error !== null || parsed.finishReason === 'error' || parsed.text === null;
   if (failed) {
@@ -1060,7 +1074,7 @@ export async function askOnceCline({ prompt, model = null, timeoutMs = 300000, c
       ok: false,
       kind: r.code === 0 && parsed.hasRunResult ? 'result-error' : 'cli-error',
       error: brief(msg),
-      durationMs, rawStream,
+      durationMs, rawStream, combined,
       hint, ...(resetIn ? { resetIn } : {}),
     };
   }
@@ -1121,6 +1135,23 @@ export async function createJob(type, params, { lanes = [], tasksInput = null, j
 
 export async function writeTaskRecord(jobDir, rec) {
   await fsp.writeFile(path.join(jobDir, `${sanitizeId(rec.id)}.json`), JSON.stringify(rec, null, 2), 'utf8');
+}
+
+// v6.1 P1：失败 attempt 完整输出落盘 + 错误消息尾部文件指针（观测盲区修复——brief 头部
+// 截断之外的全量留档，history 回放可定位；成功路径零新增落盘）。无进程输出（caps 拒绝、
+// 未安装等）不落盘、不加指针。
+async function dumpFailedAttempt(jobDir, taskId, attemptN, res) {
+  const combined = res?.combined;
+  if (typeof combined !== 'string') return;
+  const file = path.join(jobDir, `${sanitizeId(taskId)}.attempt${attemptN}.output.txt`);
+  try {
+    await fsp.writeFile(file, combined, 'utf8');
+  } catch (e) {
+    // 诊断落盘绝不影响主流程（T7 建议#2）：写失败仅告警，不追加指针、不抛出
+    console.error(`[WARN] 失败输出落盘失败（${e?.message || e}）：${file}`);
+    return;
+  }
+  res.error = `${res.error || ''}（完整输出已存 ${file}）`;
 }
 
 export async function finalizeJob(jobDir, { total, ok, durationMs }) {
@@ -1311,6 +1342,7 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
     attempts++;
     res = await askOnce({ lane, prompt, model, effort, timeoutMs: effTimeoutS * 1000, caps: capsLevel, scratchDir: l1Scratch });
     if (res.ok) { usedLane = lane; break; }
+    await dumpFailedAttempt(job.dir, 'ask', attempts, res);   // v6.1 P1：失败 attempt 全量落盘+指针
     last = res;
     if (lane !== primary) break;
     if (fb) console.error(`[WARN] lane ${lane} 失败（kind=${res.kind}），自动改投 lane ${fb}…`);
@@ -1443,8 +1475,9 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       attempts = a + 1;
       res = await askOnce({ lane, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs: taskTimeoutMs, caps: capsLevel, scratchDir: l1Scratch });
       if (res.ok) break;
+      const rl = res.hint === 'ratelimit' || isRateLimit(res.error);   // v6.1：限流判定先于落盘（指针路径文本不得污染判定，T7 建议#1）
+      await dumpFailedAttempt(job.dir, task.id, attempts, res);   // v6.1 P1：失败 attempt 全量落盘+指针
       if (a < retryN) {
-        const rl = res.hint === 'ratelimit' || isRateLimit(res.error);
         say(`${task.id}@${lane} 失败（${res.kind}），${rl ? '5s' : '2s'} 后重试 ${a + 1}/${retryN}`);
         await sleep(rl ? 5000 : 2000);
       }
@@ -1458,6 +1491,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
         attempts++;
         say(`${task.id}@${lane} 用尽重试（${res.kind}），跨 lane 回退 -> ${fb}`);
         res = await askOnce({ lane: fb, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs: taskTimeoutMs, caps: capsLevel, scratchDir: l1Scratch });
+        if (!res.ok) await dumpFailedAttempt(job.dir, task.id, attempts, res);   // v6.1 P1：回退 attempt 同样落盘
         if (res.ok) { usedLane = fb; fallbackFrom = lane; }
       }
     }
