@@ -1263,6 +1263,7 @@ async function handler(req, res) {
         effort: typeof b.effort === 'string' && b.effort ? b.effort : null,
         timeoutS: Number(b.timeout) > 0 ? Number(b.timeout) : 300,
         caps,
+        maxTurns: b.maxTurns ?? null,   // v6.2 契约 A：任务级 L1 回合上限（core 校验 1-64/仅 L1）
         jobId,
       }).catch((e) => writeFailedJob(jobId, e.message));
       sendJson(res, 200, { jobId });
@@ -1278,6 +1279,7 @@ async function handler(req, res) {
         effort: t.effort || null,
         model: t.model || null,
         caps: t.caps != null && t.caps !== '' ? t.caps : null,   // v6 任务级能力档（透传 core 校验）
+        maxTurns: t.maxTurns ?? null,   // v6.2 契约 A：任务级 L1 回合上限（透传 core 校验）
       }));
       const bad = tasksIn.find((t) => !t.prompt.trim());
       if (bad) return sendJson(res, 400, { error: `任务 ${bad.id} 缺少提示词（prompt）` });

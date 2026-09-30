@@ -2,6 +2,26 @@
 
 本文件记录 zcode-wbx-bridge 的版本变更，格式参考 Keep a Changelog。
 
+## 6.2.0 - 2026-09-30
+
+新增（两项缺陷修复：授权=用户 2026-09-29「三点偏离有什么需要修复的你帮忙看看」委托一号纳入 v11.3；契约 A/B 逐条对照见 `internal/v11.3-t7-review.txt` 与 [WBX.md](WBX.md) v6.2 章。改动面：`wbx-core.mjs`（主）、`wbx.mjs`（--max-turns 旗标+help）、`wbx-ui.mjs`（两端点透传）；L0 参数序列逐字不变）
+
+### Changed
+- **L1 缺省回合上限 8→24**（契约 A）：v11.1 失败潮 + v11.2 P3 复现（job 20260929-224047-4hz）实证 8 回合不够典型联网调研——探针恰 8 次推理贴线通过、多轮任务耗尽后 CLI exit 0 无 JSON 静默失败（v11.1 unparseable 主因）。L0 无回合概念零影响（`--max-turns 1` 序列逐字不变，回归 ②e 断言）。
+
+### Added
+- **任务级 maxTurns 字段**（契约 A）：ask `--max-turns N` / fanout 任务 `"maxTurns":N` / UI 调用页端点透传三入口；整数 1-64，仅 caps L1 生效（×L0 明确报错不静默——对齐 caps 契约风格）；三层取值：任务级 > config 新键 `caps-l1-max-turns`（int 1-64，缺省 24，非法值容错回退）> 硬缺省 24；随 tasksInput 落盘可追溯。
+- **l1-turns-exhausted 失败分类**（契约 A）：识别 stderr 的 `Max turns (N) exceeded`（仅 L1 分类），可读错误含指引（加任务级 maxTurns 或调 config caps-l1-max-turns；实际超时秒数插值显示，600s 仍为硬兜底先到为准）——不再落入 unparseable 静默形态；v6.1 P1 的 attempt 全量落盘行为不变。
+
+### Fixed
+- **isAuthError 回显假阳性**（契约 B，E-005 桥侧同源修复）：auth 判定从「combined 全文正则」收紧为「CLI 退出码非零 + stderr 中 CLI 自身错误行」结构化信号——worker 输出/材料回显的凭证类字样（stdout/transcript 中的 "Authentication required"、"Unauthorized" 等）一律免疫（原 bug：job 20260925-115826-idp 成功输出复述样例原文被误判凭证过期，ai/cn 双 lane 误杀）。真实凭证错误（退出码非零 + stderr）仍判 auth（kind/hint=login 保留）；cline lane 保留 NDJSON 结构化错误事件判定（parsed.error 为 CLI 自身信号，真实 auth 快速失败可能 exit 0 仅带 error 事件，不门控）。
+
+### 实证与回归
+- 新增 `internal/v11.3-regression.mjs` 38/38 全绿（离线 37 项：parseMaxTurns/resolveL1MaxTurns 单元断言、假 CLI argv 落盘验证三层取值与 L0 零回退、maxTurns 校验/caps 匹配错误契约、回合耗尽分类、回显免疫成功/失败双路径、真实 auth 保留；真机 1 项：cline lane 材料回显凭证字样任务正常完成不误判，5.4s）。
+- 既有回归零回退：v6 24/24（v11.3 起 cline 已上线，原两项环境依赖 FAIL 转绿）+ v11.2 25/25 + v7 27/27 + v8 22/22，五套共 136 断言全绿。
+- T7 评审（wbx 外包，材料=契约+diff+实现者自述，经 ai 超时回退 cn 交付）：**0 阻断 / 7 建议**——接受 3（l1-turns-exhausted 加 L1 门控；错误文案超时插值；24 常量三处统一引用）已修并复验全绿，驳回 3 有据（cline parsed.error 不门控：防漏检 exit 0 的真实 auth；maxTurns×L0 报错维持设计定案；重试短路超契约授权记下轮提案候选），1 项验证无影响（旧导出符号全仓零引用）。评审材料本身含 "Authentication required" 字样且未误判——契约 B 获实战验证。记录 `internal/v11.3-t7-review.txt`（gitignored）。
+- 环境注记：本机 npm 全局 prefix 为 `~/.npm-global`（不在 PATH），cline 平台 exe 经桥 config `cline-path` 显式解析（不改系统环境变量）。
+
 ## 6.1.0 - 2026-09-29
 
 新增（桥报错观测修复 P1+P3：授权=用户 2026-09-29 裁决「授权 P1+P3，P2 不做」；改动仅 `wbx-core.mjs` 单文件 +44/−10，成功路径解析/落盘/exit 语义/既有字段零改动，cline lane 解析路径零触碰）

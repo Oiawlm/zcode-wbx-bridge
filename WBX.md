@@ -1426,3 +1426,54 @@ unparseable 的主因（v11.1 假设⑤由部分证伪翻转为证实），9/28-
   "Authentication required" 字样时（如评审材料的 diff 上下文）ai lane 被误分类 auth；
   评审正文经 P1 全量转录找回（job `20260929-222658-wk6`）。
 
+## v6.2 章：L1 回合上限（契约 A）· isAuthError 回显假阳性修复（契约 B）
+
+### 1. 背景与第一性定案
+
+- 授权链：用户 2026-09-29「三点偏离有什么需要修复的你帮忙看看」→ 一号把 v11.2 两项桥缺陷
+  修复纳入 v11.3（契约 A/B 逐条定案见 GOAL-V11.3-PROMPT Phase 3）。
+- 契约 A 的本质：v6 的 L1 管道把 `--max-turns` 硬编码 8——上限本身是防护（回合越多工具面
+  越大、耗时越长），但 8 实证不够典型联网调研（v11.2 P3 复现：耗尽后 CLI exit 0 无 JSON，
+  静默落入 unparseable）。修复方向不是删上限，而是「缺省抬到够用 + 任务级可调 + 耗尽可读」
+  三件套，600s 超时仍是硬兜底（先到为准）。
+- 契约 B 的本质：auth 判定原是对 combined（stdout+stderr）全文正则——把「worker 说的话」
+  当成了「CLI 的故障」。修复原则=只认结构化信号：**CLI 退出码非零 + stderr 中 CLI 自身
+  错误行**；stdout（含成功结果 JSON 与 L1 transcript 里的回显）一律免疫。
+
+### 2. 桥改动清单（三文件 +85/−17，diff 见 internal/v11.3-diff.txt）
+
+- `wbx-core.mjs`（主）：
+  - `L1_MAX_TURNS='8'` → `L1_MAX_TURNS_DEFAULT=24`；新增 `parseMaxTurns()`（1-64 整数校验，
+    错误消息带任务上下文）与 `resolveL1MaxTurns()`（三层取值：任务级 > config > 缺省）。
+  - config 新键 `caps-l1-max-turns`（int 1-64，缺省 24；loadConfig 容错回退；三处同源常量）。
+  - `askOnce` 签名新增 `maxTurns`；L1 capsArgs 的 `--max-turns` 改取 resolveL1MaxTurns；
+    L0 序列逐字不变。
+  - 新增失败分类 `l1-turns-exhausted`：JSON 解析失败分支内识别 stderr 的
+    `Max turns (N) exceeded`（仅 capsLevel==='L1' 分类——T7 建议#1 采纳），错误含指引与
+    实际超时秒数插值；600s 硬兜底不变；v6.1 attempt 落盘行为不变。
+  - 契约 B：ai/cn 的 auth 判定 `isAuthError(combined)` → `r.code !== 0 && isAuthError(stderr)`；
+    cline 的 `isAuthError(combined)` 同样收紧，但保留 `parsed.error`（NDJSON 结构化错误事件，
+    CLI 自身信号；真实 cline auth 快速失败可能 exit 0 仅带 error 事件——不门控，T7 建议#2 驳回）。
+  - `runAskJob`/`runFanoutJob`：maxTurns 参数校验（非法值/×L0 明确报错，绝不静默——设计定案
+    对齐 caps 契约风格）、tasksInput 落盘、两条 askOnce 调用链（主+回退）透传。
+- `wbx.mjs`：`--max-turns` 旗标、cmdAsk/cmdFanout 透传、help 三处（ask/fanout 任务字段/config 键）。
+- `wbx-ui.mjs`：/api/ask 与 /api/fanout 端点透传 maxTurns（防 UI 静默丢字段，与 CLI 行为一致）。
+
+### 3. 质量门禁与发布
+
+- 回归：新增 `internal/v11.3-regression.mjs` 38/38（离线 37：单元断言 + 假 CLI argv 落盘验证
+  三层取值与 L0 零回退 + 校验错误契约 + 回合耗尽分类 + 回显免疫双路径 + 真实 auth 保留；
+  真机 1：cline lane 回显凭证字样任务正常完成 5.4s 不误判）。既有四套零回退：v6 24/24
+  （cline 上线后原两项环境依赖 FAIL 转绿）+ v11.2 25/25 + v7 27/27 + v8 22/22——五套
+  共 136 断言全绿。
+- T7 评审（wbx 外包，ai 超时回退 cn 交付，232s）：**0 阻断 / 7 建议**——接受 3 已修
+  （L1 门控/超时插值/常量统一）、驳回 3 有据（parsed.error 不门控；maxTurns×L0 报错维持
+  设计定案；重试短路超契约授权→记 v6.2.1 候选提案）、1 项验证无影响（旧导出符号全仓零
+  引用）。评审材料本身含 "Authentication required" 字样且未误判——契约 B 实战验证。
+  记录 `internal/v11.3-t7-review.txt`（gitignored）。
+- 发布（2026-09-30）：版本常量/CHANGELOG/WBX.md 三处 6.2.0 一致；FROZEN 语义冻结项零触碰；
+  白名单审计零命中；UNINSTALL.md 零改动（无新增安装物）。git 仍不可用 → commit/tag/push
+  连同 v6.1.0 一并列待办（用户装 Git for Windows 后补）。
+- 环境注记（v11.3 Phase 1 cline 上线）：本机 npm 全局 prefix 为 `~/.npm-global`（不在用户
+  PATH），cline 3.0.65 平台 exe 经桥 config `cline-path` 显式解析——不改系统环境变量；桥的
+  桥内自动扫描（%APPDATA%\npm）不覆盖此形态，`cline-path` 是官方支持的第二优先级解析路径。

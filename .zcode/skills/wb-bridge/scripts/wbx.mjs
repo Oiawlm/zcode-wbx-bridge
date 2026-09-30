@@ -163,6 +163,7 @@ async function cmdAsk(opts) {
       effort: opts.effort || null,
       timeoutS: opts.timeout ?? 300,
       caps: opts.caps || null,
+      maxTurns: opts.maxTurns ?? null,
     });
     if (r.ok) {
       console.error(`[OK] lane=${r.lane} model=${r.model} 耗时=${fmtMs(r.durationMs)} tokens(in/out)=${r.usage.in ?? '?'}/${r.usage.out ?? '?'}${r.caps && r.caps !== 'L0' ? ` caps=${r.caps}` : ''}`);
@@ -210,7 +211,7 @@ async function cmdFanout(opts) {
       }
       prompt = `${prompt}\n\n【输入材料·文件】\n${parts.join('\n\n')}`;
     }
-    tasksIn.push({ id: t.id, prompt, as: t.as ?? null, model: t.model ?? null, effort: t.effort ?? null, caps: t.caps ?? null });
+    tasksIn.push({ id: t.id, prompt, as: t.as ?? null, model: t.model ?? null, effort: t.effort ?? null, caps: t.caps ?? null, maxTurns: t.maxTurns ?? null });
   }
 
   let lanes = null;
@@ -534,6 +535,7 @@ function parseArgs(argv) {
       case '--model': case '-m': opts.model = next(i); i++; break;
       case '--effort': opts.effort = next(i); i++; break;
       case '--caps': opts.caps = next(i); i++; break;
+      case '--max-turns': opts.maxTurns = next(i); i++; break;
       case '--as': opts.as = next(i); i++; break;
       case '--lanes': opts.lanes = next(i); i++; break;
       case '--parallel': case '--lane-parallel': opts.parallel = parseInt(next(i), 10); i++; break;
@@ -593,9 +595,12 @@ cline 隔离：桥的 cline 状态只在 <运行时根>/cline-home/（HOME 覆�
                      [--caps L0|L1|L2]                能力档（v6，默认 L0=config default-caps）：L0 纯文本；
                                                       L1 只读+联网（仅 ai/cn，缺省超时上浮 600s，轨迹落盘）；
                                                       L2 本版未交付（声明即报错，等上游命令级 deny）
+                     [--max-turns N]                  L1 回合上限（v6.2，整数 1-64，仅 --caps L1 生效；
+                                                      缺省 config caps-l1-max-turns=24；耗尽报 l1-turns-exhausted）
   node wbx.mjs fanout  --file tasks.json            并发池批量执行；任务可用 files:[路径] 拼材料；结果写 <运行时根>/jobs/<jobId>/
                      [--lanes ai,cn,cline] [--parallel 2] [--timeout 300] [--retry 1]
                                                       任务对象支持 "caps":"L1"（任务级能力档，语义同 ask --caps）
+                                                      与 "maxTurns":N（任务级 L1 回合上限，语义同 ask --max-turns）
   node wbx.mjs models  [--as cn|ai|cline] [--probe "m1,m2"]   探测模型可用性并列出产品配置中的模型
                      [--free]     （--as cline --free：列当前免费模型组，recommended-models 端点实时）
   node wbx.mjs config  list | get <key> | set <key> <value>
@@ -603,6 +608,7 @@ cline 隔离：桥的 cline 状态只在 <运行时根>/cline-home/（HOME 覆�
                                                    parallel-per-lane、model、cli-path、cline-path/data-dir/provider/
                                                    model（默认 cline-free/deepseek-v4.1-flash）/thinking/compaction、
                                                    cline-parallel、default-caps=L0|L1|L2（缺省能力档，默认 L0）、
+                                                   caps-l1-max-turns=24（L1 缺省回合上限，v6.2 起 8→24）、
                                                    caps-l2-enabled=true|false（L2 总闸，默认 false）
                                                    （存 <运行时根>/config.json）
   node wbx.mjs history [--last 10]                 历史列表（时间/类型/任务数/成功率/lane 分布/目录）
