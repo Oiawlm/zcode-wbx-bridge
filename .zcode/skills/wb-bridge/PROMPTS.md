@@ -9,6 +9,8 @@
 > 原则 2 从「无工具声明」升级为「**能力边界声明（按 caps 档位）**」，新增 T4-L1 联网调研变体与
 > T10 代码自测回路（L2 模板先行入库，待档位交付后启用），原则区补注入防御（P13）与来源清单（P14）。
 > 写法吸收 DeepSeek 官方提示库与思考模式/JSON 输出指南的建议（来源见 WBX.md v4 章「调研记录」）。
+> v3.1（2026-09-29 增补，不升大版本）：新增「DeepSeek 参数增量」小节（reasoning_effort 三档映射等
+> 六条，来源 wbx L1 job 20260929-163005-4lq），P7 档位行按官方三档映射同步修订。
 
 ## 通用原则（所有模板共用）
 
@@ -34,7 +36,8 @@
    ——三 lane 几乎免费，材料给足；20k 准则继续用于控制信噪比与延迟。
 6. **JSON 任务给骨架**：提示词中必须出现 "JSON" 字样并给出目标格式样例
    （DeepSeek 官方 json_mode 指南要求），字段语义逐行说明，缺省值写明（null / UNKNOWN）。
-7. **effort 档位**（`minimal / low / medium / high / xhigh / max`）：简单文本任务 `low`；
+7. **effort 档位**（官方实际三档 `low / high / max`，`none` 关闭；`minimal→low`、`medium/xhigh→high`、
+   `ultra→max` 为兼容映射——2026-09-29 按官方页修订，详见下方「DeepSeek 参数增量」条目 1）：简单文本任务 `low`；
    代码模块与多约束任务 `medium`；不确定就不传（模型默认档）。
    **v5 上调**（消耗豁免，实测延迟可接受为前提）：简单任务 low→medium、代码 medium→high；
    若延迟明显变长再回调。cline lane 不适用（思考档固定取 config，任务级 effort 忽略）。
@@ -55,6 +58,26 @@
 14. **来源清单**（P14，v3 新增，L1 必写）：联网档任务要求输出末尾附来源清单（URL | 访问时间 |
     支撑了哪条要点），只列实际检索并使用的来源、不得编造 URL——主力抽查来源即可校验，
     这是 L1 相对 L0 的核心增量价值（省主力的检索额度）。
+
+## DeepSeek 参数增量（2026-09-29 增补）
+
+> 来源：wbx L1 worker 调研（job `20260929-163005-4lq`，deepseek-v4.1-flash，L1 档，83.2s，
+> WebSearch×22 / WebFetch×4——WebFetch 被 default 权限拒，基于搜索摘要，与 E-012 一致，
+> 时效性以官方页为准）。官方页域名 api-docs.deepseek.com（thinking_mode /
+> create-chat-completion / create-response / parameter_settings / json_mode），
+> 访问日期均 2026-09-29。P7 档位行已按条目 1 同步修订。
+
+1. **reasoning_effort 三档映射**：实际档位 `low / high / max`（`none` 关闭思考）；
+   `minimal→low`、`medium/xhigh→high`、`ultra→max` 为兼容映射。
+2. **思考模式参数失效表**：思考模式下 `temperature` / `presence_penalty` /
+   `frequency_penalty` 全部失效；`top_p` 仅思考模式生效且区间 0.95–1.0。
+3. **reasoning_content 回传规则**：带 tools 时历史思考内容全部回传并拼入上下文；
+   不带 tools 不回传（编排注：P12「思维链不进上下文」的例外即带 tools 的 agentic 场景）。
+4. **max_tokens**：范围 1–384K；默认值：非思考 8K / 思考 64K / effort=max 128K。
+5. **temperature 场景表**（非思考模式）：代码生成 0.0、数据抽取 1.0、通用对话 1.3、
+   翻译 1.3、创意 1.5。
+6. **Responses API**：`instructions` 字段 = 首条 system 消息置顶；`text.format` 接
+   JSON schema 做结构化输出。
 
 ## 模板速查
 
@@ -770,6 +793,22 @@ E2（parse-duration.js:17）→ parseInt(match[1], 10) 截断小数，即便正�
 - **反例**：指望 L1 产出「页面全文级」细节（WebFetch 被拒时只有搜索摘要）；把 L1 结果当
   可冻结复现（联网内容随时间变化，靠 transcript 落盘留证而非复现）。
 - **关联**：原则 P13/P14；模板 T4-L1；WBX.md v6.0.0 章映射表
+
+### E-013 unparseable 判读法：横幅是 stderr 常驻噪声，真实错误在 brief 截断之后（v11.1）
+- **来源**：定因分析（2026-09-29，job 20260929-163005-4lq 成功/失败对照 + 桥源码只读分析
+  wbx-core.mjs askOnce/extractJson/brief + 复现探针 job 20260929-192159-szn 2×L1 并行双成功）
+- **适用场景**：ask/fanout 报 `unparseable` 时的判读与再派发决策（全部 lane 通用）
+- **要点**：①unparseable 的可判定含义 = CLI exit 0 且 stdout 提取不出任何 JSON
+  （extractJson 三级兜底全空）——不是模型输出格式问题，也不是限流/超时（各有专属 kind/hint）；
+  ②错误字段 = brief(stdout+'\n'+stderr) **头部** 320 字符，本机无 Git Bash，CodeBuddy 启动
+  横幅（约 300 字符）必然占满头部 → 横幅极具误导性，真实诊断信息在截断之后已丢失；
+  ③失败路径无 transcript/usage 落盘（仅解析成功才落），存在观测盲区；④判读动作：先看
+  kind 与 exit、再查同批对照任务、必要时用 2×L1 小探针复现（并发冷启动假设已被探针部分
+  证伪），不要凭横幅内容猜因。
+- **反例**：把错误里的 Git Bash 横幅当失败原因去装环境/改路径（v11 曾因此搁置未定因）；
+  对 unparseable 盲目连续重试（与 E-009 止损规则冲突）。
+- **关联**：E-005（错误文本误分类）、E-009（止损）；RESEARCH-V11 §2.6 定因记录（缓解提案
+  P1 brief 取尾/全量落盘需改桥，待用户授权后实施）
 
 ---
 
