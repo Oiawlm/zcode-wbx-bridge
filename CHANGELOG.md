@@ -2,6 +2,20 @@
 
 本文件记录 zcode-wbx-bridge 的版本变更，格式参考 Keep a Changelog。
 
+## 6.3.0 - 2026-10-01
+
+新增（豆包桥并入 wbx 全局形态·全项目通用；授权=用户 2026-10-01 原话「你现在立马给我把豆包桥也做成一个全项目通用的……你把它给我放进去啊（WBX 桥里）……所有的项目都能够更高效率的去运作」。改动面：`wbx.mjs`（doubao 直通子命令）、`wbx-setup.mjs`（self-install/uninstall 携带 doubao/）、`wbx-ui.mjs`（豆包卡文案全局化）、`wbx-core.mjs`（版本号 + AGENTS 标记块速查行）；三 lane 行为零变化，L0 参数序列逐字不变）
+
+### Added
+- **`wbx doubao <doubao.mjs 子命令与参数…>` 直通子命令**：在 parseArgs 之前拦截、参数原样转发（豆包旗标集 `--cdp-url/--wait-ms` 等与 wbx 解析器不兼容，混用会误报未知参数）；usage/退出码/单行 JSON 输出均由 doubao.mjs 自理（无参=usage+exit 1，不挂起）。目录解析：全局 `~/.zcode/wbx-bridge/doubao/` → 仓库 `tools/doubao-bridge/`，双 miss 明确报错并给 self-install 修复指引（可选工具，绝不影响三 lane）。
+- **self-install 携带豆包桥**：`tools/doubao-bridge/` 整目录复制到 `~/.zcode/wbx-bridge/doubao/`——先 rm 旧副本再复制（防 node_modules 陈旧残留），装完即验 `doubao.mjs`/`anchors.json`/`launch.ps1`/`node_modules/playwright-core` 四要素，缺一即 WARN 并提示手动整拷；源缺失/复制失败只 WARN 不阻断安装。`self-uninstall` 随桥本体一并删除（报告标签明示含 doubao/ 副本，无新增独立清理项）；export-bundle 分发包仍不含豆包（Windows 本机可选工具，有意排除）。
+- **用户 AGENTS.md 标记块与控制台豆包卡速查全局化**：速查命令改为全局入口形态（`wbx doubao status|ask …` + launch.ps1 的 `%USERPROFILE%` 路径，注明 PowerShell/Git Bash 变量替换）——装过 self-install 的任何项目会话可直接发现与调用；UI 卡为内容级文案改动（UI-SPEC §5.2/§5.4 放行，不触发 FROZEN 2.7，contract v1.1.0 不变）。
+
+### 实证与回归
+- 既有六套门禁零回退：v6 24/24 + v7 27/27 + v8 22/22 + v11.3 38/38 + ui-contract 23/23 + v9 红测全绿（含恢复自证：源文件哈希=基线）。
+- 全命令回归（v6.3.0 真机）：--version/--help/doctor（--no-probe）/models --as cline --free/config list/history/ask（cn 真机）/fanout 2 任务 2\2/ui --status/export-bundle（v6.3.0 zip，零凭证断言通过）/doubao 直通（仓库形态 status 实连 CDP 9225 成功）。
+- T7 评审（wbx ask 外包，ai 超时自动回退 cn 交付，87.1s）：**0 阻断 / 5 建议**——采纳 3 已修（① doubao 子进程 close 只透传退出码、不重抛同名信号，防非 POSIX 信号名 ERR_UNKNOWN_SIGNAL；② self-install 豆包复制加四要素装完即验；③ HELP/标记块启动路径统一 %USERPROFILE% 粘贴即用形态——顺带修复 wbx-ui.mjs 模板字符串里单反斜杠被转义吞掉的断路径隐患，已按文件既有约定双写），验证 2（全仓无 6.2.0 残留硬编码；doubao.mjs 无参=usage+exit 1 不挂起）。记录 `internal/v12.2-t7-review.txt`（gitignored）。
+
 ## 6.2.0 - 2026-09-30
 
 新增（两项缺陷修复：授权=用户 2026-09-29「三点偏离有什么需要修复的你帮忙看看」委托一号纳入 v11.3；契约 A/B 逐条对照见 `internal/v11.3-t7-review.txt` 与 [WBX.md](WBX.md) v6.2 章。改动面：`wbx-core.mjs`（主）、`wbx.mjs`（--max-turns 旗标+help）、`wbx-ui.mjs`（两端点透传）；L0 参数序列逐字不变）

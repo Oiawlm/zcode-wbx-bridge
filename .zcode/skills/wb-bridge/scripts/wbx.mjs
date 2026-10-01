@@ -17,6 +17,7 @@
  *   self-install / self-uninstall                   v3 用户级全局安装（~/.zcode + ~/.wbx）
  *   ui [--port 7788]                                v3 本地 Web UI（127.0.0.1，无常驻）
  *   export-bundle [--out <dir>]                     v3 分发打包（零凭证，含自检断言）
+ *   doubao <doubao.mjs 子命令…>                     v6.3 豆包桌面桥直通（可选工具，非 lane；参数原样转发）
  *
  * 约束：绝不写 ~/.workbuddy、~/.workbuddy-ai；凭证只存 .wbx/ 或 ~/.wbx/（均 gitignore），
  * 绝不打印其内容。
@@ -520,6 +521,31 @@ async function cmdUi(opts) {
   // startUiServer 自己 keep-alive；此处不 exit
 }
 
+// ---------- 子命令：doubao（v6.3 豆包桌面桥直通；可选工具，非 lane） ----------
+// 参数不经 parseArgs 原样转发：豆包旗标集（--cdp-url/--timeout-ms/--wait-ms/--poll-ms/--index…）
+// 与 wbx 自身不同，由 doubao.mjs 自己解析并负责 usage/退出码；本函数只做目录解析 + 子进程直通。
+async function cmdDoubao(restArgs) {
+  const candidates = [
+    path.join(path.dirname(SCRIPT_DIR), 'doubao'),        // 全局形态：~/.zcode/wbx-bridge/doubao/（self-install 复制）
+    path.join(PROJECT_ROOT, 'tools', 'doubao-bridge'),    // 仓库形态：桥源码仓的 v12 交付物
+  ];
+  const dir = candidates.find((d) => fs.existsSync(path.join(d, 'doubao.mjs')));
+  if (!dir) {
+    die(
+      `未找到豆包桥 doubao.mjs（已查：\n  ${candidates.join('\n  ')}）。\n` +
+      '全局形态：在装有本桥的源码仓里跑 wbx self-install，会把 tools/doubao-bridge/ 一并复制到 ~/.zcode/wbx-bridge/doubao/。\n' +
+      '豆包桥是可选工具（v12 交付物，Windows-only），缺失不影响三 lane。'
+    );
+  }
+  const { spawn } = await import('node:child_process');
+  const child = spawn(process.execPath, [path.join(dir, 'doubao.mjs'), ...restArgs], { stdio: 'inherit' });
+  child.on('error', (e) => { console.error(`[FAIL] 启动豆包桥失败：${e.message}`); process.exit(1); });
+  child.on('close', (code, signal) => {
+    // 只透传退出码，不重抛同名信号——非 POSIX 语义下 signal 名可能不被识别（T7-S1）
+    process.exit(code ?? (signal ? 1 : 0));
+  });
+}
+
 // ---------- 参数解析与入口 ----------
 function parseArgs(argv) {
   const opts = { _: [] };
@@ -624,6 +650,13 @@ cline 隔离：桥的 cline 状态只在 <运行时根>/cline-home/（HOME 覆�
   node wbx.mjs self-uninstall [--purge]            全局卸载（--purge 连 ~/.wbx/ 凭证一起删，默认保留）
   node wbx.mjs export-bundle [--out <dir|.zip>]    生成分发 zip（零凭证自检；含 INSTALL-README.md）
   node wbx.mjs install-user | uninstall-user       向 ~/.zcode/AGENTS.md 注入/移除全局分派标记块（v2 兼容）
+  node wbx.mjs doubao  <doubao.mjs 子命令与参数…>   豆包桌面桥直通（v6.3 可选工具·非 lane·Windows-only：
+                                                   status | new-task | configure | send | read | ask；
+                                                   参数原样转发，子命令说明见 doubao.mjs 自身 usage）
+                                                   需豆包以调试口 9225 运行（cmd 写法；PowerShell 换 $env:USERPROFILE）：
+                                                   powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"
+                                                   目录解析：全局 ~/.zcode/wbx-bridge/doubao/（self-install 复制）
+                                                   -> 仓库 tools/doubao-bridge/（v12 源；未装则明确报错，不影响三 lane）
 
 tasks.json 格式：[{"id":"t1","prompt":"...","as?":"ai|cn|cline","model?":"...","effort?":"low","file?":"p.txt","files?":["a.js"]}]
 
@@ -632,6 +665,8 @@ WBX_PROJECT_ROOT、WBX_PRODUCT_CONFIG（login 模板）`;
 
 async function main() {
   const argv = process.argv.slice(2);
+  // doubao 直通（v6.3）：其余参数原样转发给 doubao.mjs，绕过 parseArgs（旗标集互不兼容）
+  if (argv[0] === 'doubao') return cmdDoubao(argv.slice(1));
   const opts = parseArgs(argv);
   if (opts.version) { console.log(`wbx v${WBX_VERSION}`); await exitWith(0); }
   const cmd = opts._[0];

@@ -1477,3 +1477,32 @@ unparseable 的主因（v11.1 假设⑤由部分证伪翻转为证实），9/28-
 - 环境注记（v11.3 Phase 1 cline 上线）：本机 npm 全局 prefix 为 `~/.npm-global`（不在用户
   PATH），cline 3.0.65 平台 exe 经桥 config `cline-path` 显式解析——不改系统环境变量；桥的
   桥内自动扫描（%APPDATA%\npm）不覆盖此形态，`cline-path` 是官方支持的第二优先级解析路径。
+
+## v6.3 章：豆包桥并入全局形态（wbx doubao 直通）· 全项目通用
+
+- 用户裁决（2026-10-01 原话）：「你现在立马给我把豆包桥也做成一个全项目通用的。豆包桥本质上
+  不也在 WBX 桥里边吗？你把它给我放进去啊。……我想把 WBX 桥更扩展一些，然后所有的项目都能够
+  更高效率的去运作」——即 ROUTE 候选池「v13+ 豆包 lane 化」中的**通用化部分**提前落地。
+  边界澄清：豆包仍是「wbx 入口下的可选直通工具」，**不参与三 lane 调度/回退链/caps 分级**；
+  lane 化（进 ask/fanout 路由）仍留 v13+ 用户裁决。
+- 设计定案：
+  - 直通子命令 `wbx doubao <args>`：在 parseArgs **之前**拦截（豆包旗标集 `--cdp-url/--wait-ms`
+    等与 wbx 解析器不兼容，混用会误报未知参数），spawn `node doubao.mjs <args>` stdio inherit、
+    只透传退出码（不重抛同名信号，T7-S1）。目录解析：`<scriptDir>/../doubao`（全局形态）→
+    `<PROJECT_ROOT>/tools/doubao-bridge`（仓库形态），双 miss die 并给 self-install 指引。
+  - self-install 1b 步：`tools/doubao-bridge/` **先 rm 旧副本再整目录复制**到
+    `~/.zcode/wbx-bridge/doubao/`（含 node_modules，~14MB；防陈旧残留），装完即验四要素
+    （doubao.mjs/anchors.json/launch.ps1/node_modules/playwright-core），缺一 WARN 提示手动
+    整拷；源缺失/失败只 WARN 不阻断。self-uninstall 随桥本体整删（报告标签明示）；export-bundle
+    分发包**有意不含**豆包（Windows 本机可选工具）。
+  - 发现面：用户 AGENTS.md 标记块速查行（install-user 模板生成，绝对路径形态）+ 控制台豆包卡
+    速查（%USERPROFILE% 粘贴即用形态）+ SKILL.md 命令速查行 + `wbx --help` doubao 段——装过
+    self-install 的任何项目会话零配置可发现。
+- 质量门禁（2026-10-01）：既有六套零回退（v6 24 + v7 27 + v8 22 + v11.3 38 + contract 23 +
+  v9 红测含恢复自证）；全命令回归真机全绿（含 doubao 直通仓库形态实连 CDP 9225）；T7 评审
+  （ai 超时回退 cn，87.1s）0 阻断 / 5 建议：采纳 3（退出码透传兜底、装完即验、路径统一
+  %USERPROFILE%——顺带修复 wbx-ui.mjs 模板字符串单反斜杠被吞的断路径隐患，已双写）、验证 2
+  （无 6.2.0 残留、doubao 无参不挂起）；记录 internal/v12.2-t7-review.txt（gitignored）。
+- 发布（2026-10-01）：版本常量/CHANGELOG/本章三处 6.3.0 一致；FROZEN 语义冻结项零触碰（UI 卡
+  为内容级文案，UI-SPEC §5.2/§5.4 放行）；UNINSTALL.md §八补登全局副本行（一键还原承诺保持）。
+  commit/push 待用户指示。

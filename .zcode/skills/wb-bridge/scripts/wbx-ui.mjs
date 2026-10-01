@@ -368,32 +368,32 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
     <div class="card__bd" id="doctor-zone"></div>
   </div>
   <div class="card" id="doubao-card">
-    <div class="card__hd"><span class="card__title">豆包桥工具 · 工作任务模式</span><span class="badge neutral" id="doubao-badge">检测中…</span><span class="card__sub">tools/doubao-bridge</span></div>
+    <div class="card__hd"><span class="card__title">豆包桥工具 · 工作任务模式</span><span class="badge neutral" id="doubao-badge">检测中…</span><span class="card__sub">wbx doubao 直通 · 全项目通用</span></div>
     <div class="card__bd">
       <div class="kv">
         <span class="k">客户端进程</span><span class="v" id="doubao-proc">检测中…</span>
         <span class="k">调试口 9225</span><span class="v" id="doubao-cdp">检测中…</span>
       </div>
-      <div class="copyline"><span class="t">node doubao.mjs ask "任务文本"</span><button class="copybtn" data-copy='node doubao.mjs ask "任务文本"'>复制</button></div>
-      <p class="hint">cd 到本仓库 tools/doubao-bridge/ 目录后执行；一条命令=新工作任务→显式配 Pro+推理「高」→发送→取回结果。</p>
+      <div class="copyline"><span class="t">node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao ask "任务文本"</span><button class="copybtn" data-copy='node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao ask "任务文本"'>复制</button></div>
+      <p class="hint">装过 self-install 后任何项目任何目录可用（v6.3 直通；上面为 cmd 写法，PowerShell 把 %USERPROFILE% 换成 $env:USERPROFILE、Git Bash 换成 ~）。一条命令=新工作任务→显式配 Pro+推理「高」→发送→取回结果；本仓库开发形态仍可 cd tools/doubao-bridge/ 后 node doubao.mjs …。</p>
       <details>
         <summary>使用说明与排障</summary>
         <div class="dbd">
           <p class="hint">诚实声明（三处必读）：① 这是临时工具——依托豆包客户端当前 UI 结构（data-testid 锚点）工作，客户端升级随时可能失效；② Windows-only——依赖 Windows 进程模型、netstat 与 PowerShell，未在其他平台验证；③ 非官方——豆包官方未公开桌面端编程接口，本工具走 Chromium 官方调试开关（CDP）驱动已登录客户端，与字节跳动无关，不属于任何受支持的集成方式。</p>
-          <p class="hint">前置条件：Windows 10/11 + Node.js ≥ 18（playwright-core 已在本目录 npm install，无需下载浏览器）；豆包桌面端已登录（登录态由你在豆包 GUI 内自理，本工具不做任何凭证自动化，脚本与文档零凭证）；豆包需以调试端口运行。工具位置=本仓库 tools/doubao-bridge/。</p>
+          <p class="hint">前置条件：Windows 10/11 + Node.js ≥ 18（playwright-core 已随 doubao/ 目录复制，无需下载浏览器）；豆包桌面端已登录（登录态由你在豆包 GUI 内自理，本工具不做任何凭证自动化，脚本与文档零凭证）；豆包需以调试端口运行。工具位置：全局形态 ~/.zcode/wbx-bridge/doubao/（self-install 复制，v6.3 起）；本仓库开发形态 tools/doubao-bridge/。</p>
           <p class="hint">启动方式（检测到豆包已运行时，需 -Force 才会结束它们；请先保存豆包里未发送的草稿）：</p>
-          <div class="copyline"><span class="t">powershell -ExecutionPolicy Bypass -File launch.ps1 -Force</span><button class="copybtn" data-copy='powershell -ExecutionPolicy Bypass -File launch.ps1 -Force'>复制</button></div>
+          <div class="copyline"><span class="t">powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1" -Force</span><button class="copybtn" data-copy='powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1" -Force'>复制</button></div>
           <div class="warn-box">调试口开放期间=本地攻击面：本机任意进程可经 9225 接管已登录客户端；launch.ps1 已校验只绑 127.0.0.1。用完正常退出豆包、再普通启动，即恢复无调试态。</div>
-          <p class="hint">分步命令速查（先 cd 到本仓库 tools/doubao-bridge/ 目录后执行）：</p>
-          <div class="copyline"><span class="t">node doubao.mjs status</span><button class="copybtn" data-copy='node doubao.mjs status'>复制</button></div>
+          <p class="hint">分步命令速查（全局入口 = node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs"，下同；仓库形态=cd tools/doubao-bridge/ 后 node doubao.mjs）：</p>
+          <div class="copyline"><span class="t">node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao status</span><button class="copybtn" data-copy='node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao status'>复制</button></div>
           <p class="hint">status — CDP 是否可达、当前模型/推理档/环境。</p>
-          <div class="copyline"><span class="t">node doubao.mjs new-task</span><button class="copybtn" data-copy='node doubao.mjs new-task'>复制</button></div>
+          <div class="copyline"><span class="t">node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao new-task</span><button class="copybtn" data-copy='node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao new-task'>复制</button></div>
           <p class="hint">new-task — 新建工作任务（注意：新会话会把推理档重置回「中」）。</p>
-          <div class="copyline"><span class="t">node doubao.mjs configure</span><button class="copybtn" data-copy='node doubao.mjs configure'>复制</button></div>
+          <div class="copyline"><span class="t">node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao configure</span><button class="copybtn" data-copy='node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao configure'>复制</button></div>
           <p class="hint">configure — 显式选「豆包 2.1 Pro」+「高」（可 --model / --reasoning 覆盖）。</p>
-          <div class="copyline"><span class="t">node doubao.mjs send "任务文本"</span><button class="copybtn" data-copy='node doubao.mjs send "任务文本"'>复制</button></div>
+          <div class="copyline"><span class="t">node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao send "任务文本"</span><button class="copybtn" data-copy='node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao send "任务文本"'>复制</button></div>
           <p class="hint">send — 发送（发送前自动重验配置，不符则先重配）。</p>
-          <div class="copyline"><span class="t">node doubao.mjs read</span><button class="copybtn" data-copy='node doubao.mjs read'>复制</button></div>
+          <div class="copyline"><span class="t">node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao read</span><button class="copybtn" data-copy='node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao read'>复制</button></div>
           <p class="hint">read — 轮询取回最新回复（--wait-ms / --poll-ms 可调）。</p>
           <p class="hint">输出与退出码：所有命令输出单行 JSON；退出码 0 成功 / 2 锚点失配（立即停止，不硬重试）/ 3 CDP 不可达 / 4 配置校验失败 / 5 读结果超时 / 1 其他。</p>
           <p class="hint">已知坑（实测）：</p>

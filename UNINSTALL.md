@@ -157,17 +157,20 @@ v3 的 `self-uninstall` 会顺带做同一件事，无需重复执行。
   cline lane 也可直接 `npm uninstall -g cline`（未装=WARN，不影响 exit 0）。
 - wbx 无任何常驻进程/服务/定时任务（`wbx ui` 是前台进程，关终端即退），不删也不耗资源。
 
-## 八、v12 豆包桥接工具（tools/doubao-bridge/，2026-09-30 新增安装物）
+## 八、v12 豆包桥接工具（tools/doubao-bridge/，2026-09-30 新增；v6.3 起随 self-install 全局化）
 
 v12 交付的豆包桌面端驱动工具（`launch.ps1` / `doubao.mjs` / `anchors.json` / `README.md`），
-唯一新增安装物是本目录内的 npm 包：
+新增安装物两处——仓库内 npm 包 + v6.3 self-install 复制的全局副本：
 
 | 位置 | 内容 | 清理命令 |
 |---|---|---|
 | `tools\doubao-bridge\node_modules\playwright-core` | npm 包（`npm install playwright-core`，**未下载任何浏览器二进制**——只用 connectOverCDP 连既有客户端） | `cd tools\doubao-bridge && npm uninstall playwright-core` 或直接删 `tools\doubao-bridge\` 整目录 |
 | `tools\doubao-bridge\package.json` + `package-lock.json` | npm 清单（记录该依赖） | 随目录一起删 |
+| `~\.zcode\wbx-bridge\doubao\` | v6.3 self-install 复制的全局副本（四件套 + node_modules/playwright-core 约 14MB；`wbx doubao <子命令>` 直通入口使用它） | 随 `wbx self-uninstall` 删桥本体时一并移除；或单独删该目录 |
 
-- 完全卸载 = 删除 `tools\doubao-bridge\` 整个目录（四件套 + node_modules 一并移除），零残留。
+- 完全卸载 = 删除 `tools\doubao-bridge\` 整个目录 + `wbx self-uninstall`（或手动删
+  `~\.zcode\wbx-bridge\doubao\`），零残留；重跑 `wbx self-install` 会重建全局副本。
+- `~\.zcode\AGENTS.md` 标记块中的 doubao 速查行随标记块整体更新/移除（install-user 重装即覆盖）。
 - 该工具未装任何全局包、未改注册表/系统环境变量/PATH、未装 Windows 服务、无常驻进程；
   调试端口 9225 只在 `launch.ps1` 启动的豆包进程存活期间监听，正常重启豆包即消失。
 - 豆包桌面端本体（`D:\App\Doubao\`）未修改任何文件——只以 `--remote-debugging-port` 启动参数

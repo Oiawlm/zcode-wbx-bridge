@@ -23,7 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '6.2.0';
+export const WBX_VERSION = '6.3.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -1912,6 +1912,10 @@ export function userBlockText(bridgeScriptPath) {
     `${wbx} fanout --file <tasks.json>   # 并行批量（任务可用 files:[路径] 拼材料；结果落 ~/.wbx/jobs/<jobId>/）`,
     `${wbx} ui --detach                 # 常开网页控制台 http://127.0.0.1:7788（幂等后台守护；--stop 停止；`,
     '                                   #  --install-autostart 随 ZCode 新会话自动拉起，--remove-autostart 摘除）',
+    `${wbx} doubao status | ask "任务文本"  # 豆包桌面桥·工作任务模式（v6.3 可选工具，非三 lane；豆包需以`,
+    '                                   #  调试口 9225 运行——先 powershell -ExecutionPolicy Bypass -File',
+    '                                   #  "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"（cmd 写法；PS/GitBash 换 $env:USERPROFILE/~）；',
+    '                                   #  子命令同 doubao.mjs：status/new-task/configure/send/read/ask）',
     '```',
     '',
     '默认分派（v5 基线反转）：凡自包含任务（输入可打包、输出可校验）即为候选——单个调研、翻译、',

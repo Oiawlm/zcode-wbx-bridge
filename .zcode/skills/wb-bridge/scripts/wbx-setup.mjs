@@ -278,6 +278,28 @@ export async function selfInstall({ adopt = false, keepProject = true } = {}) {
   docsCopied = copiedDocs.length > 0;
   report.push(`桥本体 -> ${GLOBAL_BRIDGE_DIR}（scripts: ${copiedScripts.join(', ')}${examplesCopied ? ' + examples' : ''}${promptsCopied ? ' + PROMPTS.md' : ''}${docsCopied ? ' + docs: ' + copiedDocs.join(', ') : ''}）`);
 
+  // 1b. 豆包桥（v6.3 可选工具，非 lane）：tools/doubao-bridge/ 整目录 -> ~/.zcode/wbx-bridge/doubao/。
+  //     先清旧副本再复制——node_modules 内文件可能改名/删除，纯覆盖复制会留陈旧残留；
+  //     缺失/失败只 WARN 不阻断（豆包桥独立于三 lane，export-bundle 分发包亦不含它）。
+  let doubaoCopied = false;
+  const srcDoubao = path.join(PROJECT_ROOT, 'tools', 'doubao-bridge');
+  if (fs.existsSync(path.join(srcDoubao, 'doubao.mjs'))) {
+    try {
+      await fsp.rm(path.join(GLOBAL_BRIDGE_DIR, 'doubao'), { recursive: true, force: true });
+      await copyDir(srcDoubao, path.join(GLOBAL_BRIDGE_DIR, 'doubao'));
+      // 装完即验（T7-S2）：入口/锚点/依赖缺一即视为复制不完整，走 WARN 路径提示手动整拷
+      const essential = ['doubao.mjs', 'anchors.json', 'launch.ps1', path.join('node_modules', 'playwright-core')];
+      const missing = essential.filter((f) => !fs.existsSync(path.join(GLOBAL_BRIDGE_DIR, 'doubao', f)));
+      if (missing.length) throw new Error(`复制不完整，缺 ${missing.join('、')}`);
+      doubaoCopied = true;
+      report.push(`豆包桥 -> ${path.join(GLOBAL_BRIDGE_DIR, 'doubao')}${path.sep}（v6.3 可选工具；入口 wbx doubao <子命令>，含 node_modules 副本）`);
+    } catch (e) {
+      report.push(`[WARN] 豆包桥复制失败（${e && e.message}）——不影响三 lane；可手动整目录复制 ${srcDoubao} -> ${path.join(GLOBAL_BRIDGE_DIR, 'doubao')}`);
+    }
+  } else {
+    report.push(`[WARN] 未找到 ${srcDoubao}（豆包桥为可选工具，跳过；不影响三 lane）`);
+  }
+
   // 2. 用户级 skill（绝对路径版；PROMPTS.md 原样随附，供 SKILL.md 相对引用）
   const srcSkill = path.join(srcSkillDir, 'SKILL.md');
   if (!fs.existsSync(srcSkill)) throw new Error(`桥源不完整：缺 ${srcSkill}`);
@@ -345,7 +367,7 @@ export async function selfInstall({ adopt = false, keepProject = true } = {}) {
   return {
     ok: true, bridgeDir: GLOBAL_BRIDGE_DIR, script: globalBridgeScript(),
     runtimeDir: GLOBAL_RUNTIME_DIR, report,
-    skillCopied, examplesCopied, docsCopied,
+    skillCopied, examplesCopied, docsCopied, doubaoCopied,
   };
 }
 
@@ -366,7 +388,8 @@ export async function selfUninstall({ purge = false } = {}) {
     const r = await removeAutostart();
     report.push(`${r.removed ? '已摘除' : '无需摘除'}自启钩子：${r.message}`);
   } catch (e) { report.push(`跳过自启钩子摘除（${e && e.message}；如曾 --install-autostart 请手动检查 ~/.zcode/cli/config.json 的 hooks`); }
-  await rm(GLOBAL_BRIDGE_DIR, '桥本体 ~/.zcode/wbx-bridge/');
+  const hadDoubao = fs.existsSync(path.join(GLOBAL_BRIDGE_DIR, 'doubao'));
+  await rm(GLOBAL_BRIDGE_DIR, '桥本体 ~/.zcode/wbx-bridge/' + (hadDoubao ? '（含豆包桥 doubao/ 全局副本）' : ''));
   await rm(path.join(HOME, '.zcode', 'skills', 'wb-bridge'), '用户级 skill ~/.zcode/skills/wb-bridge/');
   try {
     await fsp.rm(path.join(HOME, '.zcode', 'commands', 'wbx.md'), { force: true });

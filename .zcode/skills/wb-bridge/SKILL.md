@@ -173,7 +173,8 @@ node .zcode/skills/wb-bridge/scripts/wbx.mjs fanout --file tasks.json [--lanes a
 | `wbx ui [--port 7788]` | 本地 Web UI（127.0.0.1）：三 lane 状态/路由开关/免费模型选择/ask/fanout/历史/登录引导 |
 | `wbx ui --detach / --stop / --status` | 控制台后台守护（幂等复用绝不新起）/ 停止（HTTP 优雅优先）/ 三态查看；日志 `~/.wbx/logs/ui.log` |
 | `wbx ui --install-autostart / --remove-autostart` | 装/摘 ZCode SessionStart 自启钩子（新开会话自动拉起控制台；config.json 只做读-改-写合并，摘除逐键还原） |
-| `wbx self-install / self-uninstall` | 用户级全局安装（/wbx 命令 + 用户级 skill + ~/.wbx）/ 一键还原 |
+| `wbx doubao <doubao.mjs 子命令…>` | 豆包桌面桥直通（v6.3 可选工具·非 lane·Windows-only）：status/new-task/configure/send/read/ask，参数原样转发；需豆包以调试口 9225 运行（先跑 `~/.zcode/wbx-bridge/doubao/launch.ps1`，装过 self-install 后任何目录可用）；详见 tools/doubao-bridge/README.md |
+| `wbx self-install / self-uninstall` | 用户级全局安装（/wbx 命令 + 用户级 skill + ~/.wbx + 豆包桥 doubao/ 副本）/ 一键还原（豆包副本随桥本体删） |
 | `wbx install-user / uninstall-user` | 仅向 `~/.zcode/AGENTS.md` 注入/移除全局主动分派块 |
 
 （`wbx` = `node .zcode/skills/wb-bridge/scripts/wbx.mjs`；WorkBuddy lane 默认模型 deepseek-v4.1-flash）
