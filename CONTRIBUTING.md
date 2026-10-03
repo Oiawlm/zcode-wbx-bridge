@@ -37,6 +37,7 @@
 - 基于**单 main 分支**直接提交 PR，无需额外分支模型。
 - 本地 `node --check` 对**全部脚本**逐个通过。
 - 跑**全命令回归**：`doctor` / `ask` / `fanout` / `config` / `history` / `export-bundle`。
+- 回归门禁套件（`internal/*.mjs`）在维护者本地 `internal/` 下（已 gitignore，不入库），PR **只要求全命令回归**；门禁由维护者在合并前统一执行。
 - PR 描述须包含：
   - 白名单符合性说明（是否新增文件、理由）；
   - `node --check` 结果；

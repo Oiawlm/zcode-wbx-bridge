@@ -1,5 +1,7 @@
 # wbx 桥 — 让 AI 编程助手把调研、翻译乃至代码模块编写并行外包给免费的 DeepSeek
 
+> 当前版本见 [CHANGELOG.md](CHANGELOG.md) 首条。
+
 **一句话定位**：它教你的 AI 编程助手（ZCode）学会一件事——把调研初稿、翻译、批量文本，乃至**代码模块的编写**，自动并行外包给免费（或近免费）的外部算力去做；这些外部 Agent 就是它的子代理，默认分派、放开用。
 
 为什么需要它：你订阅的 AI 编程助手额度宝贵，但日常开发里大量子任务是「自包含」的——给三款竞品各写一份调研初稿、把十段文案翻成英文、从日志抽取结构化数据，甚至是一个接口已经定义清楚、上下文可以贴进提示词的工具函数模块。这些活交给主力模型既慢又浪费额度。wbx 桥把它们转发给免费（或近免费）的 DeepSeek 算力，并行执行、结果落盘、随时回放；主力模型退回它最该做的事——定义接口、集成、审查与兜底。
@@ -14,34 +16,30 @@
     ▼
  wbx 桥（Node CLI，本仓库）
     │  自动拆成独立 worker 任务（调研/翻译/…/代码模块），并行分派
-    ├──────────────────┬──────────────────┬───────────────┐
-    ▼                  ▼                  ▼               │
- ai lane（国际版）   cn lane（国内版）    cline lane（可选）  │
- WorkBuddy AI        WorkBuddy           Cline CLI        │
- DeepSeek V4.1 Flash DeepSeek V4.1 Flash DeepSeek V4.1 Flash│
- x0.00 免费          x0.03 近免费         免费孪生·xhigh    │
-    └──────────────────┴──────────────────┴───────┬───────┘
+    ├───────────────┬───────────────┬───────────────┬─────────────┐
+    ▼               ▼               ▼               ▼             │
+ ai lane（国际版）  cn lane（国内版） cline lane（可选） doubao（可选） │
+ WorkBuddy AI       WorkBuddy        Cline CLI        豆包桌面端     │
+ DeepSeek V4.1 Flash DeepSeek V4.1 Flash DeepSeek V4.1 Flash 2.1 Pro·推理高│
+ x0.00 免费         x0.03 近免费      免费孪生·xhigh    会员额度       │
+    └───────────────┴───────────────┴───────────────┴──────┬──────┘
                                                    ▼
                      结果落盘 .wbx/jobs/<jobId>/（可回放、可审计）
 ```
 
-- 「lane（车道）」就是一条到某个模型服务的通路。前两条 lane 对应 WorkBuddy 的两个版本（你登录哪个账号，就用哪个账号下的 DeepSeek V4.1 Flash）；第三条是可选的独立上游 Cline CLI——同源限流时多一份真实冗余；第四条（v6.6 起可选）是本机豆包桌面端「工作任务模式」——耗会员额度，免费 lane 优先，排回退链最末。
+- 「lane（车道）」就是一条到某个模型服务的通路。前两条 lane 对应 WorkBuddy 的两个版本（你登录哪个账号，就用哪个账号下的 DeepSeek V4.1 Flash）；第三条是可选的独立上游 Cline CLI——同源限流时多一份真实冗余；第四条是本机豆包桌面端「工作任务模式」——耗会员额度，免费 lane 优先，排回退链最末。
 
-| lane | 对应产品 | 服务地址 | 模型成本 |
-|---|---|---|---|
-| `ai` | WorkBuddy AI 国际版 | www.workbuddy.ai | DeepSeek V4.1 Flash **x0.00（当前免费）** |
-| `cn` | WorkBuddy 国内版 | copilot.tencent.com | DeepSeek V4.1 Flash x0.03（近免费） |
-| `cline` | Cline CLI（可选，需 npm 单独安装） | Cline provider（OAuth 账号） | DeepSeek V4.1 Flash **免费（`cline-free/` 免费孪生，限时轮换+每日配额）** |
-| `doubao` | 豆包桌面端（可选，Windows-only） | 豆包客户端（CDP 调试口 127.0.0.1:9225） | **会员额度**（工作模式耗额度明显快于普通对话，官方口径；模型自管理豆包 2.1 Pro · 推理高，任务级 `--model`/`--effort` 不生效） |
+- 四 lane 速览：`ai` = WorkBuddy AI 国际版（DeepSeek V4.1 Flash **x0.00 免费**）；`cn` = 国内版（x0.03 近免费）；`cline` = Cline CLI 可选（**免费孪生**，限时轮换+每日配额）；`doubao` = 豆包桌面端可选（**会员额度**，模型自管理 2.1 Pro · 推理高，任务级 `--model`/`--effort` 不生效）。
+  身份/凭证/endpoint 逐 lane 明细见 [SKILL.md](.zcode/skills/wb-bridge/SKILL.md) 的 lane 表（唯一人维护源）与 [WBX.md](WBX.md)「四 lane 与默认路由」。
 
 - **回退链**：`ai`（免费）→ `cn`（近免费）→ `cline`（免费孪生）→ `doubao`（会员额度）→ 你的主力模型自己做。任一 lane 失败或限流时自动改投下一条 lane（各一次，不无限重试），全部不可用就退回本地完成，任务不会丢。cline 未安装/未登录时自动跳过，**不影响其余任何功能**（doctor 对它只显示一行 WARN）；doubao 客户端调试口不在线时 ask 快速失败自然跳过。回退只在 lane 之间换（始终是 DeepSeek），**绝不在 cline 内部换用非 DeepSeek 模型顶替**。
-- **高频子代理调度（v5）**：免费 lane 几乎不要钱，所以调用策略是「默认分派」——凡自包含的子任务（输入可打包进提示词、输出可独立校验），单个也直接派，不必凑够批量；关键产物（关键代码模块/文案）同一契约并行派两份、AI 助手评审择优（best-of-N）；代码模块集成前默认过一道评审批判。防护不变：结果必校验、连续失败或限流即止损、涉密绝不外包。
+- **高频子代理调度**：免费 lane 几乎不要钱，所以调用策略是「默认分派」——凡自包含的子任务（输入可打包进提示词、输出可独立校验），单个也直接派，不必凑够批量；关键产物（关键代码模块/文案）同一契约并行派两份、AI 助手评审择优（best-of-N）；代码模块集成前默认过一道评审批判。防护不变：结果必校验、连续失败或限流即止损、涉密绝不外包。
 - 技术上：桥以无界面（headless）方式驱动 WorkBuddy 桌面版自带的 CodeBuddy CLI 与 Cline CLI，关闭其全部工具执行（cline 用 `--auto-approve false`，非终端环境下全部工具调用自动拒绝），只当纯文本模型端点用，因此不会碰你的文件系统和网络。worker 需要的代码上下文由编排器（你的 AI 助手）先读好、完整贴进提示词（「材料先行」）；超长材料走 stdin 通道自动传输，不受命令行长度限制。
 - **隔离边界**：桥的所有状态（凭证、配置、历史）只存在 `.wbx/`（全局形态为 `~/.wbx/`）；cline lane 的状态只存在 `~/.wbx/cline-home/` 隔离目录——**绝不读写你自己的 `~/.cline`**，也不写 `~/.workbuddy*`、不改系统环境变量。
 
 ## 项目形态：这是什么、不是什么
 
-wbx 桥是给 ZCode 用的一个**临时工具**，只在 **Windows** 上跑，且**非官方**——不是 WorkBuddy、Cline 或 ZCode 官方出品。它由四层组成，职责分离：
+wbx 桥是给 ZCode 用的临时工具（三处诚实声明见文首：临时工具 / Windows-only / 非官方）。它由四层组成，职责分离：
 
 | 层 | 载体 | 职责 |
 | --- | --- | --- |
@@ -237,25 +235,25 @@ node .zcode\skills\wb-bridge\scripts\wbx.mjs config set cline-model "<免费模�
 | `wbx models` | 探测模型可用性、列出账号下全部模型（`--as cline --free` 列当前免费模型组；doubao 无模型清单概念） |
 | `wbx ui --detach` / `--stop` / `--status` | 常开可视化控制台（幂等后台守护，浏览器开 127.0.0.1:7788）/ 停止 / 查看三态 |
 | `wbx ui --install-autostart` | 装 ZCode 会话自启钩子（新开会话自动拉起控制台；`--remove-autostart` 摘除） |
-| `wbx doubao <doubao.mjs 子命令…>` | 豆包桌面桥手工直通（Windows-only·零落盘旁路，v6.6 起与第四 lane 并存）：status/new-task/configure/send/read/ask；需豆包以调试口运行（先跑 `%USERPROFILE%\.zcode\wbx-bridge\doubao\launch.ps1`，装过 self-install 后任何目录可用；直通不经调度、不进桥历史——调度请用 `ask --as doubao`） |
-| `wbx self-install --adopt` | 全局安装：任何项目可用 + `/wbx` 斜杠命令（v6.3 起携带豆包桥副本） |
+| `wbx doubao <doubao.mjs 子命令…>` | 豆包桌面桥手工直通（Windows-only·零落盘旁路，与第四 lane 调度并存）：status/new-task/configure/send/read/ask；需豆包以调试口运行（先跑 `%USERPROFILE%\.zcode\wbx-bridge\doubao\launch.ps1`，装过 self-install 后任何目录可用；直通不经调度、不进桥历史——调度请用 `ask --as doubao`） |
+| `wbx self-install --adopt` | 全局安装：任何项目可用 + `/wbx` 斜杠命令（携带豆包桥副本） |
 | `wbx self-uninstall [--purge]` | 全局卸载一键还原（`--purge` 连凭证一起删） |
 | `wbx export-bundle` | 生成零凭证分发包 zip，可发给同事在其他机器安装 |
 
-另外两个入口：ZCode 会话里输入 `/wbx <任务描述>`（全局安装后可用）= 一键分派流程；`wbx ui` = 网页控制台，可视化看四 lane 状态、发起任务、翻历史记录（v6.4 起历史页含全量 token 用量合计）。另有 `wbx doubao …` 直通本机豆包桌面端（手工直通零落盘旁路，见上表与 `tools/doubao-bridge/README.md`）。
+另外两个入口：ZCode 会话里输入 `/wbx <任务描述>`（全局安装后可用）= 一键分派流程；`wbx ui` = 网页控制台，可视化看四 lane 状态、发起任务、翻历史记录（历史页含全量 token 用量合计）。另有 `wbx doubao …` 直通本机豆包桌面端（手工直通零落盘旁路，见上表与 `tools/doubao-bridge/README.md`）。
 
-**质量与安全提示**：免费算力输出质量有方差，外包结果先校验再使用（代码产物必须审查/运行后才进交付物，v5 起集成前默认过一道评审批判）；worker 无联网能力，「调研」产出是模型已有知识、可能过时；涉密内容绝不外包。完整分派准则与 worker 提示词模板见 [SKILL.md](.zcode/skills/wb-bridge/SKILL.md) 与 [PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md)（v2 知识库：12 条原则、9 类模板、经验条目库与决策速查表），技术细节见 [WBX.md](WBX.md)。
+**质量与安全提示**：免费算力输出质量有方差，外包结果先校验再使用（代码产物必须审查/运行后才进交付物，集成前默认过一道评审批判）；worker 无联网能力，「调研」产出是模型已有知识、可能过时；涉密内容绝不外包。完整分派准则与 worker 提示词模板见 [SKILL.md](.zcode/skills/wb-bridge/SKILL.md) 与 [PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md)（知识库：原则/模板/经验条目数见其 §速查表），技术细节见 [WBX.md](WBX.md)。
 
 ## 常见问题
 
 **能帮 AI 写代码吗？**
-能，而且这是 v4 起的核心场景。判定标准是「自包含」：模块的接口（函数签名、类型、错误约定、验收标准）由你的 AI 助手定义清楚，所需上下文可以贴进提示词，输出是一份可审查、可运行的完整文件——就适合外包。典型用法：一个功能拆五个模块，其中两三个并行外包给 DeepSeek，AI 助手负责接口定义、集成与审查。不适合的是探索式多轮编码（边跑边看、需要反复交互的任务）。代码产物一律经 AI 助手（或你）审查、编译、运行后才进入交付物；配套的代码任务提示词模板见 [PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md)。
+能，而且这是核心场景。判定标准是「自包含」：模块的接口（函数签名、类型、错误约定、验收标准）由你的 AI 助手定义清楚，所需上下文可以贴进提示词，输出是一份可审查、可运行的完整文件——就适合外包。典型用法：一个功能拆五个模块，其中两三个并行外包给 DeepSeek，AI 助手负责接口定义、集成与审查。不适合的是探索式多轮编码（边跑边看、需要反复交互的任务）。代码产物一律经 AI 助手（或你）审查、编译、运行后才进入交付物；配套的代码任务提示词模板见 [PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md)。
 
 **真的免费吗？**
-`ai` lane（国际版）当前 x0.00，`cn` lane（国内版）x0.03 近免费。`cline` lane 自 v5.1 起默认走**免费孪生** `cline-free/deepseek-v4.1-flash`：Cline 对同一模型提供两个 id，`deepseek/deepseek-v4.1-flash` 按量计费（约 $0.001/次），`cline-free/` 前缀的同名孪生实测计价恒为 $0。免费来自**限时促销轮换 + 每日用量配额**（Cline 官方口径），随时可能变化——doctor 每次都会校验默认模型是否仍在免费组（被轮换下线会提示并给出当前清单），`wbx models --as cline --free` 随时列当前免费组；想自己验证成本，用 `wbx models --as cline --probe "<id>"` 看实际计价，显示 `$0（免费）` 的才是真免费。隐私披露：**免费用量可能被 Cline 用于改进模型**（官方原文）。这些都是 WorkBuddy / Cline 的产品策略；桥每次调用都会显示实际用量，发现不再划算就停用。
+`ai` lane（国际版）当前 x0.00，`cn` lane（国内版）x0.03 近免费。`cline` lane 默认走**免费孪生** `cline-free/deepseek-v4.1-flash`：Cline 对同一模型提供两个 id，`deepseek/deepseek-v4.1-flash` 按量计费（约 $0.001/次），`cline-free/` 前缀的同名孪生实测计价恒为 $0。免费来自**限时促销轮换 + 每日用量配额**（Cline 官方口径），随时可能变化——doctor 每次都会校验默认模型是否仍在免费组（被轮换下线会提示并给出当前清单），`wbx models --as cline --free` 随时列当前免费组；想自己验证成本，用 `wbx models --as cline --probe "<id>"` 看实际计价，显示 `$0（免费）` 的才是真免费。隐私披露：**免费用量可能被 Cline 用于改进模型**（官方原文）。这些都是 WorkBuddy / Cline 的产品策略；桥每次调用都会显示实际用量，发现不再划算就停用。
 
 **多久要重新登录一次？**
-国内版 accessToken 约 55 天有效，到期后 doctor 会显示凭证红，重新 `wbx login` 一次即可；国际版有效期更长（数百天级）；cline 的 OAuth 凭证失效后（ask 报 Unauthorized）重新 `wbx login --identity cline` 即可。
+国内版 accessToken 约 55 天有效（实测口径见 [WBX.md](WBX.md)「认证机制」），到期后 doctor 会显示凭证红，重新 `wbx login` 一次即可；国际版有效期更长（数百天级）；cline 的 OAuth 凭证失效后（ask 报 Unauthorized）重新 `wbx login --identity cline` 即可。
 
 **凭证安全吗？会自动上传吗？**
 凭证（WorkBuddy accessToken、cline OAuth 凭证）只存在你本机的 `.wbx\` 或 `~\.wbx\` 文件夹，`.gitignore` 已覆盖，绝不会被提交或上传。桥的所有网络请求只发往对应官方服务地址（workbuddy.ai / copilot.tencent.com / Cline 官方端点）。
@@ -284,10 +282,10 @@ v5 的调度模式：关键产物（关键代码模块/对外文案）用**同�
 |---|---|---|
 | doctor「cli」红 | WorkBuddy App 升级挪了 CLI 路径 | 重跑 doctor 自动扫描；或 `wbx config set cli-path "<新路径>"` |
 | doctor 模板缓存缺失 | WorkBuddy 从未启动过 | 打开 WorkBuddy 桌面版登录一次，再重跑 doctor |
-| 某 lane 凭证红 / [SKIP] | 未登录或 accessToken 过期（约 55 天） | `wbx login --identity <lane>` 重新登录 |
+| 某 lane 凭证红 / [SKIP] | 未登录或 accessToken 过期（有效期见上文 FAQ） | `wbx login --identity <lane>` 重新登录 |
 | ask/fanout 报 429 / quota / 限流 | 免费额度或限流 | 降并发（`--parallel 1`）、稍后再试、换 lane；持续则停用外包 |
 | fanout 大量 timeout | 网络/服务波动 | 提高 `--timeout` 或减小并发 |
-| 提示词很长，担心命令行放不下 | v4 起 >12k 字符自动走 stdin | 无需处理；材料过长会推高延迟，按需裁剪 |
+| 提示词很长，担心命令行放不下 | >12k 字符自动走 stdin | 无需处理；材料过长会推高延迟，按需裁剪 |
 | 模型输出质量差 | 提示词缺硬输出约束 / effort 档位低 | 按 PROMPTS.md 模板补齐输出硬约束；`--effort` 调高一档 |
 | 国际版 login 永远 pending | 网页跳转后 state 丢失（已知 bug） | 复制命令输出里的「锦囊 A」URL 到地址栏回车 |
 | `Cannot find module ...wbx.mjs` | 命令用了相对路径但当前目录不在项目根 | `cd` 到项目根，或用绝对路径调用（路径含空格加引号） |
@@ -310,4 +308,4 @@ v5 的调度模式：关键产物（关键代码模块/对外文案）用**同�
 
 [MIT License](LICENSE)。
 
-再次强调：本工具**非官方**，**依赖第三方服务与 CLI**（WorkBuddy / DeepSeek / Cline），其服务条款、免费与定价策略、数据流向以各自官方约定为准——你通过本桥发送的内容会经过这些第三方服务；免费窗口随时可能变化。它是依附于当前免费窗口的**临时工具**，不再划算时请直接卸载（[UNINSTALL.md](UNINSTALL.md)）。使用本工具产生的任何费用、账号风险由使用者自行承担。
+再次强调（三处诚实声明见文首）：本工具**依赖第三方服务与 CLI**（WorkBuddy / DeepSeek / Cline / 豆包），其服务条款、免费与定价策略、数据流向以各自官方约定为准——你通过本桥发送的内容会经过这些第三方服务；免费窗口随时可能变化，不再划算时请直接卸载（[UNINSTALL.md](UNINSTALL.md)）。使用本工具产生的任何费用、账号风险由使用者自行承担。

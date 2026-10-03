@@ -1,5 +1,5 @@
 /**
- * wbx-setup — wbx 桥的安装 / 卸载 / 分发打包（v3 Phase 2 + Phase 4）
+ * wbx-setup — wbx 桥的安装 / 卸载 / 分发打包
  *
  * - selfInstall：桥复制到 ~/.zcode/wbx-bridge/，生成用户级 skill（~/.zcode/skills/wb-bridge/）、
  *   用户级斜杠命令（~/.zcode/commands/wbx.md）、~/.zcode/AGENTS.md 标记块、全局运行时 ~/.wbx/。
@@ -52,7 +52,7 @@ export function zipStore(entries) {
     const lh = Buffer.alloc(30);
     lh.writeUInt32LE(0x04034b50, 0);
     lh.writeUInt16LE(20, 4);            // version needed
-    lh.writeUInt16LE(nameBuf.toString('utf8') === e.name && /^[\x20-\x7e]+$/.test(e.name) ? 0 : 0x0800, 6); // UTF-8 标志
+    lh.writeUInt16LE(/^[\x20-\x7e]+$/.test(e.name) ? 0 : 0x0800, 6); // UTF-8 标志（纯 ASCII 名不置位）
     lh.writeUInt16LE(0, 8);             // method: store
     lh.writeUInt16LE(dosTime, 10);
     lh.writeUInt16LE(dosDate, 12);
@@ -100,6 +100,10 @@ export function zipStore(entries) {
   eocd.writeUInt16LE(0, 20);
   return Buffer.concat([...parts, ...centralBufs, eocd]);
 }
+
+// ---------- 模块级清单常量（self-install 完整性检查 / 复制 / export-bundle 共用同一来源） ----------
+const CORE_SCRIPTS = ['wbx.mjs', 'wbx-core.mjs', 'wbx-setup.mjs', 'wbx-daemon.mjs'];
+const DOC_FILES = ['WBX.md', 'UNINSTALL.md'];
 
 // ---------- 文案模板 ----------
 const globalBridgeScript = () => path.join(GLOBAL_BRIDGE_DIR, 'scripts', 'wbx.mjs');
@@ -257,43 +261,42 @@ export async function selfInstall({ adopt = false, keepProject = true } = {}) {
   const dstScripts = path.join(GLOBAL_BRIDGE_DIR, 'scripts');
 
   // 0. 源完整性
-  for (const f of ['wbx.mjs', 'wbx-core.mjs', 'wbx-setup.mjs', 'wbx-daemon.mjs']) {
+  for (const f of CORE_SCRIPTS) {
     if (!fs.existsSync(path.join(srcScripts, f))) throw new Error(`桥源不完整：缺 ${path.join(srcScripts, f)}`);
   }
 
   // 1. 桥本体 → ~/.zcode/wbx-bridge/
   await fsp.mkdir(dstScripts, { recursive: true });
   const copiedScripts = [];
-  for (const f of ['wbx.mjs', 'wbx-core.mjs', 'wbx-setup.mjs', 'wbx-daemon.mjs', ...(fs.existsSync(path.join(srcScripts, 'wbx-ui.mjs')) ? ['wbx-ui.mjs'] : [])]) {
+  for (const f of [...CORE_SCRIPTS, ...(fs.existsSync(path.join(srcScripts, 'wbx-ui.mjs')) ? ['wbx-ui.mjs'] : [])]) {
     await fsp.copyFile(path.join(srcScripts, f), path.join(dstScripts, f));
     copiedScripts.push(f);
   }
   let skillCopied = false, examplesCopied = false, docsCopied = false;
   try { await copyDir(path.join(srcSkillDir, 'examples'), path.join(GLOBAL_BRIDGE_DIR, 'examples')); examplesCopied = true; } catch { /* 无 examples */ }
   const promptsCopied = await copyIfExists(path.join(srcSkillDir, 'PROMPTS.md'), path.join(GLOBAL_BRIDGE_DIR, 'PROMPTS.md'));
-  const docFiles = ['WBX.md', 'UNINSTALL.md'];   // v6.4：去 PLAN.md（早已移入 internal/，原为死引用）
   const copiedDocs = [];
-  for (const d of docFiles) {
+  for (const d of DOC_FILES) {
     if (await copyIfExists(path.join(PROJECT_ROOT, d), path.join(GLOBAL_BRIDGE_DIR, d))) copiedDocs.push(d);
   }
   docsCopied = copiedDocs.length > 0;
   report.push(`桥本体 -> ${GLOBAL_BRIDGE_DIR}（scripts: ${copiedScripts.join(', ')}${examplesCopied ? ' + examples' : ''}${promptsCopied ? ' + PROMPTS.md' : ''}${docsCopied ? ' + docs: ' + copiedDocs.join(', ') : ''}）`);
 
-  // 1b. 豆包桥（v6.3 可选工具；v13 起兼第四 lane 运行时，直通旁路不变）：tools/doubao-bridge/ 整目录 -> ~/.zcode/wbx-bridge/doubao/。
-  //     先清旧副本再复制——node_modules 内文件可能改名/删除，纯覆盖复制会留陈旧残留；
-  //     缺失/失败只 WARN 不阻断（豆包桥直通零安装物新增（v13 lane 化零新安装物），export-bundle 分发包亦不含它）。
+  // 1b. 豆包桥（第四 lane 的运行时 + 手工直通旁路）：tools/doubao-bridge/ 整目录 -> ~/.zcode/wbx-bridge/doubao/。
+  //     先清旧副本再复制（node_modules 内文件可能改名/删除，纯覆盖会留残留）；缺失/失败只 WARN
+  //     不阻断；export-bundle 分发包不含它（可选工具，接收方自行从源码仓取）。
   let doubaoCopied = false;
   const srcDoubao = path.join(PROJECT_ROOT, 'tools', 'doubao-bridge');
   if (fs.existsSync(path.join(srcDoubao, 'doubao.mjs'))) {
     try {
       await fsp.rm(path.join(GLOBAL_BRIDGE_DIR, 'doubao'), { recursive: true, force: true });
       await copyDir(srcDoubao, path.join(GLOBAL_BRIDGE_DIR, 'doubao'));
-      // 装完即验（T7-S2）：入口/锚点/依赖缺一即视为复制不完整，走 WARN 路径提示手动整拷
+      // 装完即验：入口/锚点/依赖缺一即视为复制不完整，走 WARN 路径提示手动整拷
       const essential = ['doubao.mjs', 'anchors.json', 'launch.ps1', path.join('node_modules', 'playwright-core')];
       const missing = essential.filter((f) => !fs.existsSync(path.join(GLOBAL_BRIDGE_DIR, 'doubao', f)));
       if (missing.length) throw new Error(`复制不完整，缺 ${missing.join('、')}`);
       doubaoCopied = true;
-      report.push(`豆包桥 -> ${path.join(GLOBAL_BRIDGE_DIR, 'doubao')}${path.sep}（v6.3 可选工具；入口 wbx doubao <子命令>，含 node_modules 副本）`);
+      report.push(`豆包桥 -> ${path.join(GLOBAL_BRIDGE_DIR, 'doubao')}${path.sep}（可选工具；入口 wbx doubao <子命令>，含 node_modules 副本）`);
     } catch (e) {
       report.push(`[WARN] 豆包桥复制失败（${e && e.message}）——不影响其余 lane；可手动整目录复制 ${srcDoubao} -> ${path.join(GLOBAL_BRIDGE_DIR, 'doubao')}`);
     }
@@ -378,7 +381,7 @@ export async function selfUninstall({ purge = false } = {}) {
     try { await fsp.rm(p, { recursive: true, force: true }); report.push(`已删除 ${label}（${p}）`); }
     catch { report.push(`跳过 ${label}（${p} 不存在或不可删）`); }
   };
-  // v5.2：先停守护进程、摘自启钩子（都在删桥本体之前，保证可执行文件还在时完成清理）
+  // 先停守护进程、摘自启钩子（都在删桥本体之前，保证可执行文件还在时完成清理）
   try {
     const { stopUi } = await import('./wbx-daemon.mjs');
     const r = await stopUi();
@@ -416,7 +419,7 @@ function collectBundleEntries() {
   // 根入口 stub（安装命令可写 node wbx.mjs self-install）
   add(`${root}wbx.mjs`, '#!/usr/bin/env node\n// 分发包根入口：转发到 scripts/wbx.mjs（真正入口在同目录 scripts/ 下）\nimport("./scripts/wbx.mjs");\n');
   // scripts/
-  for (const f of ['wbx.mjs', 'wbx-core.mjs', 'wbx-setup.mjs', 'wbx-daemon.mjs', 'wbx-ui.mjs']) {
+  for (const f of [...CORE_SCRIPTS, 'wbx-ui.mjs']) {
     const p = path.join(SCRIPT_DIR, f);
     if (fs.existsSync(p)) add(`${root}scripts/${f}`, fs.readFileSync(p));
   }
@@ -431,7 +434,7 @@ function collectBundleEntries() {
     }
   }
   // docs/
-  for (const d of ['WBX.md', 'UNINSTALL.md']) {
+  for (const d of DOC_FILES) {
     const p = path.join(PROJECT_ROOT, d);
     if (fs.existsSync(p)) add(`${root}docs/${d}`, fs.readFileSync(p));
   }
@@ -443,7 +446,7 @@ function collectBundleEntries() {
 // 零凭证自检：任何成员路径不含 .wbx；文本内容不含任何已知 accessToken 值
 function assertBundleClean(entries) {
   for (const e of entries) {
-    if (/(^|\/)\.wbx(\/|$)/i.test(e.name) || e.name.includes('.wbx')) {
+    if (e.name.includes('.wbx')) {
       throw new Error(`[SELF-CHECK FAIL] 分发包包含运行时路径成员：${e.name}`);
     }
   }

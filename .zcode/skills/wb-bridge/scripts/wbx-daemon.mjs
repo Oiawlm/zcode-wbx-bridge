@@ -1,5 +1,5 @@
 /**
- * wbx-daemon — wbx 控制台守护化生命周期 + ZCode 自启钩子（v5.2 P0/P1）
+ * wbx-daemon — wbx 控制台守护化生命周期 + ZCode 自启钩子
  *
  * 职责：
  *   - 纯函数集（状态解析/判陈旧/Host·Origin 白名单/判活决策）：零依赖零副作用，可独立测试
@@ -147,6 +147,9 @@ export function appendUiLog(line) {
   } catch { /* 日志失败不致命 */ }
 }
 
+// config.json 写回（统一格式：JSON.stringify(cfg, null, 2) + 换行）
+const persist_ = (configPath, cfg) => fsp.writeFile(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+
 // ---------- 探测 ----------
 
 export function pidAlive(pid) {
@@ -178,10 +181,8 @@ export async function fetchHealth(port, timeoutMs = 1500) {
   }
 }
 
-/** 组装三条件实测并给决策；返回 {decision, state}。 */
-export async function probeExisting() {
-  const { ok, state } = readUiState();
-  if (!ok) return { decision: 'none', state: null };
+/** 组装三条件实测并给决策（probeExisting 与 statusUi 共用装配）；返回 {decision, health}。 */
+async function probeDecision_(state) {
   const health = await fetchHealth(state.port);
   const decision = decideExisting({
     hasState: true,
@@ -190,6 +191,14 @@ export async function probeExisting() {
     healthOk: health.ok,
     pidMatch: health.ok && health.pid === state.pid,
   });
+  return { decision, health };
+}
+
+/** 组装三条件实测并给决策；返回 {decision, state, health}。 */
+export async function probeExisting() {
+  const { ok, state } = readUiState();
+  if (!ok) return { decision: 'none', state: null };
+  const { decision, health } = await probeDecision_(state);
   return { decision, state, health };
 }
 
@@ -219,12 +228,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  */
 export async function detachUi({ port = UI_DEFAULT_PORT } = {}) {
   const url = (p) => `http://127.0.0.1:${p}`;
+  const reuse = (pid, p) => ({ ok: true, action: 'reused', pid, port: p, url: url(p), message: `控制台已在运行（复用，pid ${pid}）：${url(p)}` });
   try {
     ensureDirs();
     const probe = await probeExisting();
     if (probe.decision === 'reuse') {
-      return { ok: true, action: 'reused', pid: probe.state.pid, port: probe.state.port, url: url(probe.state.port),
-        message: `控制台已在运行（复用，pid ${probe.state.pid}）：${url(probe.state.port)}` };
+      return reuse(probe.state.pid, probe.state.port);
     }
     if (probe.decision === 'replace') removeUiStateIf(probe.state.pid);
     if (probe.decision === 'conflict') {
@@ -232,8 +241,7 @@ export async function detachUi({ port = UI_DEFAULT_PORT } = {}) {
       await sleep(800);
       const again = await fetchHealth(probe.state.port, 1000);
       if (again.ok && again.pid === probe.state.pid) {
-        return { ok: true, action: 'reused', pid: probe.state.pid, port: probe.state.port, url: url(probe.state.port),
-          message: `控制台已在运行（复用，pid ${probe.state.pid}）：${url(probe.state.port)}` };
+        return reuse(probe.state.pid, probe.state.port);
       }
       const msg = `状态不一致：pid ${probe.state.pid} 存活但健康检查不匹配（疑似端口被占或 pid 被复用）。` +
         `处理：wbx ui --stop 清理后再 --detach；仍失败则检查端口（netstat -ano | findstr :${probe.state.port}）`;
@@ -257,7 +265,7 @@ export async function detachUi({ port = UI_DEFAULT_PORT } = {}) {
       let done = false;
       const fin = (v) => { if (!done) { done = true; clearInterval(iv); clearTimeout(guard); resolve(v); } };
       child.once('exit', (code) => fin({ exited: true, code }));
-      child.once('error', (e) => fin({ exited: true, code: -1, error: String(e) }));
+      child.once('error', () => fin({ exited: true, code: -1 }));
       const t0 = Date.now();
       const iv = setInterval(() => {
         fetchHealth(port, 900).then((h) => { if (h.ok) fin({ health: h }); });
@@ -274,8 +282,7 @@ export async function detachUi({ port = UI_DEFAULT_PORT } = {}) {
       // 子进程没起来：可能是竞态输了（另一实例刚好绑定成功）→ 复探复用；否则报错（端口被外程序占用等）
       const again = await fetchHealth(port, 1000);
       if (again.ok) {
-        return { ok: true, action: 'reused', pid: again.pid, port, url: url(port),
-          message: `控制台已在运行（复用，pid ${again.pid}）：${url(port)}` };
+        return reuse(again.pid, port);
       }
       let tail = '';
       try { tail = fs.readFileSync(UI_LOG_FILE, 'utf8').split('\n').slice(-6).join('\n').trim(); } catch { /* 无日志 */ }
@@ -289,8 +296,6 @@ export async function detachUi({ port = UI_DEFAULT_PORT } = {}) {
     // bind 成功后由子进程写入，因此不会留下指向死 pid 的状态。
     const msg = `守护进程启动中（pid ${childPid}，3.5s 内未就绪）。稍后 wbx ui --status 确认；日志：${UI_LOG_FILE}`;
     appendUiLog(`[detach] ${new Date().toISOString()} timeout pid=${childPid}（不回收，等自愈）`);
-    return { ok: false, message: msg };
-    appendUiLog(`[detach] ${new Date().toISOString()} timeout pid=${childPid}`);
     return { ok: false, message: msg };
   } catch (e) {
     const msg = `--detach 内部错误：${e && e.message}`;
@@ -359,14 +364,7 @@ export async function statusUi() {
   const base = { log: UI_LOG_FILE, stateFile: UI_STATE_FILE };
   const { ok, state } = readUiState();
   if (!ok) return { ...base, state: 'stopped', message: '控制台未在运行（无状态文件）' };
-  const health = await fetchHealth(state.port);
-  const decision = decideExisting({
-    hasState: true,
-    stale: isStaleState(state, Date.now(), os.uptime() * 1000),
-    pidAlive: pidAlive(state.pid),
-    healthOk: health.ok,
-    pidMatch: health.ok && health.pid === state.pid,
-  });
+  const { decision } = await probeDecision_(state);
   if (decision === 'reuse') {
     return { ...base, state: 'running', pid: state.pid, port: state.port,
       startedAt: new Date(state.startedAt).toISOString(), version: state.version,
@@ -424,7 +422,7 @@ export async function daemonMain({ port = UI_DEFAULT_PORT } = {}) {
   // 服务自身 keep-alive；此处不返回
 }
 
-// ---------- ZCode SessionStart 自启钩子（P1） ----------
+// ---------- ZCode SessionStart 自启钩子 ----------
 
 export const ZCODE_CLI_CONFIG = path.join(HOME, '.zcode', 'cli', 'config.json');
 export const AUTOSTART_MARKER = path.join(UI_RUN_DIR, 'autostart-enabled-by-wbx');
@@ -494,7 +492,7 @@ export async function installAutostart({ configPath = ZCODE_CLI_CONFIG } = {}) {
     const ourGroup = list[idx];
     const hIdx = ourGroup.hooks.indexOf(ours);
     ourGroup.hooks[hIdx] = entry;
-    await fsp.writeFile(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+    await persist_(configPath, cfg);
     return { installed: true, message: `自启钩子已更新（路径/参数与当前全局形态对齐）：${configPath}` };
   }
   list.push({ matcher: '^startup$', hooks: [entry] });
@@ -505,18 +503,18 @@ export async function installAutostart({ configPath = ZCODE_CLI_CONFIG } = {}) {
   const otherHooksExist = Object.values(ev).some((v) => Array.isArray(v) && v.some((g) => g && Array.isArray(g.hooks) && g.hooks.some((h) => !isOurHookEntry(h))));
   if (!hadEnabled) {
     if (otherHooksExist) {
-      await fsp.writeFile(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+      await persist_(configPath, cfg);
       return { installed: true, message: `钩子已写入 ${configPath}，但存在其他钩子而 hooks.enabled 未设置——未擅自开启。要启用请手动置 hooks.enabled=true` };
     }
     target.enabled = true;
     fs.mkdirSync(UI_RUN_DIR, { recursive: true });
     fs.writeFileSync(AUTOSTART_MARKER, JSON.stringify({ enabledBefore: 'absent', at: new Date().toISOString() }) + '\n', 'utf8');
   } else if (target.enabled !== true) {
-    await fsp.writeFile(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+    await persist_(configPath, cfg);
     return { installed: true, message: `钩子已写入 ${configPath}，但 hooks.enabled 当前显式为 ${String(target.enabled)}（用户意图，未擅自翻转）。要启用请手动置 hooks.enabled=true` };
   }
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  await fsp.writeFile(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+  await persist_(configPath, cfg);
   const enNote = hadEnabled ? '' : '（hooks.enabled 由本命令首次开启，已记录 marker，--remove-autostart 时可还原）';
   return { installed: true, message: `自启钩子已安装：新开 ZCode 会话即自动拉起控制台（浏览器开 http://127.0.0.1:${UI_DEFAULT_PORT}）${enNote}` };
 }
@@ -558,6 +556,6 @@ export async function removeAutostart({ configPath = ZCODE_CLI_CONFIG } = {}) {
     }
     if (!Object.keys(hooks).length) delete cfg.hooks; // hooks 清空则整个移除，恢复原状
   }
-  await fsp.writeFile(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+  await persist_(configPath, cfg);
   return { removed: true, message: `自启钩子已摘除${eventsEmpty ? '（钩子结构已清空的键一并还原）' : '（其他既有钩子原样保留）'}：${configPath}` };
 }

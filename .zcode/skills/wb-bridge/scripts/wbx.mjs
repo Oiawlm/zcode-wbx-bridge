@@ -1,25 +1,25 @@
 #!/usr/bin/env node
 /**
- * wbx — ZCode ↔ WorkBuddy AI 联动桥 CLI（v3：可观测 + 全局化 + 可视化 + 可分发）
+ * wbx — ZCode ↔ WorkBuddy AI 联动桥 CLI（可观测 + 全局化 + 可视化 + 可分发）
  *
  * 可复用逻辑在 ./wbx-core.mjs，安装/打包在 ./wbx-setup.mjs，Web UI 在 ./wbx-ui.mjs。
  * 本文件是薄 CLI 壳：参数解析 + 输出格式化。
  *
- * 双 lane：ai = 国际版（deepseek-v4.1-flash x0.00 免费）；cn = 国内版（x0.03 近免费）。
- * cline lane（v5.1）：默认免费孪生 cline-free/deepseek-v4.1-flash（限时轮换+每日配额）。
- * doubao lane（v13）：豆包桌面端第四 lane（会员额度；回退链最末）+ 手工直通双入口并存。
- * 默认路由由 config.default-lane 决定（auto = ai 免费优先）；失败/限流自动回退另一 lane（各一次）。
+ * 四 lane：ai = 国际版（deepseek-v4.1-flash x0.00 免费）；cn = 国内版（x0.03 近免费）；
+ * cline = Cline CLI（默认免费孪生 cline-free/deepseek-v4.1-flash，限时轮换+每日配额）；
+ * doubao = 豆包桌面端（会员额度；回退链最末）+ 手工直通双入口并存。
+ * 默认路由由 config.default-lane 决定（auto = ai 免费优先）；失败/限流自动回退下一 lane（各一次）。
  *
  * 用法（node wbx.mjs <子命令>，详见 --help）：
  *   doctor / login / ask / fanout / models          v2 全量保留
- *   config get|set|list                             v3 运行时配置（存 <运行时根>/config.json）
- *   history [--last N] / history <jobId>            v3 job 历史与完整回放（含旧 .wbx/tasks/）
- *   install-user / uninstall-user                   v2 用户级 AGENTS.md 标记块
- *   self-install / self-uninstall                   v3 用户级全局安装（~/.zcode + ~/.wbx）
- *   ui [--port 7788]                                v3 本地 Web UI（127.0.0.1，无常驻）
- *   export-bundle [--out <dir>]                     v3 分发打包（零凭证，含自检断言）
- *   doubao <doubao.mjs 子命令…>                     v6.3 豆包桌面桥手工直通（v13 起与第四 lane 并存；
- *                                                   参数原样转发，零落盘旁路语义不变）
+ *   config get|set|list                             运行时配置（存 <运行时根>/config.json）
+ *   history [--last N] / history <jobId>            job 历史与完整回放（含旧 .wbx/tasks/）
+ *   install-user / uninstall-user                   v2 兼容（legacy）：用户级 AGENTS.md 标记块
+ *   self-install / self-uninstall                   用户级全局安装（~/.zcode + ~/.wbx）
+ *   ui [--port 7788]                                本地 Web UI（127.0.0.1，无常驻）
+ *   export-bundle [--out <dir>]                     分发打包（零凭证，含自检断言）
+ *   doubao <doubao.mjs 子命令…>                     豆包桌面桥手工直通（参数原样转发，零落盘
+ *                                                   旁路；与第四 lane 调度双入口并存）
  *
  * 约束：绝不写 ~/.workbuddy、~/.workbuddy-ai；凭证只存 .wbx/ 或 ~/.wbx/（均 gitignore），
  * 绝不打印其内容。
@@ -30,19 +30,19 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {
   WBX_VERSION, SCRIPT_DIR, PROJECT_ROOT, RUNTIME_ROOT, JOBS_DIR, LEGACY_TASKS_DIR,
-  IDENTITIES, LANE_ORDER, CONFIG_DEFS,
+  IDENTITIES, LANE_ORDER, STDIN_THRESHOLD, CONFIG_DEFS,
   clineReady, clineProvidersFile, clineHomeDir, runClineAuth,
-  sleep, die, redact, brief, fmtMs, ansiStrip,
+  die, redact, brief, fmtMs,
   ensureDirs, readStdin, migrateIfNeeded,
-  loadConfig, setConfig, parseConfigValue,
-  resolveDefaultLane, laneStatusInfo, parseLane, laneReady,
+  loadConfig, setConfig,
+  resolveDefaultLane, parseLane, laneReady,
   askOnce, resolveModel, fetchClineFreeModels,
   runAskJob, runFanoutJob,
-  listJobs, getJob, newJobId,
+  listJobs, getJob,
   startLogin, pollLoginToken, fetchAccountInfo, persistLogin,
   doctorStatus,
   USER_AGENTS_PATH, installUserBlock, uninstallUserBlock,
-  openBrowser, httpJson, exitWith,
+  openBrowser, exitWith,
 } from './wbx-core.mjs';
 import { selfInstall, selfUninstall, exportBundle } from './wbx-setup.mjs';
 
@@ -50,8 +50,9 @@ import { selfInstall, selfUninstall, exportBundle } from './wbx-setup.mjs';
 async function cmdDoctor(opts) {
   const r = await doctorStatus({ probe: !opts.noProbe, onLine: (m) => console.error(m) });
   const ready = r.readyLanes;
-  if (ready.length && r.lanes.some((l) => l.probe && !l.probe.good && r.lanes.some((x) => x.probe?.good))) {
-    console.error(`[WARN] ${r.lanes.filter((l) => l.probe && !l.probe.good).length} 个 lane 探测失败，但仍有可用 lane（${ready.join(',')}）`);
+  const failed = r.lanes.filter((l) => l.probe && !l.probe.good);
+  if (ready.length && failed.length && r.lanes.some((x) => x.probe?.good)) {
+    console.error(`[WARN] ${failed.length} 个 lane 探测失败，但仍有可用 lane（${ready.join(',')}）`);
   }
   console.error('');
   console.error(r.ok ? `[OK] doctor 通过（运行时 ${r.runtimeRoot}，版本 v${r.version}）`
@@ -60,12 +61,18 @@ async function cmdDoctor(opts) {
 }
 
 // ---------- 子命令：login ----------
+// --identity/--as 共用的 lane 实参解析（非法值统一报错文案）
+function parseLaneArg(v, flag) {
+  const k = parseLane(v);
+  if (!k) die(`--${flag} 只支持 ${LANE_ORDER.join(' | ')}（收到 ${v}）`);
+  return k;
+}
+
 async function cmdLogin(opts) {
   ensureDirs();
   const identity = opts.identity ? (() => {
-    const k = parseLane(opts.identity);
-    if (!k) die(`--identity 只支持 ai | cn | cline（收到 ${opts.identity}）`);
-    // v13：parseLane 已含 doubao（lane 化），但豆包无登录流程——登录态在客户端 GUI 内自理，拦下防误落 cn
+    const k = parseLaneArg(opts.identity, 'identity');
+    // 豆包无登录流程——登录态在客户端 GUI 内自理，拦下防误落 cn
     if (k === 'doubao') die('豆包无「登录豆包」流程：登录态由你在豆包桌面客户端内自理，桥侧零凭证。检查就绪态：wbx doubao status（或先跑 doubao/launch.ps1 以调试口 9225 拉起）');
     return k;
   })() : 'cn';
@@ -136,13 +143,14 @@ async function cmdLogin(opts) {
 
   // 5. 落盘
   await persistLogin(ctx, authToken, account);
-  const who = account ? `${account.nickname || ''}（uin ${String(account.uin || '').slice(0, 2)}***${String(account.uin || '').slice(-2)}）`.trim() : '（账号信息未获取，不影响使用）';
+  const uin = account ? String(account.uin || '') : '';
+  const who = account ? `${account.nickname || ''}（uin ${uin.slice(0, 2)}***${uin.slice(-2)}）`.trim() : '（账号信息未获取，不影响使用）';
   console.error(`[5/5] 完成：lane ${identity}（${id.label}），${who}`);
   console.error(`凭证仅存于运行时根（${RUNTIME_ROOT}，已 gitignore，请勿外传）。验证：node wbx.mjs doctor`);
 }
 
 // ---------- 子命令：ask ----------
-// 失败 hint 的人类可读提示（v5.1：含免费档超额/轮换状态机文案）
+// 失败 hint 的人类可读提示（含免费档超额/轮换状态机文案）
 function hintText(r) {
   const h = r && r.hint;
   if (h === 'login') return '（未登录/凭证过期 -> wbx login）';
@@ -160,7 +168,7 @@ async function cmdAsk(opts) {
   else if (opts.stdin) prompt = await readStdin();
   if (!prompt || !prompt.trim()) die('缺少提示词：用 --file <path>、--text "<prompt>" 或 --stdin 提供');
 
-  if (prompt.length > 12000) {
+  if (prompt.length > STDIN_THRESHOLD) {
     console.error(`[INFO] 提示词 ${prompt.length} 字符：超 12k 自动改走 stdin 通道（v4，无命令行长度限制）；材料过长会增加耗时与费用，建议按需裁剪`);
   }
 
@@ -183,7 +191,7 @@ async function cmdAsk(opts) {
       else console.log(r.text);
       await exitWith(0);
     }
-    console.error(`[FAIL] 两个 lane 均失败；最后错误 kind=${r.kind}${hintText(r)}`);
+    console.error(`[FAIL] 全部尝试 lane 均失败；最后错误 kind=${r.kind}${hintText(r)}`);
     console.error(r.error || '(无错误详情)');
     console.error(`[job] 记录 -> ${r.jobDir}`);
     await exitWith(1);
@@ -226,7 +234,7 @@ async function cmdFanout(opts) {
   let lanes = null;
   if (opts.lanes) {
     lanes = opts.lanes.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-    for (const k of lanes) if (!(IDENTITIES[k] || k === 'cline')) die(`--lanes 只支持 ai,cn,cline 的组合（收到 "${k}"）`);
+    for (const k of lanes) if (!LANE_ORDER.includes(k)) die(`--lanes 只支持 ${LANE_ORDER.join(',')} 的组合（收到 "${k}"）`);
     if (!lanes.length) die('--lanes 不能为空');
   }
 
@@ -253,10 +261,11 @@ async function cmdFanout(opts) {
 async function readProductConfigModels(laneKey) {
   const id = IDENTITIES[laneKey] || IDENTITIES[resolveDefaultLane()];
   const other = IDENTITIES[id.key === 'ai' ? 'cn' : 'ai'];
+  const homeOf = (k) => `~/.workbuddy${k === 'ai' ? '-ai' : ''}`;
   const candidates = [
     { p: id.productPath, label: `product/${id.key}.json（custom-token 注入，lane ${id.key}）` },
-    { p: id.templatePath, label: `${id.key === 'ai' ? '~/.workbuddy-ai' : '~/.workbuddy'}/cache/（${id.label}运行时缓存，只读）` },
-    { p: other.templatePath, label: `${other.key === 'ai' ? '~/.workbuddy-ai' : '~/.workbuddy'}/cache/（${other.label}缓存，只读）` },
+    { p: id.templatePath, label: `${homeOf(id.key)}/cache/（${id.label}运行时缓存，只读）` },
+    { p: other.templatePath, label: `${homeOf(other.key)}/cache/（${other.label}缓存，只读）` },
   ];
   for (const c of candidates) {
     try {
@@ -275,9 +284,8 @@ async function readProductConfigModels(laneKey) {
 async function cmdModels(opts) {
   ensureDirs();
   const lane = opts.as ? (() => {
-    const k = parseLane(opts.as);
-    if (!k) die(`--as 只支持 ai | cn | cline（收到 ${opts.as}）`);
-    // v13：doubao 无模型清单概念（工具自管理豆包 2.1 Pro + 推理高），模型探测不适用
+    const k = parseLaneArg(opts.as, 'as');
+    // doubao 无模型清单概念（工具自管理豆包 2.1 Pro + 推理高），模型探测不适用
     if (k === 'doubao') die('doubao lane 无模型探测：模型由豆包桌面端工具自管理（豆包 2.1 Pro · 推理高，ask 每次自动重验）。检查就绪态：wbx doubao status');
     return k;
   })() : resolveDefaultLane();
@@ -285,7 +293,7 @@ async function cmdModels(opts) {
     const cfg = loadConfig();
     console.error(`lane = cline（provider=${cfg['cline-provider']}，thinking=${cfg['cline-thinking']}，compaction=${cfg['cline-compaction']}）`);
 
-    // v5.1 --free：列当前免费模型组（recommended-models 端点实时；失败降级缓存，再失败明确报错）
+    // --free：列当前免费模型组（recommended-models 端点实时；失败降级缓存，再失败明确报错）
     if (opts.free) {
       const fm = await fetchClineFreeModels();
       if (!fm.ok) die(`免费清单获取失败：${fm.error}`);
@@ -385,7 +393,7 @@ async function cmdHistory(opts) {
       console.log(`（没有历史 job：${JOBS_DIR} 与旧 ${LEGACY_TASKS_DIR} 均为空）`);
       await exitWith(0);
     }
-    const w = { time: 20, type: 8, total: 6, rate: 8, lanes: 16, dir: 0 };
+    const w = { time: 20, type: 8, total: 6, rate: 8, lanes: 16 };
     console.log(['时间'.padEnd(w.time), '类型'.padEnd(w.type), '任务数'.padEnd(w.total), '成功率'.padEnd(w.rate), 'lane 分布'.padEnd(w.lanes), '目录'].join(''));
     for (const j of jobs) {
       const t = j.createdAt ? new Date(j.createdAt).toLocaleString('zh-CN', { hour12: false }) : j.id;
@@ -481,7 +489,7 @@ async function cmdExportBundle(opts) {
   }
 }
 
-// ---------- 子命令：ui（v5.2：守护化 + 自启钩子） ----------
+// ---------- 子命令：ui（守护化 + 自启钩子） ----------
 async function cmdUi(opts) {
   const daemon = await import('./wbx-daemon.mjs');
   if (opts.installAutostart) {
@@ -522,7 +530,7 @@ async function cmdUi(opts) {
     await exitWith(0);
   }
   if (opts.daemon) return daemon.daemonMain({ port: opts.port ?? 7788 }); // 内部：由 --detach spawn
-  // 裸 `wbx ui`：守护进程已在跑 -> 打印 URL + 开浏览器 + exit 0；否则维持前台模式（v3 行为）
+  // 裸 `wbx ui`：守护进程已在跑 -> 打印 URL + 开浏览器 + exit 0；否则维持前台模式
   const probe = await daemon.probeExisting();
   if (probe.decision === 'reuse') {
     const url = `http://127.0.0.1:${probe.state.port}`;
@@ -535,13 +543,10 @@ async function cmdUi(opts) {
   // startUiServer 自己 keep-alive；此处不 exit
 }
 
-// ---------- 子命令：doubao（v6.3 豆包桌面桥直通；可选工具，非 lane） ----------
+// ---------- 子命令：doubao（豆包桌面桥手工直通；可选工具） ----------
 // 参数不经 parseArgs 原样转发：豆包旗标集（--cdp-url/--timeout-ms/--wait-ms/--poll-ms/--index…）
 // 与 wbx 自身不同，由 doubao.mjs 自己解析并负责 usage/退出码；本函数只做目录解析 + 子进程直通。
-// v6.5 回退注记：v6.4 曾对 ask/send/read 落 job 记录进历史（type=doubao），用户当日翻案
-// （原话「怎么把我和豆包的聊天记录放进去了……这是错误的」）——豆包是个人桌面工具，与豆包的
-// 对话内容（含 read 抓到的手工聊天）不属于桥的调度历史。直通必须无痕：任何子命令零落盘副作用，
-// 勿再给豆包直通加记录逻辑（历史页语义=三 lane 外部算力调度记录）。
+// 不变量：直通必须无痕——任何子命令零落盘副作用，勿给豆包直通加记录逻辑（历史页语义=lane 调度记录）。
 async function cmdDoubao(restArgs) {
   const candidates = [
     path.join(path.dirname(SCRIPT_DIR), 'doubao'),        // 全局形态：~/.zcode/wbx-bridge/doubao/（self-install 复制）
@@ -552,7 +557,7 @@ async function cmdDoubao(restArgs) {
     die(
       `未找到豆包桥 doubao.mjs（已查：\n  ${candidates.join('\n  ')}）。\n` +
       '全局形态：在装有本桥的源码仓里跑 wbx self-install，会把 tools/doubao-bridge/ 一并复制到 ~/.zcode/wbx-bridge/doubao/。\n' +
-      '豆包桥是可选工具（v12 交付物，Windows-only），缺失不影响其余 lane（ai/cn/cline）。'
+      '豆包桥是可选工具（Windows-only），缺失不影响其余 lane（ai/cn/cline）。'
     );
   }
   const { spawn } = await import('node:child_process');
@@ -689,7 +694,7 @@ WBX_PROJECT_ROOT、WBX_PRODUCT_CONFIG（login 模板）`;
 
 async function main() {
   const argv = process.argv.slice(2);
-  // doubao 直通（v6.3）：其余参数原样转发给 doubao.mjs，绕过 parseArgs（旗标集互不兼容）
+  // doubao 直通：其余参数原样转发给 doubao.mjs，绕过 parseArgs（旗标集互不兼容）
   if (argv[0] === 'doubao') return cmdDoubao(argv.slice(1));
   const opts = parseArgs(argv);
   if (opts.version) { console.log(`wbx v${WBX_VERSION}`); await exitWith(0); }

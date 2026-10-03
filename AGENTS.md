@@ -1,4 +1,4 @@
-# AGENTS — wbx 四 lane 桥常驻指令（v6.6：子代理化高频调度 + doubao 完全 lane 化）
+# AGENTS — wbx 四 lane 桥常驻指令（子代理化高频调度 + doubao 完全 lane 化）
 
 > 本仓库是 wbx 联动桥（ZCode 技能 + Node CLI）。ZCode 会话在本项目内工作时，除用户明确要求外，应遵守以下常驻规则。桥的技术细节见 [WBX.md](WBX.md)，卸载见 [UNINSTALL.md](UNINSTALL.md)。
 
@@ -11,18 +11,18 @@
 | `ai` | WorkBuddy AI 国际版 | DeepSeek V4.1 Flash **x0.00（免费）** | 登录后即可用 |
 | `cn` | WorkBuddy 国内版 | DeepSeek V4.1 Flash x0.03（近免费） | 登录后即可用 |
 | `cline` | Cline CLI（**可选**） | DeepSeek V4.1 Flash **免费（`cline-free/` 免费孪生，限时轮换+每日配额，thinking=xhigh）** | 未装/未登录时桥照常工作 |
-| `doubao` | 豆包桌面端（**可选**，v6.6 起第四 lane） | **会员额度**（耗速快于普通对话；模型自管理 2.1 Pro·推理高） | 需豆包以调试口 9225 运行（launch.ps1） |
+| `doubao` | 豆包桌面端（**可选**，第四 lane） | **会员额度**（耗速快于普通对话；模型自管理 2.1 Pro·推理高） | 需豆包以调试口 9225 运行（launch.ps1） |
 
 - 默认路由：`ai` 已登录则优先（免费），否则 `cn`；回退链 **ai → cn → cline → doubao → 自己做**（各一次；
   cline 未装/无凭证直接跳过、doubao 调试口不在线自动跳过；任一 lane 失败/限流自动改投下一 lane）；cline 内部任何失败路径**绝不换用非 DeepSeek 模型顶替**（用户定案）——回退只投 ai/cn。
 - 成本理由：ai 免费、cn 近免费、cline 免费孪生、ZCode 自身耗订阅额度——所以放开用。cline 免费组
   **限时轮换**：清单实时查 `wbx models --as cline --free`，doctor 校验默认孪生在组内；超额报
   `Daily free model limit reached`（带重置时间提示）。
-- 调用入口：`node .zcode/skills/wb-bridge/scripts/wbx.mjs {doctor|login|ask|fanout|models|config|history|ui|self-install|self-uninstall|export-bundle|doubao}`（使用前先 `doctor`；doubao=豆包桌面端，调度用 `ask --as doubao`/任务绑定进历史，`wbx doubao …` 为手工直通零落盘旁路）。
+- 调用入口：`node .zcode/skills/wb-bridge/scripts/wbx.mjs <子命令>`（使用前先 `doctor`；完整命令与旗标以 `wbx --help` 为准。doubao=豆包桌面端，调度用 `ask --as doubao`/任务绑定进历史，`wbx doubao …` 为手工直通零落盘旁路）。
 - 版本演进史见 [WBX.md](WBX.md) 各版本章与 CHANGELOG.md。
 - 用法与 worker 提示词模板见 `.zcode/skills/wb-bridge/SKILL.md` 与
-  `.zcode/skills/wb-bridge/PROMPTS.md`（v3 知识库：原则 14 条 + 模板 T1–T10 + 经验条目
-  E-001…E-013 + 决策速查表含 caps 列；ZCode 会话会自动命中该 Skill）。
+  `.zcode/skills/wb-bridge/PROMPTS.md`（worker 提示词知识库：原则/模板/经验条目数见其
+  §速查表；ZCode 会话会自动命中该 Skill）。
 
 ## 调用准则（v5 基线反转：默认分派）
 

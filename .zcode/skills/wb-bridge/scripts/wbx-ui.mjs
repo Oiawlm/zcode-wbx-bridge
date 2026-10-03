@@ -1,15 +1,15 @@
 /**
- * wbx-ui — wbx 桥本地 Web UI（v3 Phase 3；v5.2 守护化 + 安全校验）
+ * wbx-ui — wbx 桥本地 Web UI（守护化 + 安全校验）
  *
  * 零第三方依赖（原生 node:http），只监听 127.0.0.1，内嵌单页前端（HTML/CSS/vanilla JS，
  * 不引任何外部 CDN，离线可用）。`wbx ui` 前台启动（自动开浏览器，Ctrl+C 即退）；
  * `wbx ui --detach` 幂等拉起守护进程（生命周期见 wbx-daemon.mjs）。
  *
  * API（全 JSON）：
- *   GET  /api/status                 概览（lane 状态/到期倒计时/配置/形态 + v6.4 累计 token 用量）——不含任何凭证
+ *   GET  /api/status                 概览（lane 状态/到期倒计时/配置/形态 + 累计 token 用量）——不含任何凭证
  *   GET  /api/doctor?probe=1         体检（probe=1 含模型探测，较慢）
  *   GET  /api/doubao                 豆包桥工具状态（Doubao.exe 进程态 + 9225 CDP 探测；v12.1）
- *   GET  /api/history                job 列表（含旧 .wbx/tasks/ 兼容条目 + v6.4 全量 token 用量汇总）
+ *   GET  /api/history                job 列表（含旧 .wbx/tasks/ 兼容条目 + 全量 token 用量汇总）
  *   GET  /api/job/:id[?brief=1]      job 详情（brief 不含 prompt/回复正文，用于轮询）
  *   POST /api/ask                    {prompt, lane, model, effort, timeout, caps} -> {jobId}（caps=L0|L1|L2，v6）
  *   POST /api/fanout                 {tasks:[{id,prompt,as,caps}], lanes, parallel, timeout, retry} -> {jobId}
@@ -19,7 +19,7 @@
  *   GET  /__health                   健康检查 -> {app:'wbx-ui', pid, port, version}（前台/守护都有）
  *   POST /__shutdown                 {token} 优雅关闭（仅守护模式；token 存 run/ui.json，绝不外泄）
  *
- * 安全校验（v5.2，前台/守护一律生效）：
+ * 安全校验（前台/守护一律生效）：
  *   - Host 头白名单：仅 127.0.0.1(:port) / localhost(:port)，其余 403（防 DNS rebinding）
  *   - POST 一律校验 Origin：同源或无 Origin（非浏览器客户端），其余 403
  *
@@ -56,8 +56,8 @@ const HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>wbx 桥控制台</title>
 <style>
-/* ===== 设计 token（v5.3：间距/圆角/字阶/状态色全变量化；基线 internal/worker-dark-theme-tokens.md） ===== */
-/* @tokens:begin 唯一真源——token 键集与语义值以本块为准；改动必须同步 UI-SPEC.md（仓库根）并过 internal/ui-contract.mjs（v5.4 UI 契约冻结，见 internal/FROZEN.md） */
+/* ===== 设计 token（间距/圆角/字阶/状态色全变量化；基线 internal/v8-dark-theme-tokens.md） ===== */
+/* @tokens:begin 唯一真源——token 键集与语义值以本块为准；改动必须同步 UI-SPEC.md（仓库根）并过 internal/ui-contract.mjs（UI 契约冻结，见 internal/FROZEN.md） */
 :root{
   --bg:#0f1117;--panel:#171a23;--panel-inset:#1e2230;--hover:#232838;
   --line:#2a2f40;--line-strong:#3a4160;--line-ctrl:#5c6684;
@@ -350,7 +350,7 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
 <section id="tab-status" class="on">
   <div class="card ovw" id="ovw" style="display:none"></div>
   <div class="card" id="status-error" style="display:none"><div class="card__bd" id="status-error-bd"></div></div>
-  <!-- v13：静态 #doubao-card 退役，豆包升格第四 lane，卡由 doubaoCardHtml() 渲染进 #lane-cards grid -->
+  <!-- 豆包为第四 lane：卡由 doubaoCardHtml() 渲染进 #lane-cards grid（无静态 #doubao-card） -->
   <div class="grid3" id="lane-cards"></div>
   <div class="card">
     <div class="card__hd"><span class="card__title">路由</span></div>
@@ -456,7 +456,7 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
         <thead><tr><th>时间</th><th>类型</th><th class="num">任务数</th><th class="num">成功率</th><th>任务 ID</th></tr></thead>
         <tbody></tbody>
       </table></div>
-      <p class="hint" style="margin-top:8px">点击行内任意位置，详情直接展开在该行下方（v6 行内化）；再点收起。任务 ID 列点击复制。右上角合计为全部历史的累计 token 用量（in=提示词/out=回复）。</p>
+      <p class="hint" style="margin-top:8px">点击行内任意位置，详情直接展开在该行下方；再点收起。任务 ID 列点击复制。右上角合计为全部历史的累计 token 用量（in=提示词/out=回复）。</p>
     </div>
   </div>
 </section>
@@ -503,21 +503,22 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
 <div class="toasts" id="toasts"></div>
 <script>
 'use strict';
-// ---------- 渲染层中文化映射表（v5.2 冻结术语，v5.3 只改排布/密度/编码，不改译法；数据值/config 键/API 字段一律不动） ----------
-const LANE_LABEL={ai:'WorkBuddy AI',cn:'WorkBuddy',cline:'Cline',doubao:'豆包',auto:'自动'};            // 短称：下拉/表格列/回退（v13 +doubao=第四 lane）
-const LANE_TITLE={ai:'WorkBuddy AI（国际版）',cn:'WorkBuddy（国内版）',cline:'Cline CLI（可选通道）',doubao:'豆包（桌面端）'}; // 全称：卡片标题（v13 +doubao）
-const TYPE_LABEL={ask:'单条调用',fanout:'批量并行',unknown:'未知'};                        // 历史「类型」列（v6.5 回退 v6.4 +doubao：豆包历史已翻案移除）
+// ---------- 渲染层中文化映射表（冻结术语：只改排布/密度/编码不改译法；数据值/config 键/API 字段一律不动） ----------
+const LANE_LABEL={ai:'WorkBuddy AI',cn:'WorkBuddy',cline:'Cline',doubao:'豆包',auto:'自动'};            // 短称：下拉/表格列/回退
+const LANE_TITLE={ai:'WorkBuddy AI（国际版）',cn:'WorkBuddy（国内版）',cline:'Cline CLI（可选通道）',doubao:'豆包（桌面端）'}; // 全称：卡片标题
+const TYPE_LABEL={ask:'单条调用',fanout:'批量并行',unknown:'未知'};                        // 历史「类型」列（键集=UI 契约 D2 冻结集）
 const TASK_STATUS_LABEL={success:'成功',failed:'失败'};
 const JOB_STATUS_LABEL={done:'已完成',running:'进行中',pending:'等待中'};
-const LANE_ORDER_UI=['ai','cn','cline','doubao'];
+const LANE_ORDER_UI=['${LANE_ORDER.join("','")}'];   // 自 core LANE_ORDER 派生（lane 集合唯一来源）
 const BS=String.fromCharCode(92); // 反斜杠常量（模板字符串安全，不写反斜杠字面量）
+const WBX_PS='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs'; // 全局入口命令前缀（cmd 写法）
 function laneLabel(k){return LANE_LABEL[k]||k||''}
 function laneTitle(k){return LANE_TITLE[k]||LANE_LABEL[k]||k||''}
 function typeLabel(t,legacy){return (legacy?'旧版·':'')+(TYPE_LABEL[t]||t||'')}
 function taskStatusLabel(s){return TASK_STATUS_LABEL[s]||s||''}
 function jobStatusLabel(s){return JOB_STATUS_LABEL[s]||s||''}
 function fallbackText(from,to){return from?(laneLabel(from)+' → '+laneLabel(to)):laneLabel(to)}
-// v5.1 超额状态机的 UI 侧提示（与 CLI hintText 同源语义；原始错误原文保留，只追加友好提示）
+// 超额状态机的 UI 侧提示（与 CLI hintText 同源语义；原始错误原文保留，只追加友好提示）
 function errorHint(text){
   var t=String(text||'');
   if(/Daily free model limit reached/i.test(t))return '（Cline 免费额度今日已达上限 → 稍后再试，或到「状态」页 Cline 卡换免费模型）';
@@ -530,7 +531,7 @@ function errorHint(text){
 const $=(id)=>document.getElementById(id);
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function fmtMs(ms){return ms==null?'?':(ms/1000).toFixed(1)+'s'}
-function fmtInt(n){return (n==null||!Number.isFinite(Number(n)))?'?':Number(n).toLocaleString('en-US')}  // v6.4 token/合计千分位
+function fmtInt(n){return (n==null||!Number.isFinite(Number(n)))?'?':Number(n).toLocaleString('en-US')}  // token/合计千分位
 function baseName(p){const segs=String(p||'').split(BS).join('/').split('/');return segs[segs.length-1]||String(p||'')}
 function shortRoot(p){const segs=String(p||'').split(BS);return segs.length>1?'…'+BS+segs[segs.length-1]:String(p||'')}
 function copyBtn(t){return '<button class="copybtn" data-copy="'+esc(t)+'">复制</button>'}
@@ -561,7 +562,7 @@ async function copyText(t){
     catch(e2){toast('复制失败','error')}
   }
 }
-// ---------- 极简 markdown 渲染（标题/粗斜体/行内代码/围栏代码/链接/列表/引用；与 v5.2 同源） ----------
+// ---------- 极简 markdown 渲染（标题/粗斜体/行内代码/围栏代码/链接/列表/引用） ----------
 function md(src){
   var t=String(src==null?'':src);
   t=esc(t);
@@ -652,7 +653,7 @@ function laneTier(l){
     if(!l.credential)return{rank:2,cls:'warn',shape:'s-dia',label:'未登录（OAuth）',signal:'未登录'};
     return{rank:4,cls:'ok',shape:'s-dot',label:'已登录',signal:'已登录'};
   }
-  // v13：doubao 分支——静态读性=桥脚本可解析（win32+doubao.mjs）；桌面端进程/调试口 4 态由
+  // doubao 分支——静态读性=桥脚本可解析（win32+doubao.mjs）；桌面端进程/调试口 4 态由
   // /api/doubao 探针细化（总览豆包 chip 与卡徽标走探针态），此处只兜底排序与聚合
   if(l.key==='doubao'){
     if(!l.ready)return{rank:3,cls:'absent',shape:'s-ring',label:'未安装（可选）',signal:'未安装'};
@@ -680,7 +681,7 @@ async function loadStatus(){
     renderOvw(s);
     $('lane-cards').innerHTML=laneCardsHtml(s);
     renderRoute(s);
-    paintDoubaoCard();   // v13：lane-cards 渲染完回填豆包徽标（loadDoubao 先返回的竞态补画）
+    paintDoubaoCard();   // lane-cards 渲染完回填豆包徽标（loadDoubao 先返回的竞态补画）
   }catch(e){
     $('ovw').style.display='none';
     $('lane-cards').innerHTML='';
@@ -690,8 +691,8 @@ async function loadStatus(){
     $('hdr-meta').textContent='加载失败';
   }
 }
-// ---------- 豆包桥工具卡（v12.1；运行状态来自 /api/doubao，失败静默降级不 toast） ----------
-// v13：badge/proc/cdp 随豆包 lane 卡动态渲染，与 loadStatus 存在竞态——paintDoubaoCard() 从
+// ---------- 豆包桥工具卡（运行状态来自 /api/doubao，失败静默降级不 toast） ----------
+// badge/proc/cdp 随豆包 lane 卡动态渲染，与 loadStatus 存在竞态——paintDoubaoCard() 从
 // DOUBAO_LAST 回填，renderDoubao（探针返回时）与 loadStatus（lane-cards 渲染完时）双向调用，
 // 两边都未就绪时保留「检测中…」占位（元素不存在直接返回，不报错）。
 function paintDoubaoCard(){
@@ -702,13 +703,13 @@ function paintDoubaoCard(){
   const running=d?d.running:false;
   const online=d?d.online:false;
   // 徽标四态：未知/非 win32/进程不在 → absent；cdp → ok；进程在但没开调试口 → neutral
-  let cls='badge absent', label='豆包未运行';
-  if(!d||d.unknown){cls='badge absent';label='状态未知';}
-  else if(!win){cls='badge absent';label='仅 Windows';}
+  let cls='badge absent', label=(d&&d.unknown)?'状态未知':'豆包未运行';
+  if(!d||d.unknown){label='状态未知';}
+  else if(!win){label='仅 Windows';}
   else if(online){cls='badge ok';label='调试口在线';}
   else if(running){cls='badge neutral';label='未开调试口';}
   bd.className=cls;bd.textContent=label;
-  // v13：客户端进程/调试口两行同源回填（DOUBAO_RAW 为 /api/doubao 原始 payload；未知态保留占位）
+  // 客户端进程/调试口两行同源回填（DOUBAO_RAW 为 /api/doubao 原始 payload；未知态保留占位）
   const pr=$('doubao-proc');
   const cd=$('doubao-cdp');
   const raw=DOUBAO_RAW;
@@ -761,13 +762,13 @@ function renderOvw(s){
   if(dis>0)txt+=' · '+dis+' 个已停用';
   txt+=' · '+(s.defaultLane==='auto'?'自动路由 → '+laneLabel(s.effectiveLane):'固定路由 '+laneLabel(s.defaultLane));
   const chipHtml=LANE_ORDER_UI.map(function(k){
-    if(k==='doubao')return doubaoChipHtml();   // v13：豆包 chip 走 /api/doubao 探针 4 态（比 laneTier 静态读性更细），锚点=新 lane 卡
+    if(k==='doubao')return doubaoChipHtml();   // 豆包 chip 走 /api/doubao 探针 4 态（比 laneTier 静态读性更细），锚点=新 lane 卡
     const l=s.lanes.find(function(x){return x.key===k});
     const t=laneTier(l);
     const col=t.cls==='absent'?'c-neutral':'c-'+t.cls;
     return '<a class="chip" href="#lane-card-'+k+'" title="跳到 '+esc(laneTitle(k))+' 卡片"><i class="shp '+t.shape+' '+col+'"></i>'+esc(laneLabel(k))+'<span class="sig">'+esc(t.signal)+'</span></a>';
   }).join('')
-  // v6.4 内容级扩展：外部桥接累计 token 用量 chip（点击去历史页）
+  // 外部桥接累计 token 用量 chip（内容级扩展点，点击去历史页）
   +(s.tokens?tokensChipHtml(s.tokens):'');
   const ovw=$('ovw');
   ovw.className='card ovw t-'+(worst.cls==='absent'?'neutral':worst.cls);
@@ -791,7 +792,7 @@ function laneCardsHtml(s){
   });
   return lanes.map(function(l){
     if(l.key==='cline')return clineCardHtml(l,s);
-    if(l.key==='doubao')return doubaoCardHtml(l);   // v13：豆包升格 lane 卡进 grid（静态 #doubao-card 退役）
+    if(l.key==='doubao')return doubaoCardHtml(l);   // 豆包 lane 卡渲染进 grid
     return wbCardHtml(l);
   }).join('');
 }
@@ -822,19 +823,19 @@ function wbCardHtml(l){
     +'<span class="k">登录模板</span><span class="v">'+(l.templateExists?'<span class="badge ok">有</span>':'<span class="badge warn">缺（启动一次桌面版）</span>')+'</span>'
     +'</div></div></details></div></div>';
 }
-// v13：豆包第四 lane 卡（原静态 #doubao-card 升格）。徽标=4 态探针（/api/doubao + loadDoubao()
+// 豆包第四 lane 卡。徽标=4 态探针（/api/doubao + loadDoubao()
 // 数据通路，badge/proc/cdp 三个 id 随卡迁入 grid，loadDoubao 无需改动）；详情保留 launch.ps1
 // 复制行、使用说明与排障、三处诚实声明全文；调度入口与手工直通（零落盘旁路）双入口并列。
 function doubaoCardHtml(l){
   const badge='<span class="badge neutral" id="doubao-badge">检测中…</span>';
-  const askCmd='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs" ask --as doubao "任务文本"';
-  const doubaoAskCmd='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs" doubao ask "任务文本"';
+  const askCmd=WBX_PS+'" ask --as doubao "任务文本"';
+  const doubaoAskCmd=WBX_PS+'" doubao ask "任务文本"';
   const launchCmd='powershell -ExecutionPolicy Bypass -File "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'doubao'+BS+'launch.ps1" -Force';
-  const stCmd='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs" doubao status';
-  const ntCmd='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs" doubao new-task';
-  const cfgCmd='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs" doubao configure';
-  const sendCmd='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs" doubao send "任务文本"';
-  const rdCmd='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs" doubao read';
+  const stCmd=WBX_PS+'" doubao status';
+  const ntCmd=WBX_PS+'" doubao new-task';
+  const cfgCmd=WBX_PS+'" doubao configure';
+  const sendCmd=WBX_PS+'" doubao send "任务文本"';
+  const rdCmd=WBX_PS+'" doubao read';
   const hint2='（cmd 写法，PowerShell 把 %USERPROFILE% 换成 $env:USERPROFILE、Git Bash 换成 ~）';
   return '<div class="card'+(l.disabled?' off':'')+'" id="lane-card-doubao">'
     +'<div class="card__hd"><span class="card__title">'+esc(laneTitle('doubao'))+'</span>'+badge
@@ -860,7 +861,7 @@ function doubaoCardHtml(l){
     +'<p class="hint">装过 self-install 后任何项目任何目录可用。一条命令=新工作任务→显式配 Pro+推理「高」→发送→取回结果；本仓库开发形态仍可 cd tools/doubao-bridge/ 后 node doubao.mjs …。</p>'
     +'<p class="hint">桥脚本位置（doubao.mjs 双候选：全局 ~/.zcode/wbx-bridge/doubao/ → 仓库 tools/doubao-bridge/）：</p>'
     +'<div class="copyline"><span class="t">'+esc(l.bridgeDir||'未找到 doubao.mjs')+'</span>'+(l.bridgeDir?copyBtn(l.bridgeDir):'')+'</div>'
-    +'<p class="hint">分步命令速查（全局入口 = node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs"，下同；仓库形态=cd tools/doubao-bridge/ 后 node doubao.mjs）：</p>'
+    +'<p class="hint">分步命令速查（全局入口 = '+WBX_PS+'"，下同；仓库形态=cd tools/doubao-bridge/ 后 node doubao.mjs）：</p>'
     +'<div class="copyline"><span class="t">'+esc(stCmd)+'</span>'+copyBtn(stCmd)+'</div>'
     +'<p class="hint">status — CDP 是否可达、当前模型/推理档/环境。</p>'
     +'<div class="copyline"><span class="t">'+esc(ntCmd)+'</span>'+copyBtn(ntCmd)+'</div>'
@@ -909,7 +910,7 @@ function clineCardHtml(l,s){
   const binRow=l.binaryPath
     ?'<span class="vtxt" title="'+esc(l.binaryPath)+'">'+esc(baseName(l.binaryPath))+'</span>'+copyBtn(l.binaryPath)
     :'<span class="hint">未找到（npm install -g cline）</span>';
-  const loginCmd='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs" login --identity cline';
+  const loginCmd=WBX_PS+'" login --identity cline';
   return '<div class="card'+(l.disabled?' off':'')+'" id="lane-card-cline">'
     +'<div class="card__hd"><span class="card__title">'+esc(laneTitle('cline'))+'</span>'+badge
     +'<span class="card__sub">OAuth 设备授权</span>'
@@ -932,7 +933,7 @@ function renderRoute(s){
   pill.querySelectorAll('button').forEach(function(b){b.classList.toggle('active',b.dataset.v===s.config['default-lane'])});
   $('route-hint').textContent='当前生效默认路由：'+(s.defaultLane==='auto'?'自动 → '+laneLabel(s.effectiveLane):laneLabel(s.defaultLane))+'；可用通道：'+(s.readyCount>0?s.readyCount+' 个':'0 个');
   const fix=s.config['default-lane'];
-  const fixedDisabled=(fix==='ai'||fix==='cn'||fix==='cline'||fix==='doubao')&&(s.lanes.find(function(l){return l.key===fix})||{}).disabled;
+  const fixedDisabled=(LANE_ORDER_UI.indexOf(fix)>=0)&&(s.lanes.find(function(l){return l.key===fix})||{}).disabled;
   const w=$('route-warn');
   if(fixedDisabled){
     w.style.display='block';
@@ -1044,7 +1045,10 @@ function taskBody(rec){
     h+='<details class="trace-box" aria-expanded="false"><summary>工具轨迹：'+line+'</summary><div class="dbd"><pre>'+samples+'</pre></div></details>';
   }
   if(rec&&rec.result!=null)h+='<div class="mdwrap clamp">'+md(rec.result)+'</div>';
-  if(rec&&rec.error)h+=errBox(rec.error+(errorHint(rec.error)?' '+errorHint(rec.error):''));
+  if(rec&&rec.error){
+    const hint=errorHint(rec.error);
+    h+=errBox(rec.error+(hint?' '+hint:''));
+  }
   return h;
 }
 function jobFoot(j){
@@ -1187,7 +1191,7 @@ $('hist-table').addEventListener('click',function(e){
   if(e.target.closest('td.mono')){copyText(tr.dataset.id);return}
   toggleJob(tr.dataset.id,tr);
 });
-// v6 行内详情：点击行 -> 详情 <tr> 插在该行正下方（手风琴单开，openJobId 语义沿用；页底卡已退役）
+// 行内详情：点击行 -> 详情 <tr> 插在该行正下方（手风琴单开，openJobId 语义沿用；页底卡已退役）
 let openJobId=null;
 function closeInlineDetail(){
   const ex=document.querySelector('tr.job-inline');
@@ -1339,7 +1343,7 @@ function briefJob(j) {
   };
 }
 
-// ---------- 豆包桥工具状态（v12.1；只读探测，不碰豆包进程与凭证，任何失败降级不抛错） ----------
+// ---------- 豆包桥工具状态（只读探测，不碰豆包进程与凭证，任何失败降级不抛错） ----------
 function doubaoStatus() {
   const platform = process.platform;
   // 非 Windows：不做任何探测（README 诚实声明②：Windows-only，未在其他平台验证）
@@ -1386,7 +1390,7 @@ async function handler(req, res) {
   const u = new URL(req.url, 'http://127.0.0.1');
   const p = u.pathname;
   try {
-    // 安全校验（v5.2）：Host 白名单防 DNS rebinding；POST 一律校验 Origin（同源或空）
+    // 安全校验：Host 白名单防 DNS rebinding；POST 一律校验 Origin（同源或空）
     if (!hostHeaderAllowed(req.headers.host, LISTEN_PORT)) {
       return sendJson(res, 403, { error: 'Host 头不允许（本控制台仅限 127.0.0.1 / localhost 访问）' });
     }
@@ -1422,7 +1426,7 @@ async function handler(req, res) {
       ensureDirs();
       const cfg = loadConfig();
       const lanes = LANE_ORDER.map((k) => laneStatusInfo(k));
-      // v5.1：cline 免费模型组（server 侧调 recommended-models，失败降级缓存/空数组+提示）
+      // cline 免费模型组（server 侧调 recommended-models，失败降级缓存/空数组+提示）
       let clineFreeModels = [];
       let clineFreeModelsNote = '';
       {
@@ -1440,7 +1444,7 @@ async function handler(req, res) {
         config: cfg, defaultLane: cfg['default-lane'], effectiveLane: resolveDefaultLane(),
         readyCount: lanes.filter((l) => l.ready && !l.disabled).length,
         lanes, clineFreeModels, clineFreeModelsNote,
-        tokens: tokenTotals(),   // v6.4：外部桥接累计 token 用量（总览 chip 展示）
+        tokens: tokenTotals(),   // 外部桥接累计 token 用量（总览 chip 展示）
       });
       return;
     }
@@ -1456,7 +1460,7 @@ async function handler(req, res) {
       return;
     }
     if (req.method === 'GET' && p === '/api/history') {
-      sendJson(res, 200, { jobs: listJobs(), totals: tokenTotals() });   // v6.4：+全量 token 用量汇总
+      sendJson(res, 200, { jobs: listJobs(), totals: tokenTotals() });   // +全量 token 用量汇总
       return;
     }
     let m;
@@ -1476,7 +1480,7 @@ async function handler(req, res) {
         as = parseLane(b.lane);
         if (!as) return sendJson(res, 400, { error: `lane 取值只支持 auto|ai|cn|cline|doubao（ai=WorkBuddy AI，cn=WorkBuddy，cline=Cline，doubao=豆包桌面端；收到 ${b.lane}）` });
       }
-      // v6 caps：任务契约字段——不合法值/lane 不匹配/L2 未交付均 400（绝不静默降档或改路）
+      // caps 任务契约字段——不合法值/lane 不匹配/L2 未交付均 400（绝不静默降档或改路）
       let caps = null;
       if (b.caps != null && b.caps !== '') {
         caps = parseCaps(b.caps);
@@ -1492,7 +1496,7 @@ async function handler(req, res) {
         effort: typeof b.effort === 'string' && b.effort ? b.effort : null,
         timeoutS: Number(b.timeout) > 0 ? Number(b.timeout) : 300,
         caps,
-        maxTurns: b.maxTurns ?? null,   // v6.2 契约 A：任务级 L1 回合上限（core 校验 1-64/仅 L1）
+        maxTurns: b.maxTurns ?? null,   // 任务级 L1 回合上限（core 校验 1-64/仅 L1）
         jobId,
       }).catch((e) => writeFailedJob(jobId, e.message));
       sendJson(res, 200, { jobId });
@@ -1507,8 +1511,8 @@ async function handler(req, res) {
         as: t.as || null,
         effort: t.effort || null,
         model: t.model || null,
-        caps: t.caps != null && t.caps !== '' ? t.caps : null,   // v6 任务级能力档（透传 core 校验）
-        maxTurns: t.maxTurns ?? null,   // v6.2 契约 A：任务级 L1 回合上限（透传 core 校验）
+        caps: t.caps != null && t.caps !== '' ? t.caps : null,   // 任务级能力档（透传 core 校验）
+        maxTurns: t.maxTurns ?? null,   // 任务级 L1 回合上限（透传 core 校验）
       }));
       const bad = tasksIn.find((t) => !t.prompt.trim());
       if (bad) return sendJson(res, 400, { error: `任务 ${bad.id} 缺少提示词（prompt）` });
@@ -1540,7 +1544,7 @@ async function handler(req, res) {
     if (req.method === 'POST' && p === '/api/login/start') {
       const b = await readBody(req);
       const lane = parseLane(b.lane);
-      // v13：仅 ai/cn 有 SSO 登录流（cline=CLI OAuth；doubao=客户端 GUI 自理，均不走此端点）
+      // 仅 ai/cn 有 SSO 登录流（cline=CLI OAuth；doubao=客户端 GUI 自理，均不走此端点）
       if (!lane || lane === 'cline' || lane === 'doubao') return sendJson(res, 400, { error: 'lane 只支持 ai|cn' });
       if (loginState.status === 'pending') return sendJson(res, 409, { error: `已有登录流程进行中（lane ${loginState.lane}）` });
       loginState.status = 'pending'; // 先占位防并发登录流（TOCTOU），失败回滚

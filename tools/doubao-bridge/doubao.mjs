@@ -2,7 +2,7 @@
 // tools/doubao-bridge/doubao.mjs
 // 豆包桌面端「工作模式」CDP 驱动 CLI。
 // 依赖：playwright-core + Node 内置模块。选择器一律来自同目录 anchors.json。
-// P9：本文件不出现、不读取、不传递任何凭证，也不触碰应用 userData 目录。
+// 本文件不出现、不读取、不传递任何凭证，也不触碰应用 userData 目录。
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -21,7 +21,7 @@ const REASONING_VALUES = ['低', '中', '高'];
 const USAGE = [
   'doubao.mjs status',
   'doubao.mjs new-task',
-  'doubao.mjs configure [--model <name>] [--reasoning <低|中|高>]',
+  `doubao.mjs configure [--model <name>] [--reasoning <${REASONING_VALUES.join('|')}>]`,
   'doubao.mjs send <text...> | --file <path>',
   'doubao.mjs read [--wait-ms 180000] [--poll-ms 3000] [--index -1]',
   'doubao.mjs ask <text...> | --file <path>',
@@ -170,7 +170,7 @@ function candidatesFor(key) {
   return value;
 }
 
-// P7：只认主应用页，launcher / background 页一律不碰
+// 只认主应用页，launcher / background 页一律不碰
 async function getAppPage(browser, timeoutMs) {
   const deadline = Date.now() + Math.min(timeoutMs, 3000);
   for (;;) {
@@ -203,7 +203,7 @@ async function tryResolve(page, key, { timeoutMs, state = 'visible' } = {}) {
   return null;
 }
 
-// P10：任何锚点全候选失配 → exit 2，绝不硬重试、绝不换 locator 猜
+// 任何锚点全候选失配 → exit 2，绝不硬重试、绝不换 locator 猜
 async function resolveAnchor(page, key, opts) {
   const sel = await tryResolve(page, key, opts);
   if (!sel) {
@@ -212,12 +212,11 @@ async function resolveAnchor(page, key, opts) {
       candidates: anchors[key],
     });
   }
-  return { key, sel, locator: page.locator(sel).first() };
+  return page.locator(sel).first();
 }
 
 async function resolveOne(page, key, opts) {
-  const { locator } = await resolveAnchor(page, key, opts);
-  return locator;
+  return resolveAnchor(page, key, opts);
 }
 
 // ---------------------------------------------------------------- 状态栏
@@ -232,7 +231,7 @@ function buildStatusRegex() {
   const names = new Set(['自动']);
   for (const label of Object.values(anchors?.modelItems ?? {})) names.add(label);
   const alts = [...names].map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  return new RegExp(`^(${alts})\\s*([低中高])?$`);
+  return new RegExp(`^(${alts})\\s*([${REASONING_VALUES.join('')}])?$`);
 }
 
 function parseStatus(text) {
@@ -288,7 +287,7 @@ async function isMenuOpen(page) {
   return false;
 }
 
-// P3：Radix 菜单未关时 body 被置为 pointer-events:none，后续所有真实点击都会超时
+// Radix 菜单未关时 body 被置为 pointer-events:none，后续所有真实点击都会超时
 async function closeMenus(page) {
   for (let i = 0; i < 2; i++) {
     if (!(await isMenuOpen(page))) return true;
@@ -314,7 +313,7 @@ async function findMenuItem(page, { label, prefix = false, timeoutMs, what }) {
       const raw = await el.textContent({ timeout: perEl }).catch(() => null);
       if (raw == null) continue;
       const text = normalizeText(raw);
-      if (text === label) return el; // P4：必须精确匹配，has-text 会命中共前缀项
+      if (text === label) return el; // 必须精确匹配，has-text 会命中共前缀项
       if (prefix && !prefixHit && text.startsWith(label)) prefixHit = el;
     }
     if (prefixHit) return prefixHit;
@@ -328,7 +327,7 @@ async function findMenuItem(page, { label, prefix = false, timeoutMs, what }) {
 async function ensureMenuOpen(page, opts) {
   if (await isMenuOpen(page)) return;
   const button = await resolveOne(page, 'modelButton', { timeoutMs: opts.timeoutMs, state: 'visible' });
-  await button.click(); // P2：真实 CDP 点击
+  await button.click(); // 真实 CDP 点击
   const deadline = Date.now() + opts.timeoutMs;
   while (Date.now() < deadline) {
     if (await isMenuOpen(page)) return;
@@ -343,12 +342,7 @@ async function doStatus(page, opts) {
   const appPageUrl = page.url();
   const model = await readStatusTextSafe(page, opts.timeoutMs);
   const mode = await readModeTextSafe(page, opts.timeoutMs);
-  let browserTitle = null;
-  try {
-    browserTitle = await page.title();
-  } catch {
-    browserTitle = null;
-  }
+  const browserTitle = await page.title().catch(() => null);
   return { cdp: opts.cdpUrl, appPageUrl, model, mode, browserTitle };
 }
 
@@ -362,13 +356,11 @@ async function doNewTask(page, opts) {
     const button = await resolveOne(page, 'newWorkTaskButton', { timeoutMs: opts.timeoutMs, state: 'visible' });
     await button.click({ timeout: 5000 });
     clicked = true;
-  } catch {
-    clicked = false;
-  }
+  } catch {}
   if (!clicked) {
     await page.keyboard.press('Control+N');
   }
-  // P1：新会话可能把推理档从「高」重置为「中」（实测还会不稳定复现/不复现），这里只等切换稳定
+  // 新会话可能把推理档从「高」重置为「中」（实测还会不稳定复现/不复现），这里只等切换稳定
   await page.waitForTimeout(1500);
   const home = await tryResolve(page, 'workHomePage', { timeoutMs: 5000, state: 'visible' });
   if (!home) {
@@ -381,7 +373,7 @@ async function doConfigure(page, opts) {
   const wantModel = modelLabel(opts);
   const wantReasoning = reasoningLabel(opts);
 
-  // P3：起始状态必须是干净的，否则后面的真实点击会因模态层全部超时
+  // 起始状态必须是干净的，否则后面的真实点击会因模态层全部超时
   if (!(await closeMenus(page))) {
     throw new CliError('检测到遗留菜单且无法关闭', EXIT.CONFIG, { reason: 'menu-not-closed' });
   }
@@ -404,7 +396,7 @@ async function doConfigure(page, opts) {
       timeoutMs: opts.timeoutMs,
       what: `模型 ${wantModel}`,
     });
-    await item.click(); // P2：合成点击不会关闭 Radix 菜单，必须真实点击
+    await item.click(); // 合成点击不会关闭 Radix 菜单，必须真实点击
   }
 
   if (needReasoning) {
@@ -412,14 +404,14 @@ async function doConfigure(page, opts) {
     await ensureMenuOpen(page, opts);
     const entry = await findMenuItem(page, {
       label: '推理强度',
-      prefix: true, // P4：父项文本是「推理强度中」这类连写
+      prefix: true, // 父项文本是「推理强度中」这类连写
       timeoutMs: opts.timeoutMs,
       what: '推理强度',
     });
     await entry.click(); // 展开子菜单
     const level = await findMenuItem(page, {
       label: wantReasoning,
-      prefix: false, // P4：档位必须精确匹配，否则会被「推理强度高」等父项误命中
+      prefix: false, // 档位必须精确匹配，否则会被「推理强度高」等父项误命中
       timeoutMs: opts.timeoutMs,
       what: `推理强度 ${wantReasoning}`,
     });
@@ -443,7 +435,7 @@ async function doConfigure(page, opts) {
   return { already: false, statusBefore, statusAfter };
 }
 
-// P6：短文本走逐键键入（真实键盘事件，绕过系统 IME）；长文本走 insertText 免逐键延迟
+// 短文本走逐键键入（真实键盘事件，绕过系统 IME）；长文本走 insertText 免逐键延迟
 async function typeIntoEditor(page, text) {
   if (text.length > 200) {
     await page.keyboard.insertText(text);
@@ -459,7 +451,7 @@ async function doSend(page, opts, text) {
   const wantModel = modelLabel(opts);
   const wantReasoning = reasoningLabel(opts);
 
-  // P1：会话可能刚被新建/切换而把推理档重置，发送前强制重读状态栏并按需重配
+  // 会话可能刚被新建/切换而把推理档重置，发送前强制重读状态栏并按需重配
   let statusAtSend = await readStatusText(page, opts.timeoutMs);
   if (!statusSatisfies(statusAtSend, wantModel, wantReasoning)) {
     await doConfigure(page, opts); // 内部已校验，失败即 exit 4
@@ -480,7 +472,7 @@ async function doSend(page, opts, text) {
   await page.keyboard.press('Delete');
   await typeIntoEditor(page, payload);
 
-  // P5：chat_input_send_button 仅在编辑器有内容后才渲染，必须在输入之后定位
+  // chat_input_send_button 仅在编辑器有内容后才渲染，必须在输入之后定位
   const sendButton = await resolveOne(page, 'sendButton', { timeoutMs: opts.timeoutMs, state: 'visible' });
   await sendButton.click();
 
@@ -508,7 +500,7 @@ async function extractMessageText(messageLocator, timeoutMs) {
     if (parts.length) return parts.join('\n');
   }
   const fallback = await messageLocator.innerText({ timeout: timeoutMs }).catch(() => '');
-  return (fallback ?? '').trim();
+  return fallback.trim();
 }
 
 async function doRead(page, opts) {
@@ -616,7 +608,7 @@ async function main() {
     const page = await getAppPage(browser, opts.timeoutMs);
     return await runCommand(cmd, opts.rest, opts, page);
   } finally {
-    // P8：connectOverCDP 的 close 只是断开 attach，不会关掉豆包应用（不 kill）
+    // connectOverCDP 的 close 只是断开 attach，不会关掉豆包应用（不 kill）
     if (browser) {
       try {
         await browser.close();

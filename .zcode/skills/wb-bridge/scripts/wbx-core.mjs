@@ -1,10 +1,7 @@
 /**
- * wbx-core — wbx 桥核心库（v3：lib 化 + 配置化 + job 可观测 + 全局化 + 分发）
+ * wbx-core — wbx 桥核心库（CLI 壳 wbx.mjs 与 Web UI wbx-ui.mjs 共用的可复用逻辑）
  *
- * 从 v2 的单文件 wbx.mjs 抽出的可复用逻辑，CLI 壳（wbx.mjs）与 Web UI（wbx-ui.mjs）
- * 共同 import 本模块。对外命令行为以 wbx.mjs 为准，本文件不含 process 参数解析。
- *
- * v3 关键概念：
+ * 关键概念：
  *   - 运行时根（runtime root）解析：WBX_HOME env → ~/.wbx/（~/.zcode/wbx-bridge 存在
  *     即全局形态）→ 项目 .wbx/（项目形态，v2 现状）。
  *   - config.json（存运行时根）：default-lane / disabled-lanes / parallel-per-lane /
@@ -23,7 +20,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '6.6.0';
+export const WBX_VERSION = '6.7.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -84,17 +81,18 @@ export const IDENTITIES = {
     configDir: path.join(RUNTIME_ROOT, 'config', 'cn'),
   },
 };
-// v13 完全 lane 化（用户 2026-10-03 授权原话「完全lan化」）：doubao 升格第四 lane，排最末——
-// auto 路由与回退链都是免费优先（ai/cn/cline 全不可用才轮到会员额度的豆包），v6 ④a/④b 断言天然保持绿。
+// lane 合法集合的唯一定义点（--lanes/parseLane/config 校验/UI 派生全部 import 本常量，不得平行硬编码）
 export const LANE_ORDER = ['ai', 'cn', 'cline', 'doubao']; // 默认路由顺序：免费优先，cline（可选）次之，doubao（会员额度）最末
-// v5.2 命名公式：品牌（版本）全称——doctor/CLI 人读输出用；数据层 label 字段不变
+// 命名公式：品牌（版本）全称——doctor/CLI 人读输出用；数据层 label 字段不变
 export const LANE_BRAND = { ai: 'WorkBuddy AI（国际版）', cn: 'WorkBuddy（国内版）', cline: 'Cline CLI', doubao: '豆包（桌面端）' };
 const FALLBACK_ORDER = ['cn', 'ai', 'cline', 'doubao'];     // 回退顺序：国内版兜底，cline 次之，doubao（会员额度）最末
 
 const DEFAULT_CLI_PATH = 'D:\\App\\WorkBuddyAI\\resources\\app.asar.unpacked\\cli\\bin\\codebuddy';
 const FALLBACK_MODEL = 'deepseek-v4.1-flash';
+// 超长提示词阈值：>此值 ai/cn/cline 改走 stdin、doubao 改走 --file 临时文件（绕过 Windows 命令行长度上限）
+export const STDIN_THRESHOLD = 12000;
 
-// ---------- cline 免费孪生（v5.1：cline lane 默认免费调 DeepSeek V4.1 Flash） ----------
+// ---------- cline 免费孪生（cline lane 默认免费调 DeepSeek V4.1 Flash） ----------
 // Cline 按模型 id 计费：deepseek/deepseek-v4.1-flash 计费，cline-free/ 前缀的同名孪生免费
 //（限时促销轮换 + 每日用量配额，官方文档口径）。免费组会轮换，故清单一律走
 // recommended-models 端点（见 fetchClineFreeModels），本常量只是默认模型 id，不是清单。
@@ -102,7 +100,7 @@ export const CLINE_FREE_DEFAULT_MODEL = 'cline-free/deepseek-v4.1-flash';
 // v5 时期探测后写入 config 的计费孪生（loadConfig 一次性迁移的唯一源值；其他显式值不动）
 const CLINE_METERED_TWIN_MODEL = 'deepseek/deepseek-v4.1-flash';
 
-// ---------- cline lane（v5：可选第三 lane，独立上游） ----------
+// ---------- cline lane（可选第三 lane，独立上游） ----------
 // 红线：桥的 cline 状态只在 <运行时根>/cline-home/ 下，绝不读写用户 ~/.cline。
 // 隔离方式（Phase 0 实测定案）：通过 USERPROFILE/HOME 环境变量覆盖，让 cline 解析的
 // ~/.cline 落在桥目录内。不用 --data-dir——实测 3.0.65 该 flag 会破坏运行时认证加载
@@ -169,8 +167,8 @@ export function clineReady() {
   return !!resolveClinePath() && clineHasCredential();
 }
 
-// ---------- doubao lane（v13：第四 lane，豆包桌面端「工作模式」CDP 驱动；可选） ----------
-// 桥侧零凭证（v12 铁律延续）：登录态由用户在豆包客户端 GUI 内自理，本 lane 只经 doubao.mjs
+// ---------- doubao lane（第四 lane，豆包桌面端「工作模式」CDP 驱动；可选） ----------
+// 桥侧零凭证（铁律）：登录态由用户在豆包客户端 GUI 内自理，本 lane 只经 doubao.mjs
 // 以调试口 9225 驱动桌面端，不读写任何豆包账号信息。目录双候选解析与 wbx.mjs cmdDoubao 同款。
 export function resolveDoubaoDir() {
   const candidates = [
@@ -187,7 +185,7 @@ export function doubaoReady() {
   return process.platform === 'win32' && !!resolveDoubaoDir();
 }
 
-// ---------- cline 免费模型清单（v5.1：recommended-models 端点） ----------
+// ---------- cline 免费模型清单（recommended-models 端点） ----------
 // 官方端点（Bearer OAuth accessToken；token 只用不打印，绝不进日志/响应/导出）。
 // 返回 {recommended,free,clinePass,clineCloud} 四数组，元素 {id,name,description,tags}。
 // 免费组限时轮换 -> 清单永不硬编码，每次实时取；端点失败时降级读最近一次成功缓存。
@@ -205,7 +203,7 @@ function clineAccessTokenForCatalog_() {
 }
 
 // 专用 HTTPS GET（node:https 单次连接，不走 fetch/undici）：undici 全局连接池在 win32 上
-// 与随后的 process.exit 冲突（libuv async.c 断言、exit 127，2026-09-25 实测最小复现），
+// 与随后的 process.exit 冲突（libuv async.c 断言、exit 127，实测最小复现已固化），
 // 故目录拉取必须走本实现；返回形状与 httpJson 一致 {status,json,text}。
 function httpsGetJson_(url, { headers = {}, timeoutMs = 10000 } = {}) {
   return new Promise((resolve) => {
@@ -267,8 +265,8 @@ export async function fetchClineFreeModels({ timeoutMs = 10000 } = {}) {
   return { ok: true, source: 'endpoint', fetchedAt: rec.fetchedAt, models };
 }
 
-// ---------- v5.1 免费档错误形态（超额状态机，P0-3） ----------
-// 形态取证（2026-09-25）：超额未实测到（20 次内未见限制），消息模板取自 cline 3.0.65 二进制：
+// ---------- 免费档错误形态（超额状态机） ----------
+// 错误形态模板取自 cline 3.0.65 二进制：
 //   每日配额：『Daily free model limit reached / You've reached today's free usage limit for this
 //             model. / Try again in <时长> or select another model.』（ClineFreeModelLimitError）
 //   促销轮换：『Free model promotion ended / The free promotion for this model has ended and it is
@@ -292,7 +290,7 @@ export function extractFreeLimitResetIn(text) {
   return m ? m[1].trim() : null;
 }
 
-// ---------- worker 能力分级 caps（v6：L0 纯文本默认 / L1 只读+联网 / L2 缓期未交付） ----------
+// ---------- worker 能力分级 caps（L0 纯文本默认 / L1 只读+联网 / L2 缓期未交付） ----------
 // 第一性：caps 是任务契约不是偏好——绝不静默降档、绝不自动改路；L0 出厂零回退。
 // 映射（Phase 0 探针定案，证据 internal/v10p0-*.mjs + WBX.md v6.0.0 章映射表）：
 //   L0 = 三 lane 现有链逐字不变；
@@ -303,13 +301,12 @@ export function extractFreeLimitResetIn(text) {
 //         全失效、del 实删），六层防护栈第②层缺层不交付（GOAL-V10 红线 2）。
 export const CAPS_LEVELS = ['L0', 'L1', 'L2'];
 export const L1_TOOLS_WHITELIST = 'WebSearch,WebFetch,Read,Glob,Grep';   // P1 自报+P2/P2b 行为证实实名
-// v6.2 契约 A：L1 回合上限缺省 8→24（v11.1 失败潮 + v11.2 P3 复现 job 20260929-224047-4hz 实证
-// 8 回合不够典型联网调研——探针恰 8 次推理贴线通过、多轮任务耗尽后 CLI exit 0 无 JSON 静默失败）；
+// 契约 A：L1 回合上限缺省 24（8 回合不够典型联网调研，v11.2 P3 实证——叙事见 CHANGELOG 6.2.0）；
 // 三层取值：任务级 maxTurns > config caps-l1-max-turns > 此缺省。
 export const L1_MAX_TURNS_DEFAULT = 24;
 export const L2_NOT_DELIVERED_MSG = 'L2 本版未交付：cline 3.0.65 无命令级权限管控（CLINE_COMMAND_PERMISSIONS 特性不存在，Phase 0 实测 deny 三组全失效、del 实删文件），六层防护栈缺层不交付（用户 2026-09-25 裁决「L2 缓期，本版留位」）。上游发布该特性后将按完整六层防护栈交付，详见 WBX.md v6.0.0';
 
-// v6.2 契约 A：任务级 maxTurns 字段校验（整数 1-64；仅 caps L1 生效——L0 无回合概念）
+// 契约 A：任务级 maxTurns 字段校验（整数 1-64；仅 caps L1 生效——L0 无回合概念）
 export function parseMaxTurns(v, ctx = '任务') {
   if (v == null || v === '') return null;
   const n = typeof v === 'number' ? v : Number(v);
@@ -330,6 +327,10 @@ export function parseCaps(v) {
   const s = String(v || '').toUpperCase();
   return CAPS_LEVELS.includes(s) ? s : null;
 }
+
+// caps 拒绝对象（askOnce/askOnceCline/askOnceDoubao 三处共用，文案逐字不变）
+const capsInvalid_ = (caps) => ({ ok: false, kind: 'caps-invalid', error: `caps 只支持 L0 | L1 | L2（收到 ${caps}）`, durationMs: 0, hint: 'caps-invalid' });
+const capsL2NotDelivered_ = () => ({ ok: false, kind: 'caps-l2-not-delivered', error: L2_NOT_DELIVERED_MSG, durationMs: 0, hint: 'caps-l2-not-delivered' });
 
 // L1 的空 scratch 工作目录（读边界：白名单无写工具 + cwd 外绝对路径读取被进程级拒绝）
 export const SCRATCH_ROOT = path.join(RUNTIME_ROOT, 'scratch');
@@ -391,8 +392,8 @@ export function brief(s, n = 320) {
   return t.length > n ? t.slice(0, n) + ' …(截断)' : t;
 }
 
-// v6.1 P1：失败诊断 brief 变体——超长时改「首 n/2 + 尾 n/2」各半，中段以省略标记连接。
-// 背景（v11 定因）：unparseable/cli-error 的 combined 常以环境横幅开头，头部截断会吞掉
+// 失败诊断 brief 变体——超长时改「首 n/2 + 尾 n/2」各半，中段以省略标记连接。
+// 背景：unparseable/cli-error 的 combined 常以环境横幅开头，头部截断会吞掉
 // 尾部的真实错误信息。仅用于错误文本展示；完整输出由失败 attempt 落盘承接（见 dumpFailedAttempt）。
 export function errorBrief(s, n = 320) {
   const t = redact(ansiStrip(String(s || '')).trim());
@@ -439,7 +440,7 @@ export function readStdin() {
 // ---------- 配置（config.json，存运行时根） ----------
 export const CONFIG_DEFS = {
   'default-lane': {
-    type: 'enum', values: ['auto', 'ai', 'cn', 'cline', 'doubao'], default: 'auto',
+    type: 'enum', values: ['auto', ...LANE_ORDER], default: 'auto',
     desc: 'ask 默认路由：auto=ai 优先（免费），或固定 ai / cn / cline / doubao',
   },
   'disabled-lanes': {
@@ -515,7 +516,7 @@ export function loadConfig() {
   // 容错矫正
   if (!CONFIG_DEFS['default-lane'].values.includes(out['default-lane'])) out['default-lane'] = 'auto';
   if (!Array.isArray(out['disabled-lanes'])) out['disabled-lanes'] = [];
-  out['disabled-lanes'] = out['disabled-lanes'].filter((x) => x === 'ai' || x === 'cn' || x === 'cline' || x === 'doubao');
+  out['disabled-lanes'] = out['disabled-lanes'].filter((x) => LANE_ORDER.includes(x));
   if (!Number.isInteger(out['parallel-per-lane']) || out['parallel-per-lane'] < 1 || out['parallel-per-lane'] > 8) {
     out['parallel-per-lane'] = 2;
   }
@@ -525,7 +526,7 @@ export function loadConfig() {
   for (const k of ['cline-path', 'cline-data-dir']) {
     if (typeof out[k] !== 'string') out[k] = '';
   }
-  // v5.1 存量迁移（P0-2，一次性）：仅当旧值恰为 v5 计费孪生 deepseek/deepseek-v4.1-flash 时
+  // 存量迁移（一次性）：仅当旧值恰为 v5 计费孪生 deepseek/deepseek-v4.1-flash 时
   // 改写为免费孪生默认；用户显式设置的其他模型 id 一律不动。写回 config.json 使迁移只发生一次。
   let migratedClineModel = false;
   if (raw['cline-model'] === CLINE_METERED_TWIN_MODEL) {
@@ -539,14 +540,14 @@ export function loadConfig() {
   if (!Number.isInteger(out['cline-parallel']) || out['cline-parallel'] < 1 || out['cline-parallel'] > 8) {
     out['cline-parallel'] = 1;
   }
-  // v13 doubao-parallel：非法/越界一律回缺省 1（min 1 max 2，单客户端 UI 串行保护）
+  // doubao-parallel：非法/越界一律回缺省 1（min 1 max 2，单客户端 UI 串行保护）
   if (!Number.isInteger(out['doubao-parallel']) || out['doubao-parallel'] < 1 || out['doubao-parallel'] > 2) {
     out['doubao-parallel'] = 1;
   }
-  // v6 caps 键：default-caps 非法回退 L0；caps-l2-enabled 非布尔回退 false（出厂缺省）
+  // caps 键：default-caps 非法回退 L0；caps-l2-enabled 非布尔回退 false（出厂缺省）
   if (!CAPS_LEVELS.includes(out['default-caps'])) out['default-caps'] = 'L0';
   if (typeof out['caps-l2-enabled'] !== 'boolean') out['caps-l2-enabled'] = false;
-  // v6.2 契约 A：caps-l1-max-turns 非法回退缺省 24（T7 建议#7 采纳：与 schema/resolve 同源常量）
+  // caps-l1-max-turns 非法回退缺省 24（与 schema/resolve 同源常量 L1_MAX_TURNS_DEFAULT）
   if (!Number.isInteger(out['caps-l1-max-turns']) || out['caps-l1-max-turns'] < 1 || out['caps-l1-max-turns'] > 64) {
     out['caps-l1-max-turns'] = L1_MAX_TURNS_DEFAULT;
   }
@@ -571,8 +572,8 @@ export function parseConfigValue(key, valueStr) {
     case 'lanes': {
       if (typeof v === 'string') v = v.split(',').map((s) => s.trim()).filter(Boolean);
       if (!Array.isArray(v)) throw new Error(`${key} 需为 lane 数组，如 ["cn"] 或 "cn"`);
-      const bad = v.filter((x) => x !== 'ai' && x !== 'cn' && x !== 'cline' && x !== 'doubao');
-      if (bad.length) throw new Error(`${key} 只支持 ai/cn/cline/doubao（收到 ${JSON.stringify(bad)}）`);
+      const bad = v.filter((x) => !LANE_ORDER.includes(x));
+      if (bad.length) throw new Error(`${key} 只支持 ${LANE_ORDER.join('/')}（收到 ${JSON.stringify(bad)}）`);
       return [...new Set(v)];
     }
     case 'int': {
@@ -640,7 +641,7 @@ export function scanCliCandidates() {
 
 // ---------- lane 与凭证 ----------
 export function readSession(laneKey) {
-  const id = IDENTITIES[laneKey] || IDENTITIES.cn;
+  const id = IDENTITIES[laneKey] || IDENTITIES.cn;   // lane 已上游 parseLane 校验，兜底仅防御
   try { return JSON.parse(fs.readFileSync(id.sessionPath, 'utf8')); } catch { return null; }
 }
 
@@ -676,7 +677,7 @@ export function laneStatusInfo(laneKey) {
       binaryPath: bin,
     };
   }
-  // v13：doubao 专用分支（对齐 cline 分支形态）——绝不落进下方 IDENTITIES[laneKey] || IDENTITIES.cn 兜底
+  // doubao 专用分支（对齐 cline 分支形态）——绝不落进下方 IDENTITIES[laneKey] || IDENTITIES.cn 兜底
   if (laneKey === 'doubao') {
     const dir = resolveDoubaoDir();
     const ready = !!dir && process.platform === 'win32';
@@ -691,7 +692,7 @@ export function laneStatusInfo(laneKey) {
       bridgeDir: dir,
     };
   }
-  const id = IDENTITIES[laneKey] || IDENTITIES.cn;
+  const id = IDENTITIES[laneKey] || IDENTITIES.cn;   // lane 已上游 parseLane 校验，兜底仅防御
   const s = readSession(laneKey);
   let expiresAt = null, expiresInDays = null;
   if (s?.auth?.lastRefreshTime && s?.auth?.expiresIn) {
@@ -712,7 +713,7 @@ export function laneStatusInfo(laneKey) {
 // 默认路由：config.default-lane 固定任一 lane（未禁用），否则 auto（enabled+已登录 里 ai 优先，doubao 最末）
 export function resolveDefaultLane() {
   const pick = loadConfig()['default-lane'];
-  if (parseLane(pick) && !isLaneDisabled(pick)) return pick;   // v13：parseLane 含 doubao，固定值校验随之覆盖
+  if (parseLane(pick) && !isLaneDisabled(pick)) return pick;   // parseLane 含 doubao，固定值校验随之覆盖
   for (const k of LANE_ORDER) {
     if (!isLaneDisabled(k) && laneReady(k)) return k;
   }
@@ -724,7 +725,7 @@ export function resolveDefaultLane() {
 // cline 未装/无凭证时 laneReady 为 false，天然跳过（不耗重试额度）；
 // doubao 排最末（会员额度 lane 只在前三条免费 lane 都不可用时才被回退到达——免费优先序不变）。
 //
-// 【v5.1 红线断言·非 DeepSeek 禁回退（用户定案）】cline lane 失败的一切路径都不得改用
+// 【红线断言·非 DeepSeek 禁回退（用户定案）】cline lane 失败的一切路径都不得改用
 // 非 DeepSeek 模型顶替：本函数只换 lane（ai/cn 的 WorkBuddy DeepSeek V4.1 Flash 仍是 DeepSeek），
 // 绝不换模型 id——askOnceCline 的 -m 恒为 config cline-model 或任务显式指定的值，失败重试
 // 原样保留。回归（internal/v6-regression）断言：fallbackLane('cline') ∈ {ai,cn}，
@@ -738,7 +739,7 @@ export function fallbackLane(fromKey) {
 
 export function parseLane(v) {
   const k = String(v || '').toLowerCase();
-  return (IDENTITIES[k] || k === 'cline' || k === 'doubao') ? k : null;
+  return LANE_ORDER.includes(k) ? k : null;
 }
 
 // v1 -> v2 一次性迁移：session.json / product-config.json -> sessions/<id>.json / product/<id>.json
@@ -804,19 +805,19 @@ export function spawnNode(args, { env, timeoutMs, stdin, cwd } = {}) {
   return spawnBin(process.execPath, args, { env, timeoutMs, stdin, cwd: cwd || RUNTIME_ROOT });
 }
 
-// 通用子进程执行（v5：cline exe 与 node 均走这里），超时用 killTree 兜底
+// 通用子进程执行（cline exe 与 node 均走这里），超时用 killTree 兜底
 export function spawnBin(bin, args, { env, timeoutMs, stdin, cwd } = {}) {
   return new Promise((resolve) => {
     const child = spawn(bin, args, { env: env || process.env, windowsHide: true, cwd: cwd || RUNTIME_ROOT });
     let stdout = '', stderr = '', timedOut = false, settled = false;
     const timer = timeoutMs ? setTimeout(() => { timedOut = true; killTree(child); }, timeoutMs) : null;
     if (stdin != null) {
-      // v4 stdin 通道：超长提示词经 stdin 传入，绕过命令行长度上限（CLI -p 无位置参数时读 stdin）
+      // stdin 通道：超长提示词经 stdin 传入，绕过命令行长度上限（CLI -p 无位置参数时读 stdin）
       child.stdin.on('error', () => { /* EPIPE 等忽略，主进程退出码会反映失败 */ });
       child.stdin.write(stdin);
       child.stdin.end();
     } else {
-      // v5：无 stdin 数据也必须立即 EOF——cline CLI 总会检查 stdin（支持 cat file | cline），
+      // 无 stdin 数据也必须立即 EOF——cline CLI 总会检查 stdin（支持 cat file | cline），
       // 管道不关会一直等 EOF 导致进程悬挂（Phase 0 实测：异步 spawn 不 end stdin 必挂）
       child.stdin.on('error', () => { /* EPIPE 忽略 */ });
       child.stdin.end();
@@ -916,13 +917,13 @@ function normalizeResult(j) {
 }
 
 /**
- * 单次无头调用，跑在指定 lane 上。caps（v6，任务契约字段，默认 L0）：
+ * 单次无头调用，跑在指定 lane 上。caps（任务契约字段，默认 L0）：
  *   L0 = 纯 LLM 无工具（--tools '' --max-turns 1，逐字保持 v5 行为零回退）；
  *   L1  = 只读+联网（仅 ai/cn；--tools 白名单 + --permission-mode default + --max-turns
- *         24（v6.2 契约 A：任务级 maxTurns > config caps-l1-max-turns > 缺省 24），
+ *         24（契约 A：任务级 maxTurns > config caps-l1-max-turns > 缺省 24），
  *         cwd=空 scratch 读边界；P2/P2b/P2c 探针定案）；返回值附 toolTrace 轨迹摘要与原始 transcript；
  *   L2  = 本版未交付（上游 cline 3.0.65 无命令级 deny；明确报错，绝不静默降档）。
- * maxTurns（v6.2 契约 A）：任务级 L1 回合上限（整数 1-64，仅 L1 生效；L0 无回合概念零影响）。
+ * maxTurns（契约 A）：任务级 L1 回合上限（整数 1-64，仅 L1 生效；L0 无回合概念零影响）。
  * 返回：
  *   成功 { ok:true, text, usage, durationMs, model, raw, caps?, toolTrace?, rawTranscript?, scratchDir? }
  *   失败 { ok:false, kind, error, durationMs, hint? }
@@ -935,23 +936,22 @@ function normalizeResult(j) {
  */
 export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000, caps = 'L0', scratchDir = null, maxTurns = null }) {
   if (lane === 'cline') return askOnceCline({ prompt, model, timeoutMs, caps });
-  if (lane === 'doubao') return askOnceDoubao({ prompt, model, timeoutMs, caps });   // v13：分流在 caps 校验之前（对齐 cline 先例），caps 契约由 askOnceDoubao 内部执行
+  if (lane === 'doubao') return askOnceDoubao({ prompt, model, timeoutMs, caps });   // 分流在 caps 校验之前（对齐 cline 先例），caps 契约由 askOnceDoubao 内部执行
   const capsLevel = parseCaps(caps);
   if (!capsLevel) {
-    return { ok: false, kind: 'caps-invalid', error: `caps 只支持 L0 | L1 | L2（收到 ${caps}）`, durationMs: 0, hint: 'caps-invalid' };
+    return capsInvalid_(caps);
   }
   if (capsLevel === 'L2') {
-    return { ok: false, kind: 'caps-l2-not-delivered', error: L2_NOT_DELIVERED_MSG, durationMs: 0, hint: 'caps-l2-not-delivered' };
+    return capsL2NotDelivered_();
   }
-  const laneKey = IDENTITIES[lane] ? lane : 'cn';
-  // v4：超长提示词（>12k 字符）改走 stdin 通道（-p 不带位置参数），绕过命令行长度上限；
-  // 短提示词保持 v3 位置参数路径不变（对外行为零回退）
-  const useStdin = prompt.length > 12000;
+  const laneKey = IDENTITIES[lane] ? lane : 'cn';   // lane 已上游 parseLane 校验，兜底仅防御
+  // 超长提示词（>STDIN_THRESHOLD）改走 stdin 通道（-p 不带位置参数），短提示词保持位置参数路径
+  const useStdin = prompt.length > STDIN_THRESHOLD;
   const mdl = resolveModel(model);
   // caps 分档 flags（L0 序列逐字保持 v5：--tools '' --output-format json --no-session-persistence --max-turns 1）
   const capsArgs = capsLevel === 'L1'
     // L1：白名单工具（P1/P2/P2b 实名）+ 最小权限 permission-mode（P2 四档实测均可用，取 default）
-    // + 回合上限（v6.2 契约 A 三层取值：任务级 maxTurns > config caps-l1-max-turns > 缺省 24）
+    // + 回合上限（契约 A 三层取值：任务级 maxTurns > config caps-l1-max-turns > 缺省 24）
     ? ['--tools', L1_TOOLS_WHITELIST, '--permission-mode', 'default', '--max-turns', resolveL1MaxTurns(maxTurns), '--output-format', 'json', '--no-session-persistence']
     // L0：纯 LLM 无工具模式（对标桌面版 Quick 模式）——逐字不变
     : ['--tools', '', '--output-format', 'json', '--no-session-persistence', '--max-turns', '1'];
@@ -976,7 +976,7 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000,
   if (r.timedOut) {
     return { ok: false, kind: 'timeout', error: `执行超时（> ${Math.round(timeoutMs / 1000)}s）`, durationMs, combined };
   }
-  // v6.2 契约 B：auth 判定只认结构化信号（CLI 进程退出码非零 + stderr 中 CLI 自身错误行）——
+  // 契约 B：auth 判定只认结构化信号（CLI 进程退出码非零 + stderr 中 CLI 自身错误行）——
   // worker 输出/材料回显的凭证类字样（stdout 或 transcript 中的 "Authentication required"/
   // "Unauthorized" 等）一律免疫（E-005 桥侧同源修复：job 20260925-115826-idp 成功输出复述样例
   // 原文被误判凭证过期，ai/cn 双 lane 均误杀）。
@@ -987,10 +987,8 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000,
   const parsedFull = extractJson(stdout);
   const j = normalizeResult(parsedFull);
   if (!j) {
-    // v6.2 契约 A：L1 回合上限耗尽的 CLI 形态（exit 0、stdout 无 JSON、stderr 尾部
-    // "Max turns (N) exceeded"——v11.2 P3 复现实证 job 20260929-224047-4hz）专类可读错误，
-    // 不再落入 unparseable 静默形态。仅 L1 分类（T7 建议#1 采纳：L0 无回合概念，
-    // 即使 stderr 命中该形态也不贴 L1 标签与指引）。
+    // L1 回合上限耗尽的 CLI 形态（exit 0、stdout 无 JSON、stderr 尾部 "Max turns (N) exceeded"）
+    // 专类可读错误，不落入 unparseable 静默形态。仅 L1 分类（L0 无回合概念，不贴 L1 标签）。
     const mtExhausted = capsLevel === 'L1' ? /Max turns \((\d+)\) exceeded/i.exec(stderr || '') : null;
     if (mtExhausted) {
       return {
@@ -999,7 +997,7 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000,
         durationMs, hint: 'l1-turns-exhausted', combined,
       };
     }
-    // v6.1 P1：unparseable/cli-error 的诊断 brief 改首尾各半（横幅常驻头部、真实错误多在尾部），
+    // unparseable/cli-error 的诊断 brief 改首尾各半（横幅常驻头部、真实错误多在尾部），
     // 完整 combined 随失败结果返回，由编排器落盘（成功路径零变化）
     return {
       ok: false,
@@ -1031,7 +1029,7 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000,
   return { ok: true, text, usage: usageOf(j), durationMs, model: j.model || mdl, raw: j };
 }
 
-// ---------- cline lane：NDJSON 解析 + 一次性调用（v5） ----------
+// ---------- cline lane：NDJSON 解析 + 一次性调用 ----------
 // parseClineNdjson —— 解析 cline --json 的 stdout 全文（纯函数，零依赖，任何输入不抛异常）。
 // 初稿由 wbx fanout 外包产出（job 20260925-120106-jh7），ZCode 审查修订后集成。
 function makeEmptyClineResult() {
@@ -1099,18 +1097,18 @@ export function parseClineNdjson(text) {
  * 注意：cline 参数解析要求提示词至少含一个 ASCII 空格（实测无空格的短中文会被当未知子命令拒绝）。
  */
 export async function askOnceCline({ prompt, model = null, timeoutMs = 300000, caps = 'L0' }) {
-  // caps 契约（v6）：cline 不承载 L1（--auto-approve 仅布尔两档，CLINE_COMMAND_PERMISSIONS 只覆盖
+  // caps 契约：cline 不承载 L1（--auto-approve 仅布尔两档，CLINE_COMMAND_PERMISSIONS 只覆盖
   // run_commands 且 3.0.65 实测不存在该特性——无法承诺只读语义）；L2 本版未交付。两者均明确报错，
   // 绝不静默降档 L0、绝不自动改路（是否降档重派由编排器显式决定）。
   const capsLevel = parseCaps(caps);
   if (!capsLevel) {
-    return { ok: false, kind: 'caps-invalid', error: `caps 只支持 L0 | L1 | L2（收到 ${caps}）`, durationMs: 0, hint: 'caps-invalid' };
+    return capsInvalid_(caps);
   }
   if (capsLevel === 'L1') {
     return { ok: false, kind: 'caps-lane-mismatch', error: 'L1 仅支持 ai | cn lane（codebuddy --tools 白名单承载，--as ai / --as cn）；cline 不承载 L1：--auto-approve 仅布尔两档，无法承诺只读语义', durationMs: 0, hint: 'caps-lane-mismatch' };
   }
   if (capsLevel === 'L2') {
-    return { ok: false, kind: 'caps-l2-not-delivered', error: L2_NOT_DELIVERED_MSG, durationMs: 0, hint: 'caps-l2-not-delivered' };
+    return capsL2NotDelivered_();
   }
   const bin = resolveClinePath();
   if (!bin) {
@@ -1119,9 +1117,9 @@ export async function askOnceCline({ prompt, model = null, timeoutMs = 300000, c
   const cfg = loadConfig();
   const provider = cfg['cline-provider'] || 'cline';
   const mdl = model || cfg['cline-model'] || '';
-  const useStdin = prompt.length > 12000;
+  const useStdin = prompt.length > STDIN_THRESHOLD;
   // cline 参数解析要求提示词至少含一个 ASCII 空格（实测无空格的短中文会被当未知子命令拒绝）；
-  // 无空格时前缀一个空格规避（v5.1 实测可行，不影响模型收到的内容）
+  // 无空格时前缀一个空格规避（实测可行，不影响模型收到的内容）
   const positional = useStdin
     ? 'Complete the task described in the piped stdin content. Treat it as your full instructions, including all output constraints.'
     : (/\s/.test(prompt) ? prompt : ` ${prompt}`);
@@ -1144,7 +1142,7 @@ export async function askOnceCline({ prompt, model = null, timeoutMs = 300000, c
   const stderr = ansiStrip(r.stderr || '');
   const parsed = parseClineNdjson(stdout);
   const rawStream = stdout;   // 原始 NDJSON 全文，供 job 目录落盘回放
-  const combined = stdout + '\n' + stderr;   // v6.1 P1：失败 attempt 全量输出（随失败结果返回，编排器落盘）
+  const combined = stdout + '\n' + stderr;   // 失败 attempt 全量输出（随失败结果返回，编排器落盘）
 
   if (r.timedOut) {
     return { ok: false, kind: 'timeout', error: `执行超时（> ${Math.round(timeoutMs / 1000)}s，桥侧兜底 kill）`, durationMs, rawStream, combined };
@@ -1152,7 +1150,7 @@ export async function askOnceCline({ prompt, model = null, timeoutMs = 300000, c
   if (r.code === -1 && !parsed.events) {
     return { ok: false, kind: 'cli-error', error: `cline 进程启动/执行失败：${brief(stderr || '无输出')}`, durationMs, rawStream, hint: 'not-installed', combined };
   }
-  // v6.2 契约 B：parsed.error 是 cline NDJSON 结构化错误事件（CLI 自身信号，保留）；
+  // 契约 B：parsed.error 是 cline NDJSON 结构化错误事件（CLI 自身信号，保留）；
   // combined 回显检查改为「退出码非零 + stderr」结构化判定，对 stdout 事件流中的材料回显免疫
   if (isAuthError(parsed.error || '') || (r.code !== 0 && isAuthError(stderr))) {
     return { ok: false, kind: 'auth', error: 'cline 凭证无效或未登录（Unauthorized）', durationMs, rawStream, hint: 'login', combined };
@@ -1160,7 +1158,7 @@ export async function askOnceCline({ prompt, model = null, timeoutMs = 300000, c
   const failed = r.code !== 0 || parsed.error !== null || parsed.finishReason === 'error' || parsed.text === null;
   if (failed) {
     const msg = parsed.error || parsed.text || brief(stderr || combined) || `exit=${r.code}，无输出`;
-    // v5.1 超额状态机（P0-3）：免费档错误优先于通用限流识别；跨 lane 回退语义不变
+    // 超额状态机：免费档错误优先于通用限流识别；跨 lane 回退语义不变
     //（runAskJob/runFanoutJob 照旧可回退 ai/cn——同为 DeepSeek，符合用户定案）。
     let hint;
     let resetIn = null;
@@ -1206,7 +1204,7 @@ export async function runClineAuth() {
   return { exitCode, ok: clineHasCredential() };
 }
 
-// ---------- doubao lane：末行 JSON 解析 + 一次性调用（v13 完全 lane 化） ----------
+// ---------- doubao lane：末行 JSON 解析 + 一次性调用 ----------
 /**
  * parseDoubaoPayload —— 纯函数：doubao.mjs 所有命令都以 stdout 末行单行 JSON 收口（emit()）。
  * 从全部 stdout 中取最后一个可解析为 JSON 对象的非空行（正常情况就是末行；失败/混杂场景
@@ -1227,13 +1225,12 @@ export function parseDoubaoPayload(stdoutText) {
 }
 
 /**
- * doubao lane 一次性纯文本调用（v13：第四 lane，会员额度消耗已获用户明示接受——
- * 2026-10-03「完全lan化」授权；额度不设上限=2026-09-30 既有裁决）。
+ * doubao lane 一次性纯文本调用（第四 lane；会员额度，免费优先序最末；授权与额度口径见 CHANGELOG 6.6.0）。
  * 命令行：node <doubao.mjs> ask "<提示词>" | --file <临时文件> --timeout-ms <桥侧超时> --json
  * 桥侧零凭证：登录态在豆包客户端 GUI 内自理；客户端未以调试口 9225 运行时 doubao.mjs
- * exit 3 快速失败（秒退）→ 回退链自然跳过。>12000 字符走 --file 临时文件（同 v4 stdin
- * 阈值语义，绕过 Windows 命令行长度上限），用完即删。任务级 model/effort 对 doubao 不生效
- * （工具自管理豆包 2.1 Pro + 推理高，ask 每次发送前自动重验配置），model 参数仅保持签名兼容。
+ * exit 3 快速失败（秒退）→ 回退链自然跳过。>STDIN_THRESHOLD 字符走 --file 临时文件（同
+ * ai/cn/cline 的 stdin 阈值语义，绕过 Windows 命令行长度上限），用完即删。任务级 model/effort
+ * 对 doubao 不生效（工具自管理豆包 2.1 Pro + 推理高，ask 每次发送前自动重验配置），model 参数仅保持签名兼容。
  * caps：仅 L0；L1/L2 明确报错（caps-lane-mismatch——豆包桌面 agent 不受桥控、无法承诺
  * L1 只读语义，对齐 cline 先例），绝不静默降档。
  * 成功 → { ok:true, text, model:modelAtSend, usage:null（桌面端不走 API 计量）, durationMs, raw }；
@@ -1243,19 +1240,19 @@ export async function askOnceDoubao({ prompt, model = null, timeoutMs = 300000, 
   void model; // 任务级 --model 对 doubao 不生效（工具自管理 2.1 Pro + 推理高；help/文档如实注明）
   const capsLevel = parseCaps(caps);
   if (!capsLevel) {
-    return { ok: false, kind: 'caps-invalid', error: `caps 只支持 L0 | L1 | L2（收到 ${caps}）`, durationMs: 0, hint: 'caps-invalid' };
+    return capsInvalid_(caps);
   }
   if (capsLevel === 'L1') {
     return { ok: false, kind: 'caps-lane-mismatch', error: 'L1 仅支持 ai | cn lane（codebuddy --tools 白名单承载，--as ai / --as cn）；doubao 不承载 L1：豆包桌面 agent 不受桥控，无法承诺只读语义', durationMs: 0, hint: 'caps-lane-mismatch' };
   }
   if (capsLevel === 'L2') {
-    return { ok: false, kind: 'caps-l2-not-delivered', error: L2_NOT_DELIVERED_MSG, durationMs: 0, hint: 'caps-l2-not-delivered' };
+    return capsL2NotDelivered_();
   }
   const dir = resolveDoubaoDir();
   if (!dir) {
     return { ok: false, kind: 'cli-error', error: '豆包桥 doubao.mjs 未找到（可选 lane）。修复：在桥源码仓跑 wbx self-install（把 tools/doubao-bridge/ 复制到全局副本）', durationMs: 0, hint: 'not-installed' };
   }
-  const useFile = prompt.length > 12000;
+  const useFile = prompt.length > STDIN_THRESHOLD;
   let tmpFile = null;
   const args = [path.join(dir, 'doubao.mjs'), 'ask', '--timeout-ms', String(timeoutMs), '--json'];
   if (useFile) {
@@ -1331,7 +1328,7 @@ export async function writeTaskRecord(jobDir, rec) {
   await fsp.writeFile(path.join(jobDir, `${sanitizeId(rec.id)}.json`), JSON.stringify(rec, null, 2), 'utf8');
 }
 
-// v6.1 P1：失败 attempt 完整输出落盘 + 错误消息尾部文件指针（观测盲区修复——brief 头部
+// 失败 attempt 完整输出落盘 + 错误消息尾部文件指针（观测盲区修复——brief 头部
 // 截断之外的全量留档，history 回放可定位；成功路径零新增落盘）。无进程输出（caps 拒绝、
 // 未安装等）不落盘、不加指针。
 async function dumpFailedAttempt(jobDir, taskId, attemptN, res) {
@@ -1359,7 +1356,7 @@ export async function finalizeJob(jobDir, { total, ok, durationMs }) {
 }
 
 const RECORD_FILES = new Set(['manifest.json', 'tasks-input.json', 'summary.md']);
-// v6 L1 附件（原始 transcript）不是任务记录，统计/读取时排除
+// L1 附件（原始 transcript）不是任务记录，统计/读取时排除
 const isTaskRecordFile = (name) => name.endsWith('.json') && !RECORD_FILES.has(name) && !name.endsWith('.transcript.json');
 
 export async function readJobRecords(jobDir) {
@@ -1384,7 +1381,7 @@ export function summarizeJob(id, dir, { legacy = false } = {}) {
   const manifestPath = path.join(dir, 'manifest.json');
   let manifest = null;
   try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { /* 旧格式无 manifest */ }
-  const type = manifest?.type || (legacy ? 'fanout' : 'fanout');
+  const type = manifest?.type || 'fanout';
   const hasInput = fs.existsSync(path.join(dir, 'tasks-input.json'));
   const recs = [];
   try {
@@ -1439,11 +1436,9 @@ export function listJobs() {
   return rows;
 }
 
-// ---------- 全量 token 用量汇总（v6.4：历史页/总览展示；与 listJobs 同源遍历，只读） ----------
-// 口径：任务记录 rec.usage（usageOf 同款字段回退）。unknownUsage = 成功但无任何 usage 数字的
-// 记录数（诚实展示用，不猜数）。v6.5 注记：v6.4 曾单列 doubaoTasks（豆包桥接不计入 in/out），
-// 随豆包历史回退一并移除。v13 注记：豆包 lane 调度任务走标准 ask/fanout 记录路径但 usage=null
-// （桌面端不走 API 计量）→ 落 unknownUsage 计数；`wbx doubao` 手工直通仍零落盘，不产生记录。
+// ---------- 全量 token 用量汇总（历史页/总览展示；与 listJobs 同源遍历，只读） ----------
+// 口径：任务记录 rec.usage（usageOf 同款字段回退）；usage=null 的成功记录（如 doubao 桌面端无
+// API 计量）计入 unknownUsage（诚实展示，不猜数）；`wbx doubao` 手工直通零落盘不产生记录。
 const usageNumOf = (u, keys) => {
   for (const k of keys) {
     const v = u ? u[k] : null;
@@ -1507,9 +1502,7 @@ export async function getJob(jobId) {
     }));
     // 孤儿记录（输入里没有但落了盘的任务）
     for (const { rec } of recs) {
-      if (!recById.has(rec.id) || !tasks.some((t) => t.id === rec.id)) {
-        if (!tasks.some((t) => t.id === rec.id)) tasks.push({ id: rec.id, prompt: null, record: rec });
-      }
+      if (!tasks.some((t) => t.id === rec.id)) tasks.push({ id: rec.id, prompt: null, record: rec });
     }
     return { ...summary, manifest, summaryMd, tasks };
   }
@@ -1553,17 +1546,17 @@ export function buildSummaryMd({ type, tasks, results, totalMs, laneKeys, lanePa
 export async function runAskJob({ prompt, as = null, model = null, effort = null, timeoutS = 300, jobId = null, caps = null, maxTurns = null }) {
   ensureDirs();
   const cfg = loadConfig();
-  // caps 契约（v6）：不合法值 / L2 未交付 / caps×lane 不匹配 -> 明确报错，绝不静默降档或改路
+  // caps 契约：不合法值 / L2 未交付 / caps×lane 不匹配 -> 明确报错，绝不静默降档或改路
   const capsLevel = parseCaps(caps || cfg['default-caps'] || 'L0');
   if (!capsLevel) throw new Error(`--caps 只支持 L0 | L1 | L2（收到 ${caps}）`);
   if (capsLevel === 'L2') throw new Error(L2_NOT_DELIVERED_MSG);
-  // v6.2 契约 A：任务级 maxTurns（整数 1-64；仅 L1 生效——L0 无回合概念，同 caps 契约风格明确报错）
+  // 契约 A：任务级 maxTurns（整数 1-64；仅 L1 生效——L0 无回合概念，同 caps 契约风格明确报错）
   const mt = parseMaxTurns(maxTurns, 'ask');
   if (mt != null && capsLevel !== 'L1') {
     throw new Error(`maxTurns 仅在 caps L1 生效（当前 caps=${capsLevel}；L0 无回合概念）`);
   }
   let primary = as ? parseLane(as) : null;
-  if (as && !primary) throw new Error(`--as 只支持 ai | cn | cline | doubao（收到 ${as}）`);
+  if (as && !primary) throw new Error(`--as 只支持 ${LANE_ORDER.join(' | ')}（收到 ${as}）`);
   if (!as) primary = resolveDefaultLane();
   if (isLaneDisabled(primary)) {
     throw new Error(`lane ${primary} 已被 disabled-lanes 硬禁用。启用：wbx config set disabled-lanes []`);
@@ -1584,13 +1577,12 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
   const job = await createJob('ask', { promptPreview: brief(prompt, 120), as: as || 'auto', model: resolveModel(model), effort, timeoutS: effTimeoutS, caps: capsLevel }, { lanes: chain, tasksInput: [{ id: 'ask', prompt, ...(capsLevel !== 'L0' ? { caps: capsLevel } : {}), ...(mt != null ? { maxTurns: mt } : {}) }], jobId });
   const l1Scratch = capsLevel === 'L1' ? ensureScratch('job-' + job.id) : null;
 
-  let last = null, usedLane = null, fallbackFrom = null, res = null, attempts = 0;
+  let usedLane = null, res = null, attempts = 0;
   for (const lane of chain) {
     attempts++;
     res = await askOnce({ lane, prompt, model, effort, timeoutMs: effTimeoutS * 1000, caps: capsLevel, scratchDir: l1Scratch, maxTurns: mt });
     if (res.ok) { usedLane = lane; break; }
-    await dumpFailedAttempt(job.dir, 'ask', attempts, res);   // v6.1 P1：失败 attempt 全量落盘+指针
-    last = res;
+    await dumpFailedAttempt(job.dir, 'ask', attempts, res);   // 失败 attempt 全量落盘+指针
     if (lane !== primary) break;
     if (fb) console.error(`[WARN] lane ${lane} 失败（kind=${res.kind}），自动改投 lane ${fb}…`);
   }
@@ -1605,7 +1597,7 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
     caps: capsLevel,
     usage: res?.usage || null,
   };
-  if (res?.ok) rec.result = res.text; else { rec.error = `${res?.kind}: ${res?.error || (last?.kind + ': ' + (last?.error || ''))}`; if (res?.hint) rec.hint = res.hint; if (res?.resetIn) rec.resetIn = res.resetIn; }
+  if (res?.ok) rec.result = res.text; else { rec.error = `${res?.kind}: ${res?.error || ''}`; if (res?.hint) rec.hint = res.hint; if (res?.resetIn) rec.resetIn = res.resetIn; }
   if (res?.ok && res.toolTrace) rec.toolTrace = res.toolTrace;   // L1 工具轨迹摘要（工具名+次数+参数截断）
   if (res?.rawStream) {
     await fsp.writeFile(path.join(job.dir, 'ask.cline-stream.jsonl'), res.rawStream, 'utf8');
@@ -1622,7 +1614,7 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
   if (res?.ok) {
     return { ok: true, jobId: job.id, jobDir: job.dir, lane: usedLane, fallbackFrom: usedLane !== primary ? primary : null, model: res.model, usage: res.usage, durationMs: res.durationMs, text: res.text, caps: capsLevel, ...(res.toolTrace ? { toolTrace: res.toolTrace } : {}) };
   }
-  return { ok: false, jobId: job.id, jobDir: job.dir, lane: primary, kind: res?.kind || last?.kind, error: res?.error || last?.error, hint: res?.hint || last?.hint, caps: capsLevel, ...(res?.resetIn || last?.resetIn ? { resetIn: res?.resetIn || last?.resetIn } : {}) };
+  return { ok: false, jobId: job.id, jobDir: job.dir, lane: primary, kind: res?.kind, error: res?.error, hint: res?.hint, caps: capsLevel, ...(res?.resetIn ? { resetIn: res.resetIn } : {}) };
 }
 
 /**
@@ -1659,9 +1651,9 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     let lane = null;
     if (t.as != null) {
       lane = parseLane(t.as);
-      if (!lane) throw new Error(`任务 ${t.id} 的 as 只支持 ai|cn|cline|doubao`);
+      if (!lane) throw new Error(`任务 ${t.id} 的 as 只支持 ${LANE_ORDER.join('|')}`);
     }
-    // caps 契约（v6）：任务级 "caps" 字段；缺省继承 config default-caps；
+    // caps 契约：任务级 "caps" 字段；缺省继承 config default-caps；
     // 不合法 / L2 未交付 / L1×cline 不匹配 -> 明确报错（绝不静默降档、绝不自动改路）
     let taskCaps = null;
     if (t.caps != null) {
@@ -1670,7 +1662,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     }
     const effCaps = taskCaps || defaultCaps;
     if (effCaps === 'L2') throw new Error(`任务 ${t.id ?? id}：${L2_NOT_DELIVERED_MSG}`);
-    // v6.2 契约 A：任务级 maxTurns（整数 1-64；仅 caps L1 生效——L0 无回合概念，明确报错）
+    // 契约 A：任务级 maxTurns（整数 1-64；仅 caps L1 生效——L0 无回合概念，明确报错）
     const taskMaxTurns = parseMaxTurns(t.maxTurns, `任务 ${t.id ?? id}`);
     if (taskMaxTurns != null && effCaps !== 'L1') {
       throw new Error(`任务 ${t.id ?? id} 的 maxTurns 仅在 caps L1 生效（当前 caps=${effCaps}；L0 无回合概念）`);
@@ -1688,7 +1680,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
 
   const laneParallel = Math.max(1, parallel ?? cfg['parallel-per-lane'] ?? 2);
   // cline 并发单独受 cline-parallel 约束（默认 1，免费额度保护；--parallel 不抬升它）；
-  // v13：doubao 并发单独受 doubao-parallel 约束（默认 1 上限 2，单客户端 UI 串行保护）
+  // doubao 并发单独受 doubao-parallel 约束（默认 1 上限 2，单客户端 UI 串行保护）
   const laneParallelOf = (lane) => (lane === 'cline'
     ? Math.max(1, cfg['cline-parallel'] || 1)
     : lane === 'doubao' ? Math.max(1, Math.min(2, cfg['doubao-parallel'] || 1)) : laneParallel);
@@ -1730,8 +1722,8 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       attempts = a + 1;
       res = await askOnce({ lane, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs: taskTimeoutMs, caps: capsLevel, scratchDir: l1Scratch, maxTurns: task.maxTurns ?? null });
       if (res.ok) break;
-      const rl = res.hint === 'ratelimit' || isRateLimit(res.error);   // v6.1：限流判定先于落盘（指针路径文本不得污染判定，T7 建议#1）
-      await dumpFailedAttempt(job.dir, task.id, attempts, res);   // v6.1 P1：失败 attempt 全量落盘+指针
+      const rl = res.hint === 'ratelimit' || isRateLimit(res.error);   // 限流判定先于落盘（指针路径文本不得污染判定）
+      await dumpFailedAttempt(job.dir, task.id, attempts, res);   // 失败 attempt 全量落盘+指针
       if (a < retryN) {
         say(`${task.id}@${lane} 失败（${res.kind}），${rl ? '5s' : '2s'} 后重试 ${a + 1}/${retryN}`);
         await sleep(rl ? 5000 : 2000);
@@ -1746,7 +1738,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
         attempts++;
         say(`${task.id}@${lane} 用尽重试（${res.kind}），跨 lane 回退 -> ${fb}`);
         res = await askOnce({ lane: fb, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs: taskTimeoutMs, caps: capsLevel, scratchDir: l1Scratch, maxTurns: task.maxTurns ?? null });
-        if (!res.ok) await dumpFailedAttempt(job.dir, task.id, attempts, res);   // v6.1 P1：回退 attempt 同样落盘
+        if (!res.ok) await dumpFailedAttempt(job.dir, task.id, attempts, res);   // 回退 attempt 同样落盘
         if (res.ok) { usedLane = fb; fallbackFrom = lane; }
       }
     }
@@ -1814,7 +1806,7 @@ const NO_AUTH_HEADERS = {
  * 供 CLI 直接打印 / UI 展示。失败 throw（含修复指引）。
  */
 export async function startLogin(laneKey) {
-  const identity = IDENTITIES[laneKey] || IDENTITIES.cn;
+  const identity = IDENTITIES[laneKey] || IDENTITIES.cn;   // lane 已上游 parseLane 校验，兜底仅防御
   const templatePath = process.env.WBX_PRODUCT_CONFIG || identity.templatePath;
   let source;
   try {
@@ -1949,7 +1941,7 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
   const routeNote = dl === 'auto' ? 'auto（ai 免费优先）' : dl;
   step('route', null, `default-lane=${routeNote}${disabled.length ? `；disabled-lanes=[${disabled.join(',')}]` : ''}${dl !== 'auto' && disabled.includes(dl) ? '（⚠ default-lane 指向的 lane 已禁用，实际按 auto 处理）' : ''}`);
 
-  // 4b) caps 能力分级（v6）：两键合法性 + L2 总闸状态 + 交付面
+  // 4b) caps 能力分级：两键合法性 + L2 总闸状态 + 交付面
   const dc = parseCaps(cfg['default-caps']);
   const l2gate = cfg['caps-l2-enabled'] === true;
   const capsValid = !!dc && typeof cfg['caps-l2-enabled'] === 'boolean';
@@ -2027,7 +2019,7 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
       say(`[OK]   凭证     已登录（OAuth，provider=${cfgC['cline-provider']}，model=${cfgC['cline-model'] || 'provider 默认'}，thinking=${cfgC['cline-thinking']}，compaction=${cfgC['cline-compaction']}，cline v${verStr}，隔离目录 ${clineHomeDir()}）`);
       steps.push({ name: 'lane-cline', good: true, detail: `已登录（cline v${verStr}，model=${cfgC['cline-model'] || '默认'}）` });
 
-      // v5.1 免费孪生存在性校验（P0-1）：免费组会轮换，端点确认 cline-model 是否仍在组内。
+      // 免费孪生存在性校验：免费组会轮换，端点确认 cline-model 是否仍在组内。
       // 端点失败降级 WARN（读缓存或明确报错），绝不影响 exit 0。
       const fm = await fetchClineFreeModels();
       const curModel = cfgC['cline-model'] || CLINE_FREE_DEFAULT_MODEL;
@@ -2161,7 +2153,7 @@ export function userBlockText(bridgeScriptPath) {
     'caps 是任务契约：失败不静默降档、lane 不匹配明确报错。',
     '',
     '防护不变：结果必校验后才用；涉密/隐私/凭证绝不外包；L0 提示词含无工具声明、L1 含能力边界+',
-    '注入防御+来源清单（模板见桥 PROMPTS.md v3，T1–T10）；doctor FAIL、连续 >= 2 失败或',
+    '注入防御+来源清单（模板见桥 PROMPTS.md §速查表）；doctor FAIL、连续 >= 2 失败或',
     '限流 -> 停止外包，改由自己完成并如实告知用户。完整文档/卸载：桥项目文件夹内 WBX.md、UNINSTALL.md。',
     USER_BLOCK_END,
   ].join('\n');

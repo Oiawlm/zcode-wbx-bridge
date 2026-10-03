@@ -2,6 +2,37 @@
 
 本文件记录 zcode-wbx-bridge 的版本变更，格式参考 Keep a Changelog。
 
+## 6.7.0 - 2026-10-03
+
+重构（v14 根因化最简重构轮：单一事实来源 + 叙事清零 + 联动机器化；授权=用户 2026-10-03 三原则原话——「任何修改、修复或者新增的内容，都不能以打补丁的形式完成，必须遵循最佳实践，深度融合到代码逻辑内部，通过重构、调整或者结合现有逻辑的方式实现；不从根源解决只打表面补丁，严格禁止」+「保证最终代码最简——结果简洁且完整实现需求」+ 两窗口与一切子代理都用第一性原理、尽量用内置子代理与 WBX 桥。根因诊断与收敛定案见 `internal/RESEARCH-V14.md`。UI 契约 v1.4.0 不动（wbx-ui 改动为注释级+内部派生，渲染输出经四页签实渲染与 v13/v8/ui-contract 断言验证等价）。**本轮为行为等价重构**，唯二例外：`fanout --lanes doubao` bug 对齐 help 已述契约（原被校验拒绝）、死代码删除）
+
+### Changed（代码最简化——19 项必修落地 18 项，六文件 6238→6232 行）
+- **lane 合法集合唯一来源 = core `LANE_ORDER`**：wbx.mjs `--lanes` 校验改 `LANE_ORDER.includes` + 错误文案派生（修复现行真 bug：`--lanes doubao` 被 help 声明支持却被拒绝——真机验证接受 doubao、拒绝非法值、零派发零落盘）；core `CONFIG_DEFS['default-lane'].values` 展开、`loadConfig`/`parseConfigValue` filter、`parseLane` 全部收敛；wbx-ui `LANE_ORDER_UI` 改自 `LANE_ORDER` 模板派生（渲染字节等价）+ `fixedDisabled` 改 indexOf；`--identity`/`--as` 错误文案与 fanout 任务校验文案全部 `LANE_ORDER.join` 派生。
+- **死代码删除**：wbx.mjs 六个零引用 import（sleep/ansiStrip/parseConfigValue/laneStatusInfo/newJobId/httpJson）与 `w.dir` 死字段；wbx-core `summarizeJob` 恒等三元、`getJob` 孤儿循环恒假外层、`runAskJob` 死变量 `last`/`fallbackFrom` 及全部 `|| last?…` 冗余兜底；wbx-daemon detach 超时分支不可达双行；wbx-setup assertBundleClean 正则分支被 includes 覆盖合并。
+- **公共抽取**（消三份重复）：caps 拒绝对象 `capsInvalid_`/`capsL2NotDelivered_`（askOnce/Cline/Doubao 三处×2 文案逐字不变）、`STDIN_THRESHOLD=12000` 常量（core 三处+CLI INFO 一处）、daemon `probeDecision_`（statusUi 与 probeExisting 共用装配）/`reuse`（三处复用结果对象）/`persist_`（五处 config 写回）、setup `CORE_SCRIPTS`/`DOC_FILES` 模块级清单常量（3+2 处）、ui `WBX_PS` 全局入口前缀常量（8 处拼接）与 `errorHint` 单次调用；doubao.mjs `resolveAnchor` 返回 locator 直用、推理档字符集 `REASONING_VALUES` 单源（USAGE 文案与状态栏正则均派生，正则等价 eval 验证）。
+- **叙事注释清零**：六文件版本史/回滚注记/取证过程/工单标签（P1–P10、T7-SN）压缩为当前不变量或删除；保留项均有「解释当前行为」理由（v6.4 fixed 布局注、v1/v2 迁移语义注、契约 A/B 标签、`|| IDENTITIES.cn` 防御兜底三处补注标注）；doctor 告警条件提 `failed` 单次计算（等价）；`[FAIL] 两个 lane 均失败`→`全部尝试 lane 均失败`（文案纠错，单 lane 链下原文案失实）。
+- **doubao.mjs 仅等价修复**（C-t6-M2 + 零风险建议）；**C-t6-M1 报告不做**：`--json` 在 doubao.mjs 内确为死旗标（opts.json 零读取），但 wbx-core askOnceDoubao/doctor 两处 spawn 传该旗标、调用方在传——按 GOAL 前置核验规定走不做路径（根因化方案=双侧同删，超出 doubao.mjs「只读复用」边界，留待 v15 授权）。
+
+### Changed（文档单一事实来源化——D-1…D-18 按收敛表执行）
+- **WBX.md 1655→1427 行**：顶部权威节重写为当前事实（四 lane 表/回退链/命令参考「以 `--help` 为准」/「四个外部 Agent」，消 D-2 全部点位）；26 个死链目标改链 `internal/archive/`（S-H1）；版本章瘦身——v6.6/v6.5/v6.0 三章与 CHANGELOG 逐句对照后删重复叙事段（保留 e2e 实测/竞态修复/溢出根因量测/lane-caps 映射表/发布记录），v6.1–v6.4 指针化轻瘦身；v4/v5.x 章抽查后确认以实测/调研记录为主（规则保护对象）保留。
+- **标题去版本限定词**：WBX/AGENTS/UNINSTALL 三处（版本活在代码常量+CHANGELOG+/__health）；README 顶部加「当前版本见 CHANGELOG」指针；UNINSTALL zip 示例去硬编码版本号（D-8）。
+- **README**：架构图补第四 lane（D-3）；lane 表压速览+指针到 SKILL（D-9，lane 表唯一人维护源=SKILL.md）；PROMPTS 条数改「§速查表」指针（D-4）；诚实声明收敛为文首完整声明+两处语境短提（D-13，FROZEN 底线保持）；55 天有效期收敛为 FAQ 一处事实陈述+WBX 认证节指针（D-12）。
+- **UNINSTALL 卸载面补全**（D-6，一键还原承诺缺口）：删除清单补 `UI-SPEC.md`、`knowledge/`、`tools/doubao-bridge` +「以 CONTRIBUTING 白名单为准」指针。
+- **SKILL/AGENTS 命令口径统一**（D-10）：命令速查声明「以 `wbx --help` 为准」（命令清单唯一权威源=代码内嵌 help）；`install-user` 归 legacy 一行；内嵌用户 AGENTS 标记块（userBlockText）PROMPTS 行联动同步。
+- **治理文件**：PLAN 四死链修复（D-5）；ROUTE 地图四补（internal/*.mjs 门禁行/SECURITY+CONTRIBUTING 并入发布面行/tools/doubao-bridge 行/GOAL-RESEARCH 留顶层例外成文）+ 元数据去数字（D-1/D-7/D-17）；CONTRIBUTING 补「门禁在维护者本地 internal/ 不入库，PR 只要求全命令回归」；UI-SPEC §0 加「contract 版本以 §6 末行为准」（D-18）；MEMORY v12.2 条目补「未产 GOAL/RESEARCH」留痕（S-N3）。
+
+### Chore（结构卫生）
+- `worker-dark-theme-tokens.md` → `v8-dark-theme-tokens.md`（CHANGELOG/WBX/wbx-ui 三引用同步，S-N1）；`v9-worker-lightweight-ui-guardrails.md` 对称归档 `internal/archive/v9/`；`v7-merge-tests.mjs` 五场景 24 断言内联进 v7-regression ④（a1–e2，原独立脚本归档 archive/v7/——v7 计数 27→50，总断言 51 不变，④a 包装断言换 24 条明细）。
+- CHANGELOG 活引址修复：11 处 `internal/` 旧路径改链 archive/（非叙事改写）。
+
+### Added（联动机器化）
+- **第九套门禁 `internal/v14-consistency.mjs`（20 断言）**：md 死链=0（跟踪 md+治理五件套+反引号 internal/ 路径）、版本口径四条（WBX_VERSION==CHANGELOG 首条/标题零版本限定词/README 指针/zip 无硬编码版本）、lane 单源六条（含 `--lanes` 功能级实测）、UNINSTALL 删除面 ⊇ CONTRIBUTING 白名单三条、TYPE_LABEL 键集==D2 冻结集两条、叙事清零三条（回滚注记/里程碑前缀/PROMPTS 条数硬数字）；纯文件/纯函数+零派发子进程探测，不依赖任何 lane 在线——把 v12.3 起的人工联动扫描升级为机器断言。
+
+### 验证
+- 九套门禁+新套件全绿：v6 24 / v7 50 / v8 22 / v11.3 38（含 cline 真机）/ v13 52 / contract 23 / 红测全绿（含恢复自证）/ tokens-sha 58=efeee49b0e 不变 / v14-consistency 20/20；`wbx --help` 与基线 diff 仅版本行。
+- 真机：doctor v6.7.0 通过；`ask --as cn` 8.1s / fanout 1/1 成功；`wbx doubao status/ask` 直通与直跑字节一致、jobs 零新增（双入口语义）；export-bundle v6.7.0 零凭证断言通过；self-install 五模块 diff identical + `ui --stop`/`--detach` + `/__health`=6.7.0；控制台四页签实渲染目测与改前一致（状态四通道卡+五 chip/调用分段器五钮/历史 208 条+累计 tokens/登录三卡）。
+- 行数对比（before→after）：六文件 6238→**6232**（净 -6；预估 150-283 未达——叙事注释按授权要求「压成一行不变量」而非删除、防御兜底按指定保留+标注、公共抽取以单源化为目标而非减行，净删量小但同步面显著缩小）；WBX.md 1655→**1449**（含 v6.7 章）；README 313→311；UI-SPEC 513→514；SKILL 219→221；UNINSTALL 180→181；CONTRIBUTING 58→59。
+
 ## 6.6.0 - 2026-10-03
 
 新增（v13 完全 lane 化：豆包桥升格第四 lane，路由/回退/fanout 全进调度体系；授权=用户 2026-10-03 原话「完全lan化，你是规划窗口，给我产出一个给执行窗口的提示词」——三选项（维持现状/半 lane 化/完全 lane 化）中选完全，会员额度由桥自动决定消耗（额度不设上限=2026-09-30 既有裁决）。UI-SPEC contract v1.3.0 → v1.4.0；新增第七套门禁 internal/v13-regression.mjs（52 断言）。改动面：`wbx-core.mjs`（lane 注册/doubaoReady/askOnceDoubao+parseDoubaoPayload/caps/config/doctor 第 8 段/内嵌 AGENTS 块四 lane 化）、`wbx.mjs`（help/login/models 守卫+usage 空计量显示）、`wbx-ui.mjs`（豆包 lane 卡升格/映射表/路由按钮/文案联动）、`wbx-setup.mjs`（描述文案）、AGENTS/README/SKILL/UNINSTALL 文档同步；`wbx doubao` 手工直通零改动（零落盘旁路语义不变，v12.3 定案延续））
@@ -71,11 +102,11 @@
 ### 实证与回归
 - 既有六套门禁零回退：v6 24/24 + v7 27/27 + v8 22/22 + v11.3 38/38 + ui-contract 23/23 + v9 红测全绿（含恢复自证：源文件哈希=基线）。
 - 全命令回归（v6.3.0 真机）：--version/--help/doctor（--no-probe）/models --as cline --free/config list/history/ask（cn 真机）/fanout 2 任务 2\2/ui --status/export-bundle（v6.3.0 zip，零凭证断言通过）/doubao 直通（仓库形态 status 实连 CDP 9225 成功）。
-- T7 评审（wbx ask 外包，ai 超时自动回退 cn 交付，87.1s）：**0 阻断 / 5 建议**——采纳 3 已修（① doubao 子进程 close 只透传退出码、不重抛同名信号，防非 POSIX 信号名 ERR_UNKNOWN_SIGNAL；② self-install 豆包复制加四要素装完即验；③ HELP/标记块启动路径统一 %USERPROFILE% 粘贴即用形态——顺带修复 wbx-ui.mjs 模板字符串里单反斜杠被转义吞掉的断路径隐患，已按文件既有约定双写），验证 2（全仓无 6.2.0 残留硬编码；doubao.mjs 无参=usage+exit 1 不挂起）。记录 `internal/v12.2-t7-review.txt`（gitignored）。
+- T7 评审（wbx ask 外包，ai 超时自动回退 cn 交付，87.1s）：**0 阻断 / 5 建议**——采纳 3 已修（① doubao 子进程 close 只透传退出码、不重抛同名信号，防非 POSIX 信号名 ERR_UNKNOWN_SIGNAL；② self-install 豆包复制加四要素装完即验；③ HELP/标记块启动路径统一 %USERPROFILE% 粘贴即用形态——顺带修复 wbx-ui.mjs 模板字符串里单反斜杠被转义吞掉的断路径隐患，已按文件既有约定双写），验证 2（全仓无 6.2.0 残留硬编码；doubao.mjs 无参=usage+exit 1 不挂起）。记录 `internal/archive/v12/v12.2-t7-review.txt`（gitignored）。
 
 ## 6.2.0 - 2026-09-30
 
-新增（两项缺陷修复：授权=用户 2026-09-29「三点偏离有什么需要修复的你帮忙看看」委托一号纳入 v11.3；契约 A/B 逐条对照见 `internal/v11.3-t7-review.txt` 与 [WBX.md](WBX.md) v6.2 章。改动面：`wbx-core.mjs`（主）、`wbx.mjs`（--max-turns 旗标+help）、`wbx-ui.mjs`（两端点透传）；L0 参数序列逐字不变）
+新增（两项缺陷修复：授权=用户 2026-09-29「三点偏离有什么需要修复的你帮忙看看」委托一号纳入 v11.3；契约 A/B 逐条对照见 `internal/archive/v11/v11.3-t7-review.txt` 与 [WBX.md](WBX.md) v6.2 章。改动面：`wbx-core.mjs`（主）、`wbx.mjs`（--max-turns 旗标+help）、`wbx-ui.mjs`（两端点透传）；L0 参数序列逐字不变）
 
 ### Changed
 - **L1 缺省回合上限 8→24**（契约 A）：v11.1 失败潮 + v11.2 P3 复现（job 20260929-224047-4hz）实证 8 回合不够典型联网调研——探针恰 8 次推理贴线通过、多轮任务耗尽后 CLI exit 0 无 JSON 静默失败（v11.1 unparseable 主因）。L0 无回合概念零影响（`--max-turns 1` 序列逐字不变，回归 ②e 断言）。
@@ -90,7 +121,7 @@
 ### 实证与回归
 - 新增 `internal/v11.3-regression.mjs` 38/38 全绿（离线 37 项：parseMaxTurns/resolveL1MaxTurns 单元断言、假 CLI argv 落盘验证三层取值与 L0 零回退、maxTurns 校验/caps 匹配错误契约、回合耗尽分类、回显免疫成功/失败双路径、真实 auth 保留；真机 1 项：cline lane 材料回显凭证字样任务正常完成不误判，5.4s）。
 - 既有回归零回退：v6 24/24（v11.3 起 cline 已上线，原两项环境依赖 FAIL 转绿）+ v11.2 25/25 + v7 27/27 + v8 22/22，五套共 136 断言全绿。
-- T7 评审（wbx 外包，材料=契约+diff+实现者自述，经 ai 超时回退 cn 交付）：**0 阻断 / 7 建议**——接受 3（l1-turns-exhausted 加 L1 门控；错误文案超时插值；24 常量三处统一引用）已修并复验全绿，驳回 3 有据（cline parsed.error 不门控：防漏检 exit 0 的真实 auth；maxTurns×L0 报错维持设计定案；重试短路超契约授权记下轮提案候选），1 项验证无影响（旧导出符号全仓零引用）。评审材料本身含 "Authentication required" 字样且未误判——契约 B 获实战验证。记录 `internal/v11.3-t7-review.txt`（gitignored）。
+- T7 评审（wbx 外包，材料=契约+diff+实现者自述，经 ai 超时回退 cn 交付）：**0 阻断 / 7 建议**——接受 3（l1-turns-exhausted 加 L1 门控；错误文案超时插值；24 常量三处统一引用）已修并复验全绿，驳回 3 有据（cline parsed.error 不门控：防漏检 exit 0 的真实 auth；maxTurns×L0 报错维持设计定案；重试短路超契约授权记下轮提案候选），1 项验证无影响（旧导出符号全仓零引用）。评审材料本身含 "Authentication required" 字样且未误判——契约 B 获实战验证。记录 `internal/archive/v11/v11.3-t7-review.txt`（gitignored）。
 - 环境注记：本机 npm 全局 prefix 为 `~/.npm-global`（不在 PATH），cline 平台 exe 经桥 config `cline-path` 显式解析（不改系统环境变量）。
 
 ## 6.1.0 - 2026-09-29
@@ -105,9 +136,9 @@
 - **unparseable/cli-error 的诊断 brief 改首尾各半**：combined 超 320 字符时由「头部 320 截断」改为「首 160 + 尾 160 + `…(省略 N 字符)…`」（新增 `errorBrief()`，仅用于该两类失败错误文本；既有 `brief()` 行为与其余展示路径零回退）。背景：combined 常以约 300 字符环境横幅开头，真实错误在尾部——旧截断在实测失败形态（combined 412 字符）下恰好把真因 `Max turns (8) exceeded` 整个吞掉。
 
 ### 实证与回归
-- **P3 复现直接翻案**：glm-prompting 原词 L1 单发 ai/cn 双 lane 同因失败，P1 全量落盘实证 stdout 空、stderr=横幅+`Max turns (8) exceeded`——v11.1 假设⑤（L1 `--max-turns 8` 耗尽静默失败）由「部分证伪」翻转为**证实主因**；9/28-9/29 失败潮形态一致。归档 `internal/v11.2-repro-output.txt`（gitignored）。
-- 回归：新增 `internal/v11.2-regression.mjs` 25/25 全绿（errorBrief 首尾各半/空输出判别/attempt 落盘与指针/history 回放/成功路径零变化——WBX_HOME 沙箱 + WBX_CLI 假 CLI 全离线）；既有 v6-regression 与改动前基线结果完全一致（22 PASS/2 FAIL，两项失败为 cline 未装时 doctor 跳过免费模型校验的既有环境依赖项，非本版引入）。
-- T7 评审（wbx 外包，材料=契约+diff）：0 阻断 5 建议——接受 2（限流判定先于落盘防指针文本污染；落盘 try/catch 防诊断失败中断主流程）已修并复验全绿；驳回 3 有据。记录 `internal/v11.2-t7-review.txt`（gitignored）。
+- **P3 复现直接翻案**：glm-prompting 原词 L1 单发 ai/cn 双 lane 同因失败，P1 全量落盘实证 stdout 空、stderr=横幅+`Max turns (8) exceeded`——v11.1 假设⑤（L1 `--max-turns 8` 耗尽静默失败）由「部分证伪」翻转为**证实主因**；9/28-9/29 失败潮形态一致。归档 `internal/archive/v11/v11.2-repro-output.txt`（gitignored）。
+- 回归：新增 `internal/archive/v11/v11.2-regression.mjs` 25/25 全绿（errorBrief 首尾各半/空输出判别/attempt 落盘与指针/history 回放/成功路径零变化——WBX_HOME 沙箱 + WBX_CLI 假 CLI 全离线）；既有 v6-regression 与改动前基线结果完全一致（22 PASS/2 FAIL，两项失败为 cline 未装时 doctor 跳过免费模型校验的既有环境依赖项，非本版引入）。
+- T7 评审（wbx 外包，材料=契约+diff）：0 阻断 5 建议——接受 2（限流判定先于落盘防指针文本污染；落盘 try/catch 防诊断失败中断主流程）已修并复验全绿；驳回 3 有据。记录 `internal/archive/v11/v11.2-t7-review.txt`（gitignored）。
 
 ## 6.0.0 - 2026-09-25
 
@@ -118,10 +149,10 @@
   - **L1（联网+只读，仅 WorkBuddy AI/国内版）**：白名单工具 `WebSearch,WebFetch,Read,Glob,Grep` + `--permission-mode default`（四模式实测最小特权面）+ `--max-turns 8`；每任务 scratch 工作目录（`~/.wbx/scratch/<任务id>/`，越 cwd 绝对路径读取进程级 DENIED——探针 p2c 实测）；缺省超时上浮 `max(600s, timeout)`；工具轨迹（counts+samples）落任务记录、完整转录存 `<任务id>.transcript.json`（不计入 history 任务数）；L1 任务固定 ai/cn（回退链自动滤掉 cline）；CLI `ask --caps L1` / fanout 任务级 `"caps":"L1"` / UI 调用页 caps 选择器三入口齐备。如实声明：WebFetch 在 default 权限档被拒，联网主力是 WebSearch（PROMPTS E-012）。
   - **L2（受控全能力，仅 cline）缓期未交付**：Phase 0 检测级证据——cline 3.0.65（npm latest stable）二进制无 `CLINE_COMMAND_PERMISSIONS` 字符串，deny:`["*"]`/deny:`["node *"]`/docs 示例 allowlist 三组全失效且 `del` 实删文件 → 六层防护栈（白名单工具面/命令级 deny/scratch/轨迹落盘/超时回合上限/总闸+显式 flag）缺第②层，**缺一不交付**。用户 2026-09-25 裁决「L2 缓期，本版留位」：`--caps L2` 显式报未交付（含裁决与交付条件说明），总闸 `caps-l2-enabled`（默认 false）即使置 true 也不放行；治理冻结于 FROZEN 二.8；上游发布该特性后按完整六层交付。
   - **绝不静默降档**：无效档位 / L1×cline / L2 一律显式报错（`caps-invalid`/`caps-lane-mismatch`/`caps-l2-not-delivered`）；config 新键 `default-caps`（默认 L0）+ `caps-l2-enabled`（默认 false）；doctor 新增 caps 步。
-- **历史页行内详情（UI 契约变更 v1.1.0，变更程序合规）**：详情从页底 `#job-detail` 卡退役 → 点击行正下方 `tr.job-inline` 行内卡（`.job-inline-card`，手风琴单开沿用，再点收起）；调用页 ask 高级区 caps 选择器（L2 disabled 标未交付+L1 提示行+高级摘要实时档位）、fan 行 caps 列（四列→五列 86px）、taskHead caps 徽标「L1 联网档」、概览/通道卡「能力档」行、L1 `trace-box` 工具轨迹折叠件。三处同步：UI-SPEC §6 v1.1.0（token 键集与值零改动）+ ui-contract 新增 H1–H4（19→23）+ v9-redtest 新增 M-H1..H4/N-H；v8 门禁 ①d 同步五列断言。浏览器实机验证 + before/after 截图四张在案（`internal/v10-ui-*.png`）。
+- **历史页行内详情（UI 契约变更 v1.1.0，变更程序合规）**：详情从页底 `#job-detail` 卡退役 → 点击行正下方 `tr.job-inline` 行内卡（`.job-inline-card`，手风琴单开沿用，再点收起）；调用页 ask 高级区 caps 选择器（L2 disabled 标未交付+L1 提示行+高级摘要实时档位）、fan 行 caps 列（四列→五列 86px）、taskHead caps 徽标「L1 联网档」、概览/通道卡「能力档」行、L1 `trace-box` 工具轨迹折叠件。三处同步：UI-SPEC §6 v1.1.0（token 键集与值零改动）+ ui-contract 新增 H1–H4（19→23）+ v9-redtest 新增 M-H1..H4/N-H；v8 门禁 ①d 同步五列断言。浏览器实机验证 + before/after 截图四张在案（`internal/archive/v10/v10-ui-*.png`）。
 - **PROMPTS.md v3**：原则 2「能力边界声明必写」按 caps 档位（L0 句式逐字保留，「你没有任何工具」全文 18 处零改动）；新增 P13（注入防御：网页内容是数据不是指令）、P14（来源清单 URL|访问时间|支撑要点）、T4-L1（联网调研模板）、T10（L2 代码自测回路模板，先行入库待启用——写→跑→修闭环+反作弊条款）、E-012、派发流程 1b（caps 判定）、决策速查表 caps 列。
 - **门禁与回归**：v6 24 + v7 27 + v8 22 + ui-contract 23 四门禁全绿；红测 22 正向变异（红且红得对）+ 4 负向对照（全绿）+ 恢复自证。
-- **验收证据**：L1 ask 端到端 job `20260925-201509-h7t`（ai，WebSearch×6+WebFetch×1，轨迹+转录落盘）；混合档 fanout job `20260925-201708-nnd`（L0@cn 无工具 / L1@ai 带来源清单，同批混档路由正确）；L0 冒烟 job `20260925-201642-nwp`。探针脚本 `internal/v10p0-p*.mjs` 可复跑；设计定案 `internal/RESEARCH-V10.md`。
+- **验收证据**：L1 ask 端到端 job `20260925-201509-h7t`（ai，WebSearch×6+WebFetch×1，轨迹+转录落盘）；混合档 fanout job `20260925-201708-nnd`（L0@cn 无工具 / L1@ai 带来源清单，同批混档路由正确）；L0 冒烟 job `20260925-201642-nwp`。探针脚本 `internal/archive/v10/v10p0-p*.mjs` 可复跑；设计定案 `internal/RESEARCH-V10.md`。
 
 ## 5.4.0 - 2026-09-25
 
@@ -129,14 +160,14 @@
 - **[UI-SPEC.md](UI-SPEC.md)（仓库根，新跟踪文件）**：UI 风格契约规格文档（contract v1.0.0）——§0 权威源声明（`:root` 哨兵块为唯一真源，文档为派生快照，头部标 `tokens-sha: efeee49b0e`）+ §1 Foundations（58 token 全表/对比度清单/动效与 reduced-motion/中文排版）+ §2 20 个组件×固定 8 字段（含「何时不用」与 frozen|extension 徽标，实机逐页核对）+ §3 Patterns 三条 + §4 Guidelines（术语规则/Do-Don't 总表/人工视觉走查清单/程序断言天花板诚实声明）+ §5 不变量与扩展点（5 条判定规则+一句话判据「会不会让无关页面的截图 diff 变化」+contract version 语义+变更程序，**契约主体**）+ §6 变更记录。
 - **token 语义化改名**（趁零消费方窗口，冻结前一次性改诚实；值不变、视觉零变化）：`--acc-300`→`--acc-text`（淡底上主色文字）、`--acc-600`→`--acc-hover`（主色 hover）、`--panel2`→`--panel-inset`（嵌在面板内的次级面）；全站 17 处消费方同步；`:root` 加 `/* @tokens:begin */`/`/* @tokens:end */` 哨兵注释对（宣告唯一真源，改动须同步 UI-SPEC 并过 ui-contract）。改名映射在本条目记录；CHANGELOG 5.3.0/WBX.md v5.3 章中的旧名是历史记录，保留不改写。
 - **机器护栏 `internal/ui-contract.mjs`**（工程内部件，gitignored）：19 条断言（编号枚举 T1-T5/C1-C6/S1-S4/D1-D4；worker B 报告标题称 18 条但其枚举即 19）——token 键集双向差集快照（T1）、全 58 token 值逐值归一化快照（T2，T7 二审后从状态色 17 值扩展）、刻度单调（T3）、哨兵块外零新增 hex（T4，既有 4 处入白名单冻结）、四态色两两不等（T5）、关键类存在（C1，选择器空白容差）、表格容器包裹（C2）、无超宽像素（C3）、1100px 正文容器（C4）、零外链（C5）、切片保活（C6，且 T4/C3/C5/D4 加保活前置防空转绿——T7 二审采纳）、形状双编码四类各异（S1，比规则体防恒不同空转）、到期色阶阈值 0/7/30 冻结且有序（S2）、状态标签映射冻结且全覆盖（S3）、aria-expanded 双件（S4）、品牌/术语/四页签标签冻结（D1）、type 英文枚举（D2）、job 字段超集（D3）、alert 零命中+toast 常驻（D4）。与 v6/v7/v8 回归并存不合并（v8 守行为零回退，contract 守设计系统契约），发布门禁串行全跑。
-- **红测协议**（`internal/v9-redtest.mjs`，验收硬门）：18 个正向变异（每族抽样，含 `d<=7` 改 `d<=8`、token 值改一位、删关键类、翻状态映射、切片正则失效）全部红且红在预期断言；3 个负向对照（改文案/加空行/调 CSS 属性顺序）全部仍绿（防脆断）；恢复由脚本自证（源文件哈希=基线+重跑全绿）。矩阵落 `internal/v9-redtest-matrix.md`。
+- **红测协议**（`internal/v9-redtest.mjs`，验收硬门）：18 个正向变异（每族抽样，含 `d<=7` 改 `d<=8`、token 值改一位、删关键类、翻状态映射、切片正则失效）全部红且红在预期断言；3 个负向对照（改文案/加空行/调 CSS 属性顺序）全部仍绿（防脆断）；恢复由脚本自证（源文件哈希=基线+重跑全绿）。矩阵落 `internal/archive/v9/v9-redtest-matrix.md`。
 - **治理登记**：`internal/FROZEN.md` 追加「UI 契约冻结」项（冻结范围=UI-SPEC §5.1 不变量清单；变更程序=用户显式授权+同步三处+红测重跑+四门禁全绿；注明 2026-09-25 用户授权原话）。README 增一句指向 UI-SPEC.md。
 - **视觉零变化验证**：改名前后浏览器实机 9 组对照截图（状态/调用/历史/登录/toast/运行中/停用态/体检中/体检结果，1280×900 同视口）；「调用」页逐像素一致；其余差异经三重负向对照（同代码连拍 0 像素差、同代码双 reload 0 像素差、**旧代码 vs 旧代码跨渲染会话 0.619%>改名对 0.293%**）证明全部为环境级光栅化噪声或已知动态内容（体检「上次 N 分钟前」时间戳/体检时长数字/历史表新增行/呼吸动画相位），与改名无关。
 
 说明
 - 零依赖零外部资源红线保持；术语表 v5.2 冻结不动；v5.2/v5.3 行为零回退：v6 24 + v7 27 + v8 22 + contract 19 四门禁全绿 + 全命令冒烟通过。
 - 自举（wbx 外包，材料先行，逐份校验后采用）：规格 §1/§2/§4 初稿三路并行（job `20260925-180829-lxf` 3/3）+ 改名 diff 评审批判（`20260925-180410-ax5`，无阻塞意见；panel-inset 语义争议记录不采纳）+ 护栏断言清单二审（`20260925-182119-pag`，采纳 4 条：T2 扩全量值+归一化/C1C2 空白容差/sliceAlive 前置/红测补 M-C3；不采纳 3 条记录在案）。
-- 设计依据与裁决见 `internal/RESEARCH-V9.md`（P0-P4 定案）；三份外部调研沉淀 `internal/v9-worker-*.md`。
+- 设计依据与裁决见 `internal/RESEARCH-V9.md`（P0-P4 定案）；三份外部调研沉淀 `internal/archive/v9/v9-worker-*.md`。
 
 ## 5.3.0 - 2026-09-25
 
@@ -144,7 +175,7 @@
 - 控制台「产品化」改造：从「字段平铺的调试页」重排为「3 秒回答三个问题（一切正常吗？哪里不对？我现在能干什么？）」的产品级界面。信息架构重排 + 视觉系统升级，全部改动限于 `wbx-ui.mjs` 的 HTML/CSS/前端 JS。
 - 状态页：新增**健康总览条**（结论句「N/3 通道可用 · 路由」+ 三枚通道 chip，chip 带四态形状色并锚点跳转通道卡，全绿时显示「一切正常」）；通道卡瘦身同构（卡头=品牌全称+状态徽标+账号+电源式停用开关；扫读层 3-4 行=成本三档徽标/模型/凭证到期色阶/cline 免费组信号；endpoint、二进制路径、模板、思考压缩、登录方式全部收进「详情与排障」折叠层）；**异常通道置顶**（四态×到期复合严重度排序）；路由卡只剩 4 选段器+生效说明（停用开关移入通道卡，矛盾组合行内黄条提示）；体检卡空态三要素（尚未体检+上次时间戳[localStorage]+CTA）与结果三分组（失败红默认展开+复制/跳过灰/通过绿，组头计数徽标，删大段 pre）。
 - 状态编码系统（全站统一）：凭证到期色阶四档（>30 天绿弱化 / 8-30 天 ▲黄 / 1-7 天 ▲橙 `--warn2` / ≤0 ■红+「重新登录」内联动作）；可用四态形状+颜色双编码（●可用/▲降级/■不可用/○已停用；未安装=虚线环；进行中=空心环呼吸动画，`prefers-reduced-motion` 静态降级）；成本三档统一徽标（免费/近免费/免费·限时配额，原始口径进 title）。
-- 视觉系统 token 化：间距 s1-s6/圆角三档+pill/字阶+行高/阴影三档/过渡+缓动全部 CSS 变量化（基线 `internal/worker-dark-theme-tokens.md`，含三处对比度修正落地：acc 淡底文字 `--acc-300`、12px 微文本 `--dim-hi`、控件边界 `--line-ctrl`）；组件规范落地（键值行 96px+minmax(0,1fr)+ellipsis+title+tabular-nums、卡头、段标题左色条、表格 sticky 表头+行 hover+数字右对齐无斑马纹、深色表单聚焦环+纯 CSS select 箭头、按钮三档 primary/ghost/danger、电源开关、分段器）；5 个产品感手法（卡片悬浮微抬升[包 hover:hover]、tab 下划线动效、等宽数字、进行中呼吸、滚动条着色）。
+- 视觉系统 token 化：间距 s1-s6/圆角三档+pill/字阶+行高/阴影三档/过渡+缓动全部 CSS 变量化（基线 `internal/v8-dark-theme-tokens.md`，含三处对比度修正落地：acc 淡底文字 `--acc-300`、12px 微文本 `--dim-hi`、控件边界 `--line-ctrl`）；组件规范落地（键值行 96px+minmax(0,1fr)+ellipsis+title+tabular-nums、卡头、段标题左色条、表格 sticky 表头+行 hover+数字右对齐无斑马纹、深色表单聚焦环+纯 CSS select 箭头、按钮三档 primary/ghost/danger、电源开关、分段器）；5 个产品感手法（卡片悬浮微抬升[包 hover:hover]、tab 下划线动效、等宽数字、进行中呼吸、滚动条着色）。
 - 调用页：单卡+模式分段器（单条调用（ask）/批量并行（fanout））；思考档/模型/超时与并发/超时收进「高级」折叠（标题右侧显示当前值摘要）；结果卡徽标行+markdown 默认 6 行截断可展开+错误框带复制。
 - 历史页：类型列徽标化、数字列右对齐 tabular-nums、通道分布移入详情、任务 ID 列窄化+点击复制（CLI 回放入口保留）；详情手风琴单开（点新收旧），内分概览→任务→产物三段。
 - 登录页：WorkBuddy 两按钮上下分组（轮询时按钮 disabled+内联 spinner+文案，删独立状态大块）；cline 命令行引导卡下沉折叠（默认收起）+一键复制。
@@ -156,7 +187,7 @@
 说明
 - 零依赖零外部资源红线保持：无框架/CDN/字体/图标库/构建步骤，图标用纯 CSS 形状，单文件 HTML 内嵌，离线可用。
 - 回归门禁：新增 `internal/v8-regression.mjs`（22 断言全过：横向滚动结构保障/alert 零命中/术语冻结/数据层零改动/v5.3 专断言）；v7 回归 27/27（⑤ 展示层断言一字未改即过）、v6 回归 24/24、全命令冒烟通过（doctor/ask/fanout/models/config/history/ui 四参数/export-bundle）。
-- 设计依据与被否决备选见 `internal/RESEARCH-V8.md`；施工图 `internal/v8-blueprint.md`；T7 评审采纳 9 条（chip 复用四态形状、排序键闭合、`--warn2` 橙 token、进行中改空心环、未安装虚线、toggle 捕获监听、异常内联 CTA、加载失败兜态、结论句拆降级计数），否决 1 条（免费模型下拉位置维持 RESEARCH-V8 定案：留在详情层+「切换」快捷链接）。
+- 设计依据与被否决备选见 `internal/RESEARCH-V8.md`；施工图 `internal/archive/v8/v8-blueprint.md`；T7 评审采纳 9 条（chip 复用四态形状、排序键闭合、`--warn2` 橙 token、进行中改空心环、未安装虚线、toggle 捕获监听、异常内联 CTA、加载失败兜态、结论句拆降级计数），否决 1 条（免费模型下拉位置维持 RESEARCH-V8 定案：留在详情层+「切换」快捷链接）。
 
 ## 5.2.0 - 2026-09-25
 

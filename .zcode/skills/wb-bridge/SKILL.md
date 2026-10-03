@@ -3,14 +3,14 @@ name: wb-bridge
 description: >-
   通过 wbx 桥把自包含子任务并行分派给外部算力（四 lane：WorkBuddy 双 lane 的 DeepSeek V4.1 Flash
   ——国际版免费、国内版近免费；可选 Cline CLI lane——免费额度轮换模型组；可选豆包桌面端 lane——
-  耗会员额度，调试口 9225，v6.6 起第四 lane）执行，四个外部 Agent 当作
+  耗会员额度，调试口 9225，第四 lane）执行，四个外部 Agent 当作
   ZCode 的子代理高频、放量调用（几乎免费，默认分派不必省着用）。
   当出现以下任一情形时主动使用：需要调研或对比对象（竞品、软件、开源库、技术选型，单个或多个均可）、
   收集参考素材或做法、批量生成/处理文本（翻译、摘要、改写、变体、结构化抽取、分类打标）、
   编写或并行编写代码模块/纯函数/组件/测试用例（接口清晰、材料可贴进提示词、输出可校验的自包含编码任务）、
   对产物做评审批判或双份择优（best-of-N）、对失败产物做定向修复迭代，
   或用户明确提到「并行处理、批量任务、外包出去、用免费额度、用 DeepSeek、WorkBuddy、Cline、豆包跑」，或使用 /wbx 命令。
-  前提：子任务自包含（输入可由编排器打包进提示词、输出可独立校验）。v5 基线：单个自包含任务也默认分派。
+  前提：子任务自包含（输入可由编排器打包进提示词、输出可独立校验）。单个自包含任务也默认分派。
 ---
 
 # wb-bridge：把子任务并行分派给外部算力（四 lane 子代理 · 默认分派）
@@ -25,7 +25,7 @@ description: >-
 | `ai` | WorkBuddy AI 国际版 | **x0.00 免费** | 默认优先（成本理由，见 WBX.md） |
 | `cn` | WorkBuddy 国内版 | x0.03 近免费 | 兜底（微信扫码登录路径稳定） |
 | `cline` | Cline CLI（可选） | DeepSeek V4.1 Flash **免费**（`cline-free/` 免费孪生，限时轮换+每日配额） | thinking=xhigh/compaction=off；清单 `wbx models --as cline --free`；未装/未登录自动跳过，不影响其余功能 |
-| `doubao` | 豆包桌面端（可选，Windows-only，v6.6 起第四 lane） | **会员额度**（工作模式耗额度明显快于普通对话，官方口径） | 模型自管理豆包 2.1 Pro·推理高（任务级 `--model`/`--effort` 不生效）；需以调试口 9225 运行（launch.ps1）；调试口不在线自动跳过；仅 L0 |
+| `doubao` | 豆包桌面端（可选，Windows-only，第四 lane） | **会员额度**（工作模式耗额度明显快于普通对话，官方口径） | 模型自管理豆包 2.1 Pro·推理高（任务级 `--model`/`--effort` 不生效）；需以调试口 9225 运行（launch.ps1）；调试口不在线自动跳过；仅 L0 |
 
 路由：由 `wbx config` 的 default-lane 决定（`auto`=ai 已登录则 ai，否则 cn；cline 次之、doubao
 在 auto 下永远排最后）；回退链 **ai → cn → cline → doubao → 自己做**（各一次，不无限重试）；
@@ -40,7 +40,7 @@ node .zcode/skills/wb-bridge/scripts/wbx.mjs doctor
 ```
 
 - 有任一 lane 全绿 → 继续（未登录的 lane 显示 [SKIP]；cline 未装/未登录只 WARN，均不影响）。
-- ai/cn 都红 → **停止分派**，告诉用户：「请运行 `node .zcode/skills/wb-bridge/scripts/wbx.mjs login`（国内版微信扫码）或 `login --identity ai`（国际版，输出里有 state 修补锦囊），凭证约 55 天有效」，期间这些任务由你自己完成。
+- ai/cn 都红 → **停止分派**，告诉用户：「请运行 `node .zcode/skills/wb-bridge/scripts/wbx.mjs login`（国内版微信扫码）或 `login --identity ai`（国际版，输出里有 state 修补锦囊），凭证约 55 天有效（实测口径见 WBX.md「认证机制」）」，期间这些任务由你自己完成。
 - 「cli」红（App 升级挪了路径）→ 告知用户，改由你自行完成任务（重跑 doctor 自动扫描，也可 `wbx config set cli-path "<路径>"`）。
 - 想用 cline lane 而未登录 → 提示用户 `wbx login --identity cline`（浏览器 OAuth 设备授权）。
 
@@ -167,22 +167,24 @@ node .zcode/skills/wb-bridge/scripts/wbx.mjs fanout --file tasks.json [--lanes a
 
 ## 命令速查
 
+（**完整命令与全部旗标以 `wbx --help` 为准**；下表为高频速查）
+
 | 命令 | 用途 |
 |---|---|
 | `wbx doctor` | 自检向导（node/CLI 探测/模板/lane 凭证/模型探测 + cline 可选段 + 豆包 status 探测段） |
 | `wbx login [--identity cn\|ai\|cline]` | 登录（cn 微信扫码；ai 邮箱/OneID+锦囊；cline 浏览器 OAuth 设备授权；豆包无登录流程，登录态在客户端自理） |
-| `wbx ask --file p.txt [--as ai\|cn\|cline\|doubao] [--caps L0\|L1\|L2] [--max-turns 1-64]` | 单次调用，stdout 出结果，失败自动跨 lane 回退，落盘 job（L1 附轨迹与 transcript；--max-turns 为 v6.2 任务级 L1 回合上限，仅 L1 生效；--as doubao 走桌面端工作任务模式） |
+| `wbx ask --file p.txt [--as ai\|cn\|cline\|doubao] [--caps L0\|L1\|L2] [--max-turns 1-64]` | 单次调用，stdout 出结果，失败自动跨 lane 回退，落盘 job（L1 附轨迹与 transcript；--max-turns 为任务级 L1 回合上限，仅 L1 生效；--as doubao 走桌面端工作任务模式） |
 | `wbx fanout --file t.json [--lanes ai,cn,cline,doubao]` | 多 lane 并发池批量，结果落 `.wbx/jobs/<jobId>/`（任务支持 `"as":"doubao"`、`"caps":"L1"` 与 `"maxTurns":1-64`） |
-| `wbx history [--last 10]` / `wbx history <jobId>` | 历史列表 / 完整回放双向对话（含旧 tasks/ 兼容；v6.4 起历史页含全量 token 用量合计；豆包调度任务无 API 计量，计入「无用量记录」） |
-| `wbx config list\|get\|set` | 配置：default-lane（auto/ai/cn/cline/doubao）、disabled-lanes、parallel-per-lane、model、cli-path、cline-*（path/data-dir/provider/model/thinking/compaction/parallel）、doubao-parallel（默认 1 上限 2）、default-caps（L0/L1/L2）、caps-l1-max-turns（默认 24，v6.2）、caps-l2-enabled（默认 false） |
+| `wbx history [--last 10]` / `wbx history <jobId>` | 历史列表 / 完整回放双向对话（含旧 tasks/ 兼容；历史页含全量 token 用量合计；豆包调度任务无 API 计量，计入「无用量记录」） |
+| `wbx config list\|get\|set` | 配置：default-lane（auto/ai/cn/cline/doubao）、disabled-lanes、parallel-per-lane、model、cli-path、cline-*（path/data-dir/provider/model/thinking/compaction/parallel）、doubao-parallel（默认 1 上限 2）、default-caps（L0/L1/L2）、caps-l1-max-turns（默认 24）、caps-l2-enabled（默认 false） |
 | `wbx models [--as cn\|ai\|cline]` | 探测模型可用性 + 列出产品配置模型；`--as cline --free` 列当前免费模型组（端点实时；doubao 无模型清单概念，报错指路） |
 | `wbx ui [--port 7788]` | 本地 Web UI（127.0.0.1）：四 lane 状态/路由开关/免费模型选择/ask/fanout/历史/登录引导 |
 | `wbx ui --detach / --stop / --status` | 控制台后台守护（幂等复用绝不新起）/ 停止（HTTP 优雅优先）/ 三态查看；日志 `~/.wbx/logs/ui.log` |
 | `wbx ui --install-autostart / --remove-autostart` | 装/摘 ZCode SessionStart 自启钩子（新开会话自动拉起控制台；config.json 只做读-改-写合并，摘除逐键还原） |
-| `wbx doubao <doubao.mjs 子命令…>` | 豆包桌面桥手工直通（Windows-only·零落盘旁路，v6.6 起与第四 lane 并存）：status/new-task/configure/send/read/ask，参数原样转发；需豆包以调试口 9225 运行（先跑 `~/.zcode/wbx-bridge/doubao/launch.ps1`，装过 self-install 后任何目录可用）；不经调度、不入桥历史——调度请用 `ask --as doubao`；详见 tools/doubao-bridge/README.md |
+| `wbx doubao <doubao.mjs 子命令…>` | 豆包桌面桥手工直通（Windows-only·零落盘旁路，与第四 lane 调度并存）：status/new-task/configure/send/read/ask，参数原样转发；需豆包以调试口 9225 运行（先跑 `~/.zcode/wbx-bridge/doubao/launch.ps1`，装过 self-install 后任何目录可用）；不经调度、不入桥历史——调度请用 `ask --as doubao`；详见 tools/doubao-bridge/README.md |
 | `wbx export-bundle [--out <dir>]` | 分发打包（零凭证 zip + INSTALL-README + 自检断言；有意不含豆包桥与任何凭证） |
 | `wbx self-install / self-uninstall` | 用户级全局安装（/wbx 命令 + 用户级 skill + ~/.wbx + 豆包桥 doubao/ 副本）/ 一键还原（豆包副本随桥本体删） |
-| `wbx install-user / uninstall-user` | 仅向 `~/.zcode/AGENTS.md` 注入/移除全局主动分派块 |
+| `wbx install-user / uninstall-user` | legacy：仅注入/移除 `~/.zcode/AGENTS.md` 标记块（完整全局安装用 self-install，功能为其子集） |
 
 （`wbx` = `node .zcode/skills/wb-bridge/scripts/wbx.mjs`；WorkBuddy lane 默认模型 deepseek-v4.1-flash）
 
@@ -199,7 +201,7 @@ ask/fanout 分派 → 校验 → 汇总。命令文件在 `~/.zcode/commands/wbx
    特别地：模型输出复述了材料里的错误关键字（Unauthorized/429 等）会被误判为失败——
    重派前先把材料里的错误样例文本换成中性占位符（见 PROMPTS.md E-005）。
 3. doctor 显示凭证过期（401/Authentication required）→ 提示用户重新 `wbx login`
-   （WorkBuddy 约 55 天一次；cline 重新 `login --identity cline`）。
+   （WorkBuddy 凭证有效期见 WBX.md「认证机制」；cline 重新 `login --identity cline`）。
 4. 任何情况下都不要把 `sessions/*.json`、`product/*.json`、`cline/data/settings/providers.json`
    的内容展示给用户或写入文档（含凭证）。
 5. 并发保守起步：每 lane 默认 2（cline 默认 1），遇限流降到 1（`--parallel 1`）；不要主动调大。
