@@ -23,7 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '6.5.0';
+export const WBX_VERSION = '6.6.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -84,10 +84,12 @@ export const IDENTITIES = {
     configDir: path.join(RUNTIME_ROOT, 'config', 'cn'),
   },
 };
-export const LANE_ORDER = ['ai', 'cn', 'cline']; // 默认路由顺序：免费优先，cline（可选）排最后
+// v13 完全 lane 化（用户 2026-10-03 授权原话「完全lan化」）：doubao 升格第四 lane，排最末——
+// auto 路由与回退链都是免费优先（ai/cn/cline 全不可用才轮到会员额度的豆包），v6 ④a/④b 断言天然保持绿。
+export const LANE_ORDER = ['ai', 'cn', 'cline', 'doubao']; // 默认路由顺序：免费优先，cline（可选）次之，doubao（会员额度）最末
 // v5.2 命名公式：品牌（版本）全称——doctor/CLI 人读输出用；数据层 label 字段不变
-export const LANE_BRAND = { ai: 'WorkBuddy AI（国际版）', cn: 'WorkBuddy（国内版）', cline: 'Cline CLI' };
-const FALLBACK_ORDER = ['cn', 'ai', 'cline'];     // 回退顺序：国内版兜底，cline 最末（稳定性待实测）
+export const LANE_BRAND = { ai: 'WorkBuddy AI（国际版）', cn: 'WorkBuddy（国内版）', cline: 'Cline CLI', doubao: '豆包（桌面端）' };
+const FALLBACK_ORDER = ['cn', 'ai', 'cline', 'doubao'];     // 回退顺序：国内版兜底，cline 次之，doubao（会员额度）最末
 
 const DEFAULT_CLI_PATH = 'D:\\App\\WorkBuddyAI\\resources\\app.asar.unpacked\\cli\\bin\\codebuddy';
 const FALLBACK_MODEL = 'deepseek-v4.1-flash';
@@ -165,6 +167,24 @@ export function clineHasCredential() {
 
 export function clineReady() {
   return !!resolveClinePath() && clineHasCredential();
+}
+
+// ---------- doubao lane（v13：第四 lane，豆包桌面端「工作模式」CDP 驱动；可选） ----------
+// 桥侧零凭证（v12 铁律延续）：登录态由用户在豆包客户端 GUI 内自理，本 lane 只经 doubao.mjs
+// 以调试口 9225 驱动桌面端，不读写任何豆包账号信息。目录双候选解析与 wbx.mjs cmdDoubao 同款。
+export function resolveDoubaoDir() {
+  const candidates = [
+    path.join(GLOBAL_BRIDGE_DIR, 'doubao'),            // 全局形态：~/.zcode/wbx-bridge/doubao/（self-install 复制）
+    path.join(PROJECT_ROOT, 'tools', 'doubao-bridge'), // 仓库形态：桥源码仓的 v12 交付物
+  ];
+  return candidates.find((d) => fs.existsSync(path.join(d, 'doubao.mjs'))) || null;
+}
+
+// 读性判定（静态，对齐 clineReady 先例）：win32 + doubao.mjs 可解析。
+// CDP 在线性（客户端是否带调试口运行）不进 laneReady——同步探测太贵，由 askOnceDoubao
+// 快速失败（客户端未开调试口时 doubao.mjs 秒退非零）触发回退链自然跳过。
+export function doubaoReady() {
+  return process.platform === 'win32' && !!resolveDoubaoDir();
 }
 
 // ---------- cline 免费模型清单（v5.1：recommended-models 端点） ----------
@@ -419,8 +439,8 @@ export function readStdin() {
 // ---------- 配置（config.json，存运行时根） ----------
 export const CONFIG_DEFS = {
   'default-lane': {
-    type: 'enum', values: ['auto', 'ai', 'cn', 'cline'], default: 'auto',
-    desc: 'ask 默认路由：auto=ai 优先（免费），或固定 ai / cn / cline',
+    type: 'enum', values: ['auto', 'ai', 'cn', 'cline', 'doubao'], default: 'auto',
+    desc: 'ask 默认路由：auto=ai 优先（免费），或固定 ai / cn / cline / doubao',
   },
   'disabled-lanes': {
     type: 'lanes', default: [],
@@ -466,6 +486,10 @@ export const CONFIG_DEFS = {
     type: 'int', min: 1, max: 8, default: 1,
     desc: 'cline lane 并发上限（默认 1，免费额度保护；实测稳定后可调）',
   },
+  'doubao-parallel': {
+    type: 'int', min: 1, max: 2, default: 1,
+    desc: 'doubao lane 并发上限（默认 1，上限 2——单客户端 UI 串行保护：豆包桌面端一次只呈现一个工作任务，多并发会互相打断）',
+  },
   'default-caps': {
     type: 'enum', values: ['L0', 'L1', 'L2'], default: 'L0',
     desc: 'ask/fanout 缺省能力档：L0 纯文本（出厂默认，零回退）| L1 只读+联网（仅 ai/cn）| L2（本版未交付，声明即报错）',
@@ -491,7 +515,7 @@ export function loadConfig() {
   // 容错矫正
   if (!CONFIG_DEFS['default-lane'].values.includes(out['default-lane'])) out['default-lane'] = 'auto';
   if (!Array.isArray(out['disabled-lanes'])) out['disabled-lanes'] = [];
-  out['disabled-lanes'] = out['disabled-lanes'].filter((x) => x === 'ai' || x === 'cn' || x === 'cline');
+  out['disabled-lanes'] = out['disabled-lanes'].filter((x) => x === 'ai' || x === 'cn' || x === 'cline' || x === 'doubao');
   if (!Number.isInteger(out['parallel-per-lane']) || out['parallel-per-lane'] < 1 || out['parallel-per-lane'] > 8) {
     out['parallel-per-lane'] = 2;
   }
@@ -514,6 +538,10 @@ export function loadConfig() {
   if (!['agentic', 'basic', 'off'].includes(out['cline-compaction'])) out['cline-compaction'] = 'off';
   if (!Number.isInteger(out['cline-parallel']) || out['cline-parallel'] < 1 || out['cline-parallel'] > 8) {
     out['cline-parallel'] = 1;
+  }
+  // v13 doubao-parallel：非法/越界一律回缺省 1（min 1 max 2，单客户端 UI 串行保护）
+  if (!Number.isInteger(out['doubao-parallel']) || out['doubao-parallel'] < 1 || out['doubao-parallel'] > 2) {
+    out['doubao-parallel'] = 1;
   }
   // v6 caps 键：default-caps 非法回退 L0；caps-l2-enabled 非布尔回退 false（出厂缺省）
   if (!CAPS_LEVELS.includes(out['default-caps'])) out['default-caps'] = 'L0';
@@ -543,8 +571,8 @@ export function parseConfigValue(key, valueStr) {
     case 'lanes': {
       if (typeof v === 'string') v = v.split(',').map((s) => s.trim()).filter(Boolean);
       if (!Array.isArray(v)) throw new Error(`${key} 需为 lane 数组，如 ["cn"] 或 "cn"`);
-      const bad = v.filter((x) => x !== 'ai' && x !== 'cn' && x !== 'cline');
-      if (bad.length) throw new Error(`${key} 只支持 ai/cn/cline（收到 ${JSON.stringify(bad)}）`);
+      const bad = v.filter((x) => x !== 'ai' && x !== 'cn' && x !== 'cline' && x !== 'doubao');
+      if (bad.length) throw new Error(`${key} 只支持 ai/cn/cline/doubao（收到 ${JSON.stringify(bad)}）`);
       return [...new Set(v)];
     }
     case 'int': {
@@ -618,6 +646,7 @@ export function readSession(laneKey) {
 
 export function laneReady(laneKey) {
   if (laneKey === 'cline') return clineReady();
+  if (laneKey === 'doubao') return doubaoReady();
   const id = IDENTITIES[laneKey];
   return !!id && fs.existsSync(id.sessionPath) && fs.existsSync(id.productPath);
 }
@@ -647,6 +676,21 @@ export function laneStatusInfo(laneKey) {
       binaryPath: bin,
     };
   }
+  // v13：doubao 专用分支（对齐 cline 分支形态）——绝不落进下方 IDENTITIES[laneKey] || IDENTITIES.cn 兜底
+  if (laneKey === 'doubao') {
+    const dir = resolveDoubaoDir();
+    const ready = !!dir && process.platform === 'win32';
+    return {
+      key: 'doubao', label: '豆包（桌面端）', cost: '会员额度',
+      endpoint: '豆包桌面端（CDP 调试口 127.0.0.1:9225）',
+      ready, installed: !!dir, credential: null,
+      disabled: isLaneDisabled('doubao'),
+      model: null,   // 工具自管理（豆包 2.1 Pro · 推理高，ask 每次自动重验），桥不设模型 id
+      nickname: null, uinMasked: null, expiresAt: null, expiresInDays: null,
+      templateExists: ready,
+      bridgeDir: dir,
+    };
+  }
   const id = IDENTITIES[laneKey] || IDENTITIES.cn;
   const s = readSession(laneKey);
   let expiresAt = null, expiresInDays = null;
@@ -665,10 +709,10 @@ export function laneStatusInfo(laneKey) {
   };
 }
 
-// 默认路由：config.default-lane 固定 ai/cn/cline（未禁用），否则 auto（enabled+已登录 里 ai 优先，cline 最末）
+// 默认路由：config.default-lane 固定任一 lane（未禁用），否则 auto（enabled+已登录 里 ai 优先，doubao 最末）
 export function resolveDefaultLane() {
   const pick = loadConfig()['default-lane'];
-  if ((pick === 'ai' || pick === 'cn' || pick === 'cline') && !isLaneDisabled(pick)) return pick;
+  if (parseLane(pick) && !isLaneDisabled(pick)) return pick;   // v13：parseLane 含 doubao，固定值校验随之覆盖
   for (const k of LANE_ORDER) {
     if (!isLaneDisabled(k) && laneReady(k)) return k;
   }
@@ -676,8 +720,9 @@ export function resolveDefaultLane() {
   return enabled[0] || 'cn';
 }
 
-// 回退 lane：其余已登录且未禁用的 lane（顺序 cn→ai→cline，各一次）；没有则 null。
-// cline 未装/无凭证时 laneReady 为 false，天然跳过（不耗重试额度）。
+// 回退 lane：其余已登录且未禁用的 lane（顺序 cn→ai→cline→doubao，各一次）；没有则 null。
+// cline 未装/无凭证时 laneReady 为 false，天然跳过（不耗重试额度）；
+// doubao 排最末（会员额度 lane 只在前三条免费 lane 都不可用时才被回退到达——免费优先序不变）。
 //
 // 【v5.1 红线断言·非 DeepSeek 禁回退（用户定案）】cline lane 失败的一切路径都不得改用
 // 非 DeepSeek 模型顶替：本函数只换 lane（ai/cn 的 WorkBuddy DeepSeek V4.1 Flash 仍是 DeepSeek），
@@ -693,7 +738,7 @@ export function fallbackLane(fromKey) {
 
 export function parseLane(v) {
   const k = String(v || '').toLowerCase();
-  return (IDENTITIES[k] || k === 'cline') ? k : null;
+  return (IDENTITIES[k] || k === 'cline' || k === 'doubao') ? k : null;
 }
 
 // v1 -> v2 一次性迁移：session.json / product-config.json -> sessions/<id>.json / product/<id>.json
@@ -882,12 +927,15 @@ function normalizeResult(j) {
  *   成功 { ok:true, text, usage, durationMs, model, raw, caps?, toolTrace?, rawTranscript?, scratchDir? }
  *   失败 { ok:false, kind, error, durationMs, hint? }
  * kind: timeout | cli-error | unparseable | l1-turns-exhausted | result-error | auth |
- *       caps-l2-not-delivered | caps-invalid
+ *       caps-l2-not-delivered | caps-invalid | caps-lane-mismatch
  * v5：lane=cline 走 cline CLI（--json NDJSON）；任务级 effort 对 cline 不生效
  *（用户定案：cline 思考档一律取 config cline-thinking，不下调）。
+ * v13：lane=doubao 走 askOnceDoubao（豆包桌面端工作任务模式）；任务级 effort/model 对 doubao
+ * 不生效（工具自管理豆包 2.1 Pro + 推理高）。
  */
 export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000, caps = 'L0', scratchDir = null, maxTurns = null }) {
   if (lane === 'cline') return askOnceCline({ prompt, model, timeoutMs, caps });
+  if (lane === 'doubao') return askOnceDoubao({ prompt, model, timeoutMs, caps });   // v13：分流在 caps 校验之前（对齐 cline 先例），caps 契约由 askOnceDoubao 内部执行
   const capsLevel = parseCaps(caps);
   if (!capsLevel) {
     return { ok: false, kind: 'caps-invalid', error: `caps 只支持 L0 | L1 | L2（收到 ${caps}）`, durationMs: 0, hint: 'caps-invalid' };
@@ -1158,6 +1206,102 @@ export async function runClineAuth() {
   return { exitCode, ok: clineHasCredential() };
 }
 
+// ---------- doubao lane：末行 JSON 解析 + 一次性调用（v13 完全 lane 化） ----------
+/**
+ * parseDoubaoPayload —— 纯函数：doubao.mjs 所有命令都以 stdout 末行单行 JSON 收口（emit()）。
+ * 从全部 stdout 中取最后一个可解析为 JSON 对象的非空行（正常情况就是末行；失败/混杂场景
+ * 向前兜底扫描），找不到或全非对象则返回 null。任何输入不抛异常，便于门禁直测。
+ */
+export function parseDoubaoPayload(stdoutText) {
+  if (typeof stdoutText !== 'string' || !stdoutText.trim()) return null;
+  const lines = stdoutText.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    try {
+      const j = JSON.parse(line);
+      if (j && typeof j === 'object' && !Array.isArray(j)) return j;
+    } catch { /* 非 JSON 行（横幅/日志/半截输出），继续向前找 */ }
+  }
+  return null;
+}
+
+/**
+ * doubao lane 一次性纯文本调用（v13：第四 lane，会员额度消耗已获用户明示接受——
+ * 2026-10-03「完全lan化」授权；额度不设上限=2026-09-30 既有裁决）。
+ * 命令行：node <doubao.mjs> ask "<提示词>" | --file <临时文件> --timeout-ms <桥侧超时> --json
+ * 桥侧零凭证：登录态在豆包客户端 GUI 内自理；客户端未以调试口 9225 运行时 doubao.mjs
+ * exit 3 快速失败（秒退）→ 回退链自然跳过。>12000 字符走 --file 临时文件（同 v4 stdin
+ * 阈值语义，绕过 Windows 命令行长度上限），用完即删。任务级 model/effort 对 doubao 不生效
+ * （工具自管理豆包 2.1 Pro + 推理高，ask 每次发送前自动重验配置），model 参数仅保持签名兼容。
+ * caps：仅 L0；L1/L2 明确报错（caps-lane-mismatch——豆包桌面 agent 不受桥控、无法承诺
+ * L1 只读语义，对齐 cline 先例），绝不静默降档。
+ * 成功 → { ok:true, text, model:modelAtSend, usage:null（桌面端不走 API 计量）, durationMs, raw }；
+ * 失败 → kind=timeout|cli-error + fix-hint（hint=doubao-launch 指向 launch.ps1 与 doctor）。
+ */
+export async function askOnceDoubao({ prompt, model = null, timeoutMs = 300000, caps = 'L0' }) {
+  void model; // 任务级 --model 对 doubao 不生效（工具自管理 2.1 Pro + 推理高；help/文档如实注明）
+  const capsLevel = parseCaps(caps);
+  if (!capsLevel) {
+    return { ok: false, kind: 'caps-invalid', error: `caps 只支持 L0 | L1 | L2（收到 ${caps}）`, durationMs: 0, hint: 'caps-invalid' };
+  }
+  if (capsLevel === 'L1') {
+    return { ok: false, kind: 'caps-lane-mismatch', error: 'L1 仅支持 ai | cn lane（codebuddy --tools 白名单承载，--as ai / --as cn）；doubao 不承载 L1：豆包桌面 agent 不受桥控，无法承诺只读语义', durationMs: 0, hint: 'caps-lane-mismatch' };
+  }
+  if (capsLevel === 'L2') {
+    return { ok: false, kind: 'caps-l2-not-delivered', error: L2_NOT_DELIVERED_MSG, durationMs: 0, hint: 'caps-l2-not-delivered' };
+  }
+  const dir = resolveDoubaoDir();
+  if (!dir) {
+    return { ok: false, kind: 'cli-error', error: '豆包桥 doubao.mjs 未找到（可选 lane）。修复：在桥源码仓跑 wbx self-install（把 tools/doubao-bridge/ 复制到全局副本）', durationMs: 0, hint: 'not-installed' };
+  }
+  const useFile = prompt.length > 12000;
+  let tmpFile = null;
+  const args = [path.join(dir, 'doubao.mjs'), 'ask', '--timeout-ms', String(timeoutMs), '--json'];
+  if (useFile) {
+    tmpFile = path.join(RUNTIME_ROOT, `doubao-ask-${stamp()}-${Math.random().toString(36).slice(2, 6)}.txt`);
+    try {
+      fs.mkdirSync(RUNTIME_ROOT, { recursive: true });
+      fs.writeFileSync(tmpFile, prompt, 'utf8');
+    } catch (e) {
+      return { ok: false, kind: 'cli-error', error: `超长提示词临时文件写入失败：${e?.message || e}`, durationMs: 0 };
+    }
+    args.push('--file', tmpFile);
+  } else {
+    args.push(prompt);
+  }
+
+  const t0 = Date.now();
+  const r = await spawnBin(process.execPath, args, { timeoutMs: timeoutMs + 20000 });
+  const durationMs = Date.now() - t0;
+  if (tmpFile) { try { fs.rmSync(tmpFile, { force: true }); } catch { /* 清理失败不影响主流程 */ } }
+  const stdout = ansiStrip(r.stdout || '');
+  const stderr = ansiStrip(r.stderr || '');
+  const payload = parseDoubaoPayload(stdout);
+  const combined = stdout + '\n' + stderr;   // 失败 attempt 全量输出（随失败结果返回，编排器落盘）
+
+  if (r.timedOut) {
+    return { ok: false, kind: 'timeout', error: `执行超时（> ${Math.round(timeoutMs / 1000)}s，桥侧兜底 kill）`, durationMs, combined };
+  }
+  if (r.code !== 0 || !payload || payload.ok !== true || typeof payload.text !== 'string') {
+    const reason = payload && payload.reason ? String(payload.reason) : (brief(stderr || combined) || `exit=${r.code}，无输出`);
+    // 调试口不可达（客户端未以调试口 9225 运行，doubao.mjs exit 3）：fix-hint 指向 launch.ps1 与 doctor
+    const cdpDown = r.code === 3 || /CDP 不可达/i.test(reason);
+    return {
+      ok: false,
+      kind: 'cli-error',
+      error: cdpDown ? `豆包客户端调试口不可达（${reason}）` : reason,
+      durationMs, combined,
+      hint: cdpDown ? 'doubao-launch' : undefined,
+    };
+  }
+  return {
+    ok: true, text: payload.text, usage: null, durationMs,
+    model: typeof payload.modelAtSend === 'string' && payload.modelAtSend ? payload.modelAtSend : '豆包 2.1 Pro',
+    raw: payload,
+  };
+}
+
 // ---------- 统一 job 模型（ask/fanout 都落盘，可回放） ----------
 export function newJobId() {
   return stamp() + '-' + Math.random().toString(36).slice(2, 5);
@@ -1296,10 +1440,10 @@ export function listJobs() {
 }
 
 // ---------- 全量 token 用量汇总（v6.4：历史页/总览展示；与 listJobs 同源遍历，只读） ----------
-// 口径：任务记录 rec.usage（usageOf 同款字段回退）。unknownUsage = 成功但无任何
-// usage 数字的旧格式记录数（诚实展示用，不猜数）。v6.5 注记：v6.4 曾单列 doubaoTasks
-// （豆包桥接不计入 in/out），随豆包历史回退一并移除（历史=三 lane 外部算力调度记录）。
-// 豆包直通自 v6.5 起零落盘，不会产生 lane=doubao 的记录。
+// 口径：任务记录 rec.usage（usageOf 同款字段回退）。unknownUsage = 成功但无任何 usage 数字的
+// 记录数（诚实展示用，不猜数）。v6.5 注记：v6.4 曾单列 doubaoTasks（豆包桥接不计入 in/out），
+// 随豆包历史回退一并移除。v13 注记：豆包 lane 调度任务走标准 ask/fanout 记录路径但 usage=null
+// （桌面端不走 API 计量）→ 落 unknownUsage 计数；`wbx doubao` 手工直通仍零落盘，不产生记录。
 const usageNumOf = (u, keys) => {
   for (const k of keys) {
     const v = u ? u[k] : null;
@@ -1419,19 +1563,19 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
     throw new Error(`maxTurns 仅在 caps L1 生效（当前 caps=${capsLevel}；L0 无回合概念）`);
   }
   let primary = as ? parseLane(as) : null;
-  if (as && !primary) throw new Error(`--as 只支持 ai | cn | cline（收到 ${as}）`);
+  if (as && !primary) throw new Error(`--as 只支持 ai | cn | cline | doubao（收到 ${as}）`);
   if (!as) primary = resolveDefaultLane();
   if (isLaneDisabled(primary)) {
     throw new Error(`lane ${primary} 已被 disabled-lanes 硬禁用。启用：wbx config set disabled-lanes []`);
   }
-  if (capsLevel === 'L1' && primary === 'cline') {
-    throw new Error('caps L1 与 lane cline 不匹配：L1 仅支持 ai | cn（codebuddy --tools 白名单承载）。请显式 --as ai 或 --as cn');
+  if (capsLevel === 'L1' && (primary === 'cline' || primary === 'doubao')) {
+    throw new Error(`caps L1 与 lane ${primary} 不匹配：L1 仅支持 ai | cn（codebuddy --tools 白名单承载）。请显式 --as ai 或 --as cn`);
   }
   const fb = fallbackLane(primary);
   let chain = fb && fb !== primary ? [primary, fb] : [primary];
   if (capsLevel === 'L1') {
-    // L1 回退链只在 ai/cn 之间（同能力档跨 lane 回退语义不变；cline 不承载 L1）
-    chain = chain.filter((k) => k !== 'cline');
+    // L1 回退链只在 ai/cn 之间（同能力档跨 lane 回退语义不变；cline/doubao 不承载 L1）
+    chain = chain.filter((k) => k === 'ai' || k === 'cn');
     if (!chain.length) throw new Error('caps L1 无可用 lane：需要 ai/cn 至少一个可用且未禁用');
   }
   // L1 缺省超时上浮（多轮+搜索延迟显著高于 L0 单轮；任务级更大值可覆盖）
@@ -1515,7 +1659,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     let lane = null;
     if (t.as != null) {
       lane = parseLane(t.as);
-      if (!lane) throw new Error(`任务 ${t.id} 的 as 只支持 ai|cn|cline`);
+      if (!lane) throw new Error(`任务 ${t.id} 的 as 只支持 ai|cn|cline|doubao`);
     }
     // caps 契约（v6）：任务级 "caps" 字段；缺省继承 config default-caps；
     // 不合法 / L2 未交付 / L1×cline 不匹配 -> 明确报错（绝不静默降档、绝不自动改路）
@@ -1532,9 +1676,9 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       throw new Error(`任务 ${t.id ?? id} 的 maxTurns 仅在 caps L1 生效（当前 caps=${effCaps}；L0 无回合概念）`);
     }
     if (effCaps === 'L1') {
-      if (lane === 'cline') throw new Error(`任务 ${t.id ?? id}：caps L1 与 lane cline 不匹配——L1 仅支持 ai | cn（--as ai / --as cn）`);
+      if (lane === 'cline' || lane === 'doubao') throw new Error(`任务 ${t.id ?? id}：caps L1 与 lane ${lane} 不匹配——L1 仅支持 ai | cn（--as ai / --as cn）`);
       if (!lane) {
-        // L1 任务不进公共队列（可能落到 cline worker）：显式钉到可用的 ai/cn
+        // L1 任务不进公共队列（可能落到 cline/doubao worker）：显式钉到可用的 ai/cn
         const dl = resolveDefaultLane();
         lane = (dl === 'ai' || dl === 'cn') ? dl : 'ai';
       }
@@ -1543,8 +1687,11 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
   }
 
   const laneParallel = Math.max(1, parallel ?? cfg['parallel-per-lane'] ?? 2);
-  // cline lane 并发单独受 cline-parallel 约束（默认 1，免费额度保护；--parallel 不抬升它）
-  const laneParallelOf = (lane) => (lane === 'cline' ? Math.max(1, cfg['cline-parallel'] || 1) : laneParallel);
+  // cline 并发单独受 cline-parallel 约束（默认 1，免费额度保护；--parallel 不抬升它）；
+  // v13：doubao 并发单独受 doubao-parallel 约束（默认 1 上限 2，单客户端 UI 串行保护）
+  const laneParallelOf = (lane) => (lane === 'cline'
+    ? Math.max(1, cfg['cline-parallel'] || 1)
+    : lane === 'doubao' ? Math.max(1, Math.min(2, cfg['doubao-parallel'] || 1)) : laneParallel);
   const timeoutMs = timeoutS * 1000;
   const retryN = Math.max(0, retry ?? 1);
 
@@ -1592,9 +1739,9 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     }
     let usedLane = lane, fallbackFrom = null;
     if (!res.ok) {
-      // L1 跨 lane 回退只在 ai/cn 之间（cline 不承载 L1，不得进入回退目标）
+      // L1 跨 lane 回退只在 ai/cn 之间（cline/doubao 不承载 L1，不得进入回退目标）
       let fb = fallbackLane(lane);
-      if (capsLevel === 'L1' && fb === 'cline') fb = null;
+      if (capsLevel === 'L1' && fb !== 'ai' && fb !== 'cn') fb = null;
       if (fb) {
         attempts++;
         say(`${task.id}@${lane} 用尽重试（${res.kind}），跨 lane 回退 -> ${fb}`);
@@ -1808,19 +1955,19 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
   const capsValid = !!dc && typeof cfg['caps-l2-enabled'] === 'boolean';
   step('caps', capsValid ? null : false,
     `default-caps=${dc || `非法（${JSON.stringify(cfg['default-caps'])}，已按 L0 处理）`}；L2 总闸=${l2gate ? 'on' : 'off（默认）'}；`
-    + `能力面：L0=三 lane | L1=仅 ai/cn（联网+只读，--caps L1 / 任务 "caps":"L1"） | L2=本版未交付（cline 3.0.65 无命令级 deny，Phase 0 实测；上游支持后按完整六层防护栈交付）`);
+    + `能力面：L0=四 lane（ai/cn/cline/doubao） | L1=仅 ai/cn（联网+只读，--caps L1 / 任务 "caps":"L1"；cline/doubao 不承载） | L2=本版未交付（cline 3.0.65 无命令级 deny，Phase 0 实测；上游支持后按完整六层防护栈交付）`);
 
-  // 5) 模板缓存（登录前置条件；cline 走独立认证，无模板概念）
+  // 5) 模板缓存（登录前置条件；cline/doubao 走各自独立认证，无模板概念）
   for (const key of LANE_ORDER) {
-    if (key === 'cline') continue;
+    if (key === 'cline' || key === 'doubao') continue;
     const id = IDENTITIES[key];
     const has = fs.existsSync(id.templatePath);
     if (!has) say(`[SKIP] 模板    lane ${key} 缺 ${id.templatePath}（修复：启动一次${LANE_BRAND[key]}桌面版）`);
   }
 
-  // 6) 每 lane 凭证 + 探测（ai/cn；cline 在第 7 段单独体检）
+  // 6) 每 lane 凭证 + 探测（ai/cn；cline 在第 7 段、doubao 在第 8 段单独体检）
   for (const key of LANE_ORDER) {
-    if (key === 'cline') continue;
+    if (key === 'cline' || key === 'doubao') continue;
     const info = laneStatusInfo(key);
     const id = IDENTITIES[key];
     say('');
@@ -1926,6 +2073,42 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
     }
   }
 
+  // 8) doubao lane（v13：可选第四 lane；未运行/未装=WARN 不影响 exit 0——「至少一个 lane 可用」
+  //    逻辑不变）。只做 status 探测（进程+CDP，免费不耗会员额度）；绝不做 tiny-ask 探测——
+  //    豆包走用户会员额度，探测性提问也会真实消耗一次工作任务，与 ai/cn 段的免费探测刻意差异化
+  //    （2026-10-03 v13 定案：doctor 探测不做 tiny-ask）。
+  {
+    const dinfo = laneStatusInfo('doubao');
+    say('');
+    say(`--- 通道 豆包（桌面端）· 会员额度${dinfo.disabled ? ' · 已禁用' : ' · 可选通道'} ---`);
+    if (dinfo.disabled) {
+      steps.push({ name: 'lane-doubao', good: null, detail: '已禁用（disabled-lanes）' });
+      say('[SKIP] 可选lane  已禁用（disabled-lanes），路由/回退链跳过该 lane');
+      laneRows.push(dinfo);
+    } else if (!dinfo.installed) {
+      steps.push({ name: 'lane-doubao', good: null, detail: '未安装（可选，不影响本桥）' });
+      say('[WARN] 可选lane  豆包桥未找到 doubao.mjs（可选能力，不影响 ai/cn/cline）。修复：在桥源码仓跑 wbx self-install（装全局副本）');
+      laneRows.push(dinfo);
+    } else {
+      say('豆包桌面端状态探测中（doubao.mjs status，免费不耗额度）…');
+      const st = await spawnBin(process.execPath, [path.join(dinfo.bridgeDir, 'doubao.mjs'), 'status', '--timeout-ms', '8000', '--json'], { timeoutMs: 30000 });
+      const payload = parseDoubaoPayload(ansiStrip(st.stdout || ''));
+      const online = st.code === 0 && !!payload && payload.ok === true;
+      const probeDetail = online
+        ? `调试口在线（model=${payload.model || '?'}，推理档=${payload.mode || '?'}）`
+        : `桌面端未以调试口 9225 运行或未登录（${brief(String(payload?.reason || `exit=${st.code}`), 100)}）`;
+      if (online) {
+        steps.push({ name: 'lane-doubao', good: true, detail: probeDetail });
+        say(`[OK]   桌面端   ${probeDetail}`);
+      } else {
+        // WARN 而非 FAIL：拉起豆包属用户侧动作（launch.ps1），不影响 ai/cn/cline 主通道
+        steps.push({ name: 'lane-doubao', good: null, detail: probeDetail });
+        say(`[WARN] 桌面端   ${probeDetail}。拉起：powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"（详情：wbx doubao status）`);
+      }
+      laneRows.push({ ...dinfo, probe: { good: online, detail: probeDetail } });
+    }
+  }
+
   const ready = loggedLanes().filter((k) => !isLaneDisabled(k));
   if (!ready.length) fail++;
   const probeable = laneRows.filter((r) => r.probe);
@@ -1946,21 +2129,22 @@ export function userBlockText(bridgeScriptPath) {
   const wbx = `node "${bridgeScriptPath}"`;
   return [
     USER_BLOCK_BEGIN,
-    '## wbx 外部算力桥（三 lane 子代理：默认分派，放开用）',
+    '## wbx 外部算力桥（四 lane 子代理：默认分派，放开用）',
     '',
-    `本机装有 wbx 桥（入口 "${bridgeScriptPath}"）：三个外部 Agent 当作你的子代理，高频、放量调用`,
+    `本机装有 wbx 桥（入口 "${bridgeScriptPath}"）：四个外部 Agent 当作你的子代理，高频、放量调用`,
     '（几乎免费，不必为省 token 收着用）。lane：ai/cn = WorkBuddy 双 lane 的 DeepSeek V4.1 Flash',
     '（国际版免费/国内版近免费）；cline = Cline CLI（可选第三 lane，默认免费调 DeepSeek——',
-    'cline-free/deepseek-v4.1-flash 孪生，限时轮换+每日配额，thinking=xhigh；免费清单：wbx models --as cline --free）。',
+    'cline-free/deepseek-v4.1-flash 孪生，限时轮换+每日配额，thinking=xhigh；免费清单：wbx models --as cline --free）；',
+    'doubao = 豆包桌面端（可选第四 lane，耗会员额度——免费 lane 优先，回退链最末；需以调试口 9225 运行豆包）。',
     '自包含（v4 公理）：全部输入可由你打包进提示词（材料先行）、输出可独立校验即可外包——含代码模块编写：',
     '',
     '```bash',
     `${wbx} doctor                     # 先自检；可用 lane 全红 -> 提示用户 login，任务自己做`,
-    `${wbx} ask --file <p.txt>           # 单条（--as ai|cn|cline 指定 lane，默认路由见 config，失败自动回退）`,
+    `${wbx} ask --file <p.txt>           # 单条（--as ai|cn|cline|doubao 指定 lane，默认路由见 config，失败自动回退）`,
     `${wbx} fanout --file <tasks.json>   # 并行批量（任务可用 files:[路径] 拼材料；结果落 ~/.wbx/jobs/<jobId>/）`,
     `${wbx} ui --detach                 # 常开网页控制台 http://127.0.0.1:7788（幂等后台守护；--stop 停止；`,
     '                                   #  --install-autostart 随 ZCode 新会话自动拉起，--remove-autostart 摘除）',
-    `${wbx} doubao status | ask "任务文本"  # 豆包桌面桥·工作任务模式（v6.3 可选工具，非三 lane；豆包需以`,
+    `${wbx} doubao status | ask "任务文本"  # 豆包桌面桥手工直通（零落盘旁路，不经调度/不入历史；豆包需以`,
     '                                   #  调试口 9225 运行——先 powershell -ExecutionPolicy Bypass -File',
     '                                   #  "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"（cmd 写法；PS/GitBash 换 $env:USERPROFILE/~）；',
     '                                   #  子命令同 doubao.mjs：status/new-task/configure/send/read/ask）',

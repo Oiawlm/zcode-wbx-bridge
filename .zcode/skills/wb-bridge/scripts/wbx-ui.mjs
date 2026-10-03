@@ -350,48 +350,8 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
 <section id="tab-status" class="on">
   <div class="card ovw" id="ovw" style="display:none"></div>
   <div class="card" id="status-error" style="display:none"><div class="card__bd" id="status-error-bd"></div></div>
+  <!-- v13：静态 #doubao-card 退役，豆包升格第四 lane，卡由 doubaoCardHtml() 渲染进 #lane-cards grid -->
   <div class="grid3" id="lane-cards"></div>
-  <div class="card" id="doubao-card">
-    <div class="card__hd"><span class="card__title">豆包桥工具 · 工作任务模式</span><span class="badge neutral" id="doubao-badge">检测中…</span><span class="card__sub">wbx doubao 直通 · 全项目通用</span></div>
-    <div class="card__bd">
-      <div class="kv">
-        <span class="k">客户端进程</span><span class="v" id="doubao-proc">检测中…</span>
-        <span class="k">调试口 9225</span><span class="v" id="doubao-cdp">检测中…</span>
-      </div>
-      <div class="copyline"><span class="t">node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao ask "任务文本"</span><button class="copybtn" data-copy='node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao ask "任务文本"'>复制</button></div>
-      <p class="hint">装过 self-install 后任何项目任何目录可用（v6.3 直通；上面为 cmd 写法，PowerShell 把 %USERPROFILE% 换成 $env:USERPROFILE、Git Bash 换成 ~）。一条命令=新工作任务→显式配 Pro+推理「高」→发送→取回结果；本仓库开发形态仍可 cd tools/doubao-bridge/ 后 node doubao.mjs …。</p>
-      <details>
-        <summary>使用说明与排障</summary>
-        <div class="dbd">
-          <p class="hint">诚实声明（三处必读）：① 这是临时工具——依托豆包客户端当前 UI 结构（data-testid 锚点）工作，客户端升级随时可能失效；② Windows-only——依赖 Windows 进程模型、netstat 与 PowerShell，未在其他平台验证；③ 非官方——豆包官方未公开桌面端编程接口，本工具走 Chromium 官方调试开关（CDP）驱动已登录客户端，与字节跳动无关，不属于任何受支持的集成方式。</p>
-          <p class="hint">前置条件：Windows 10/11 + Node.js ≥ 18（playwright-core 已随 doubao/ 目录复制，无需下载浏览器）；豆包桌面端已登录（登录态由你在豆包 GUI 内自理，本工具不做任何凭证自动化，脚本与文档零凭证）；豆包需以调试端口运行。工具位置：全局形态 ~/.zcode/wbx-bridge/doubao/（self-install 复制，v6.3 起）；本仓库开发形态 tools/doubao-bridge/。</p>
-          <p class="hint">启动方式（检测到豆包已运行时，需 -Force 才会结束它们；请先保存豆包里未发送的草稿）：</p>
-          <div class="copyline"><span class="t">powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1" -Force</span><button class="copybtn" data-copy='powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1" -Force'>复制</button></div>
-          <div class="warn-box">调试口开放期间=本地攻击面：本机任意进程可经 9225 接管已登录客户端；launch.ps1 已校验只绑 127.0.0.1。用完正常退出豆包、再普通启动，即恢复无调试态。</div>
-          <p class="hint">分步命令速查（全局入口 = node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs"，下同；仓库形态=cd tools/doubao-bridge/ 后 node doubao.mjs）：</p>
-          <div class="copyline"><span class="t">node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao status</span><button class="copybtn" data-copy='node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao status'>复制</button></div>
-          <p class="hint">status — CDP 是否可达、当前模型/推理档/环境。</p>
-          <div class="copyline"><span class="t">node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao new-task</span><button class="copybtn" data-copy='node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao new-task'>复制</button></div>
-          <p class="hint">new-task — 新建工作任务（注意：新会话会把推理档重置回「中」）。</p>
-          <div class="copyline"><span class="t">node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao configure</span><button class="copybtn" data-copy='node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao configure'>复制</button></div>
-          <p class="hint">configure — 显式选「豆包 2.1 Pro」+「高」（可 --model / --reasoning 覆盖）。</p>
-          <div class="copyline"><span class="t">node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao send "任务文本"</span><button class="copybtn" data-copy='node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao send "任务文本"'>复制</button></div>
-          <p class="hint">send — 发送（发送前自动重验配置，不符则先重配）。</p>
-          <div class="copyline"><span class="t">node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao read</span><button class="copybtn" data-copy='node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" doubao read'>复制</button></div>
-          <p class="hint">read — 轮询取回最新回复（--wait-ms / --poll-ms 可调）。</p>
-          <p class="hint">输出与退出码：所有命令输出单行 JSON；退出码 0 成功 / 2 锚点失配（立即停止，不硬重试）/ 3 CDP 不可达 / 4 配置校验失败 / 5 读结果超时 / 1 其他。</p>
-          <p class="hint">已知坑（实测）：</p>
-          <ul>
-            <li class="hint">① 新会话可能重置推理档：点「新工作任务」后推理档可能从「高」跳回「中」（实测不稳定复现，模型档 Pro 一般保留）——所以 send/ask 在发送前都会重读状态栏并按需重配；直接手工操作时也请发送前瞄一眼状态栏。</li>
-            <li class="hint">② 侧栏收起时：侧栏里的「新工作任务」按钮在视口外不可点——doubao.mjs 会自动回退到应用内置快捷键 Ctrl+N，并校验落入工作模式首页。</li>
-            <li class="hint">③ 选择器脆弱：锚点均集中在 anchors.json（每锚点 ≥2 候选），豆包升级改 UI 即可能失配；全候选失配时 CLI 立即以退出码 2 停止，绝不盲目重试——按 README 锚点修复流程重跑勘探，更新 anchors.json 后再跑一次 status 与无害小任务验证。</li>
-            <li class="hint">④ 单行道：工作模式与普通对话在会话中途不可互切（切了上下文作废）——工具只用「新工作任务」开新会话，不动你既有会话。</li>
-          </ul>
-          <p class="hint">工作模式耗额度明显快于普通对话（官方口径）。</p>
-        </div>
-      </details>
-    </div>
-  </div>
   <div class="card">
     <div class="card__hd"><span class="card__title">路由</span></div>
     <div class="card__bd">
@@ -401,11 +361,12 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
           <button data-v="ai">固定 WorkBuddy AI</button>
           <button data-v="cn">固定 WorkBuddy</button>
           <button data-v="cline">固定 Cline</button>
+          <button data-v="doubao">固定 豆包</button>
         </span>
       </div>
       <div class="hint" id="route-hint" style="margin-top:8px"></div>
       <div class="warn-box" id="route-warn" style="display:none"></div>
-      <div class="hint" style="margin-top:8px">写 <b>config.json</b>（default-lane / disabled-lanes），体检、单条调用、批量并行、回退链即时生效；通道停用开关在各通道卡右上角。</div>
+      <div class="hint" style="margin-top:8px">写 <b>config.json</b>（default-lane / disabled-lanes），体检、单条调用、批量并行、回退链即时生效；通道停用开关在各通道卡右上角。回退链：cn → ai → cline → 豆包（会员额度 lane 排最末，免费优先）。</div>
     </div>
   </div>
   <div class="card">
@@ -433,6 +394,7 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
             <button data-v="ai">WorkBuddy AI</button>
             <button data-v="cn">WorkBuddy</button>
             <button data-v="cline">Cline</button>
+            <button data-v="doubao">豆包</button>
           </span>
           <button class="btn-primary" id="ask-btn">执行单条调用</button>
         </div>
@@ -528,9 +490,9 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
       <details id="doubao-guide">
         <summary>豆包（桌面端）· 无需在此登录</summary>
         <div class="dbd">
-          <p class="hint">豆包不是三 lane 之一，也没有「登录豆包」流程：<b>登录态由你在豆包桌面客户端内自理</b>，桥侧零凭证（本页与桥都不读写任何豆包账号信息）。桥只需要豆包以调试端口 9225 运行，启动方式：</p>
+          <p class="hint">豆包已是第四 lane（可选，耗会员额度，路由/回退/批量调度均可用），但<b>登录仍在豆包桌面客户端内自理、桥侧零凭证</b>——本页与桥都不读写任何豆包账号信息，也没有「登录豆包」流程。桥只需要豆包以调试端口 9225 运行，启动方式：</p>
           <div class="copyline"><span class="t">powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1" -Force</span><button class="copybtn" data-copy='powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1" -Force'>复制</button></div>
-          <p class="hint">装过 self-install 后任何项目任何目录可用（上面为 cmd 写法，PowerShell 把 %USERPROFILE% 换成 $env:USERPROFILE、Git Bash 换成 ~；-Force 会在豆包已运行时先结束它们，请先保存未发送的草稿）。连接是否就绪，到「状态」页<b>豆包桥工具</b>卡看探针（客户端进程 + 调试口 9225）。</p>
+          <p class="hint">装过 self-install 后任何项目任何目录可用（上面为 cmd 写法，PowerShell 把 %USERPROFILE% 换成 $env:USERPROFILE、Git Bash 换成 ~；-Force 会在豆包已运行时先结束它们，请先保存未发送的草稿）。连接是否就绪，到「状态」页<b>豆包（桌面端）</b>通道卡看探针（客户端进程 + 调试口 9225）。</p>
         </div>
       </details>
     </div>
@@ -542,12 +504,12 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
 <script>
 'use strict';
 // ---------- 渲染层中文化映射表（v5.2 冻结术语，v5.3 只改排布/密度/编码，不改译法；数据值/config 键/API 字段一律不动） ----------
-const LANE_LABEL={ai:'WorkBuddy AI',cn:'WorkBuddy',cline:'Cline',auto:'自动'};            // 短称：下拉/表格列/回退
-const LANE_TITLE={ai:'WorkBuddy AI（国际版）',cn:'WorkBuddy（国内版）',cline:'Cline CLI（可选通道）'}; // 全称：卡片标题
+const LANE_LABEL={ai:'WorkBuddy AI',cn:'WorkBuddy',cline:'Cline',doubao:'豆包',auto:'自动'};            // 短称：下拉/表格列/回退（v13 +doubao=第四 lane）
+const LANE_TITLE={ai:'WorkBuddy AI（国际版）',cn:'WorkBuddy（国内版）',cline:'Cline CLI（可选通道）',doubao:'豆包（桌面端）'}; // 全称：卡片标题（v13 +doubao）
 const TYPE_LABEL={ask:'单条调用',fanout:'批量并行',unknown:'未知'};                        // 历史「类型」列（v6.5 回退 v6.4 +doubao：豆包历史已翻案移除）
 const TASK_STATUS_LABEL={success:'成功',failed:'失败'};
 const JOB_STATUS_LABEL={done:'已完成',running:'进行中',pending:'等待中'};
-const LANE_ORDER_UI=['ai','cn','cline'];
+const LANE_ORDER_UI=['ai','cn','cline','doubao'];
 const BS=String.fromCharCode(92); // 反斜杠常量（模板字符串安全，不写反斜杠字面量）
 function laneLabel(k){return LANE_LABEL[k]||k||''}
 function laneTitle(k){return LANE_TITLE[k]||LANE_LABEL[k]||k||''}
@@ -561,6 +523,7 @@ function errorHint(text){
   if(/Daily free model limit reached/i.test(t))return '（Cline 免费额度今日已达上限 → 稍后再试，或到「状态」页 Cline 卡换免费模型）';
   if(/Free model promotion ended/i.test(t))return '（该免费模型促销已结束/被轮换下线 → 到「状态」页 Cline 卡换当前免费模型）';
   if(/model not found|not a valid model/i.test(t))return '（模型 id 不存在或已被轮换下线 → 到「状态」页 Cline 卡换当前免费模型）';
+  if(/调试口不可达|CDP 不可达/i.test(t))return '（豆包客户端未以调试口运行 → 到「状态」页豆包卡复制 launch.ps1 拉起，或跑 wbx doctor 看豆包段）';
   return '';
 }
 // ---------- 基础工具 ----------
@@ -689,6 +652,12 @@ function laneTier(l){
     if(!l.credential)return{rank:2,cls:'warn',shape:'s-dia',label:'未登录（OAuth）',signal:'未登录'};
     return{rank:4,cls:'ok',shape:'s-dot',label:'已登录',signal:'已登录'};
   }
+  // v13：doubao 分支——静态读性=桥脚本可解析（win32+doubao.mjs）；桌面端进程/调试口 4 态由
+  // /api/doubao 探针细化（总览豆包 chip 与卡徽标走探针态），此处只兜底排序与聚合
+  if(l.key==='doubao'){
+    if(!l.ready)return{rank:3,cls:'absent',shape:'s-ring',label:'未安装（可选）',signal:'未安装'};
+    return{rank:4,cls:'ok',shape:'s-dot',label:'已就绪',signal:'已就绪'};
+  }
   if(!l.ready)return{rank:0,cls:'err',shape:'s-sq',label:'未登录',signal:'未登录'};
   const e=expiryTier(l);
   if(e&&e.t==='err')return{rank:0,cls:'err',shape:'s-sq',label:'已过期',signal:'已过期'};
@@ -700,6 +669,7 @@ const EXP_COLOR={ok:'c-ok',warn:'c-warn',warn2:'c-warn2',err:'c-err'};
 // ---------- 状态页 ----------
 let CUR=null; // 最近一次 /api/status（停用开关即时写 config 用）
 let DOUBAO_LAST=null; // 最近一次 /api/doubao 探测 {win,running,online,unknown}（总览豆包 chip 用）
+let DOUBAO_RAW=null;  // 最近一次 /api/doubao 原始 payload（含 browser 字符串；豆包卡 proc/cdp 行回填用，v13）
 async function loadStatus(){
   try{
     const s=await api('GET','/api/status');
@@ -710,6 +680,7 @@ async function loadStatus(){
     renderOvw(s);
     $('lane-cards').innerHTML=laneCardsHtml(s);
     renderRoute(s);
+    paintDoubaoCard();   // v13：lane-cards 渲染完回填豆包徽标（loadDoubao 先返回的竞态补画）
   }catch(e){
     $('ovw').style.display='none';
     $('lane-cards').innerHTML='';
@@ -720,6 +691,36 @@ async function loadStatus(){
   }
 }
 // ---------- 豆包桥工具卡（v12.1；运行状态来自 /api/doubao，失败静默降级不 toast） ----------
+// v13：badge/proc/cdp 随豆包 lane 卡动态渲染，与 loadStatus 存在竞态——paintDoubaoCard() 从
+// DOUBAO_LAST 回填，renderDoubao（探针返回时）与 loadStatus（lane-cards 渲染完时）双向调用，
+// 两边都未就绪时保留「检测中…」占位（元素不存在直接返回，不报错）。
+function paintDoubaoCard(){
+  const d=DOUBAO_LAST;
+  const bd=$('doubao-badge');
+  if(!bd)return;
+  const win=d?d.win:true;
+  const running=d?d.running:false;
+  const online=d?d.online:false;
+  // 徽标四态：未知/非 win32/进程不在 → absent；cdp → ok；进程在但没开调试口 → neutral
+  let cls='badge absent', label='豆包未运行';
+  if(!d||d.unknown){cls='badge absent';label='状态未知';}
+  else if(!win){cls='badge absent';label='仅 Windows';}
+  else if(online){cls='badge ok';label='调试口在线';}
+  else if(running){cls='badge neutral';label='未开调试口';}
+  bd.className=cls;bd.textContent=label;
+  // v13：客户端进程/调试口两行同源回填（DOUBAO_RAW 为 /api/doubao 原始 payload；未知态保留占位）
+  const pr=$('doubao-proc');
+  const cd=$('doubao-cdp');
+  const raw=DOUBAO_RAW;
+  if(pr&&raw){
+    pr.textContent=!raw.win?'非 Windows 平台，未探测':(raw.running?'Doubao.exe 运行中':'未检测到 Doubao.exe');
+  }
+  if(cd&&raw){
+    if(!raw.win)cd.textContent='非 Windows 平台，未探测';
+    else if(raw.online)cd.innerHTML='可达 · 127.0.0.1:9225'+(raw.browser?(' · <span class="mono">'+esc(raw.browser)+'</span>'):'');
+    else cd.textContent=raw.running?'127.0.0.1:9225 无响应':'127.0.0.1:9225 不可达';
+  }
+}
 async function loadDoubao(){
   try{
     const d=await api('GET','/api/doubao');
@@ -728,9 +729,9 @@ async function loadDoubao(){
     // 降级：不弹 toast，控制台静默记一条；徽标 absent「状态未知」，动态槽写明失败原因（esc 过）
     const why='状态未知：'+((e&&e.message)?e.message:String(e));
     DOUBAO_LAST={win:true,running:false,online:false,unknown:true};
+    DOUBAO_RAW={win:true,running:false,online:false,unknown:true,why:why};
     if(CUR)renderOvw(CUR);
-    const bd=$('doubao-badge');
-    if(bd){bd.className='badge absent';bd.textContent='状态未知';}
+    paintDoubaoCard();
     const pr=$('doubao-proc');
     const cd=$('doubao-cdp');
     if(pr)pr.innerHTML=esc(why);
@@ -744,25 +745,9 @@ function renderDoubao(d){
   const running=(d.process===true);
   const online=(d.cdp===true);
   const browser=(typeof d.browser==='string')?d.browser.trim():'';
-  const bd=$('doubao-badge');
-  const pr=$('doubao-proc');
-  const cd=$('doubao-cdp');
-  // 徽标四态：非 win32 → absent；cdp → ok；进程在但没开调试口 → neutral；进程不在 → absent
-  let cls='badge absent', label='豆包未运行';
-  if(!win){cls='badge absent';label='仅 Windows';}
-  else if(online){cls='badge ok';label='调试口在线';}
-  else if(running){cls='badge neutral';label='未开调试口';}
-  if(bd){bd.className=cls;bd.textContent=label;}
-  if(pr){
-    if(!win){pr.textContent='非 Windows 平台，未探测';}
-    else{pr.textContent=running?'Doubao.exe 运行中':'未检测到 Doubao.exe';}
-  }
-  if(cd){
-    if(!win){cd.textContent='非 Windows 平台，未探测';}
-    else if(online){cd.innerHTML='可达 · 127.0.0.1:9225'+(browser?(' · <span class="mono">'+esc(browser)+'</span>'):'');}
-    else{cd.textContent=running?'127.0.0.1:9225 无响应':'127.0.0.1:9225 不可达';}
-  }
   DOUBAO_LAST={win:win,running:running,online:online,unknown:false};
+  DOUBAO_RAW={win:win,running:running,online:online,browser:browser};
+  paintDoubaoCard();   // 徽标与 proc/cdp 随卡动态渲染，先画一次（卡未渲染时 paint 内部空转，loadStatus 渲染完补画）
   if(CUR)renderOvw(CUR);   // 探测结果回填总览豆包 chip
 }
 function renderOvw(s){
@@ -771,18 +756,19 @@ function renderOvw(s){
   const allOk=worst.rank===4;
   const deg=tiers.filter(function(t){return t.rank===1||t.rank===2}).length;
   const dis=s.lanes.filter(function(l){return l.disabled}).length;
-  let txt=(allOk?'一切正常 · ':'')+s.readyCount+' / 3 通道可用';
+  let txt=(allOk?'一切正常 · ':'')+s.readyCount+' / '+LANE_ORDER_UI.length+' 通道可用';
   if(deg>0)txt+=' · '+deg+' 个降级';
   if(dis>0)txt+=' · '+dis+' 个已停用';
   txt+=' · '+(s.defaultLane==='auto'?'自动路由 → '+laneLabel(s.effectiveLane):'固定路由 '+laneLabel(s.defaultLane));
   const chipHtml=LANE_ORDER_UI.map(function(k){
+    if(k==='doubao')return doubaoChipHtml();   // v13：豆包 chip 走 /api/doubao 探针 4 态（比 laneTier 静态读性更细），锚点=新 lane 卡
     const l=s.lanes.find(function(x){return x.key===k});
     const t=laneTier(l);
     const col=t.cls==='absent'?'c-neutral':'c-'+t.cls;
     return '<a class="chip" href="#lane-card-'+k+'" title="跳到 '+esc(laneTitle(k))+' 卡片"><i class="shp '+t.shape+' '+col+'"></i>'+esc(laneLabel(k))+'<span class="sig">'+esc(t.signal)+'</span></a>';
   }).join('')
-  // v6.4 内容级扩展：豆包桥工具 chip（探测态）+ 外部桥接累计 token 用量 chip（点击去历史页）
-  +doubaoChipHtml()+(s.tokens?tokensChipHtml(s.tokens):'');
+  // v6.4 内容级扩展：外部桥接累计 token 用量 chip（点击去历史页）
+  +(s.tokens?tokensChipHtml(s.tokens):'');
   const ovw=$('ovw');
   ovw.className='card ovw t-'+(worst.cls==='absent'?'neutral':worst.cls);
   ovw.innerHTML='<span class="concl">'+esc(txt)+'</span><span class="chips">'+chipHtml+'</span>';
@@ -793,17 +779,21 @@ function doubaoChipHtml(){
   const sig=!d?'检测中':(d.unknown?'状态未知':(!d.win?'仅 Windows':d.online?'调试口在线':d.running?'未开调试口':'未运行'));
   const cls=(!d||d.unknown)?'c-neutral':(d.online?'c-ok':(d.running?'c-warn2':'c-neutral'));
   const shape=(!d||d.unknown)?'s-ring':(d.online?'s-dot':(d.running?'s-dia':'s-ring'));
-  return '<a class="chip" href="#doubao-card" title="跳到 豆包桥工具 卡片（桌面工作模式，非三 lane）"><i class="shp '+shape+' '+cls+'"></i>豆包<span class="sig">'+esc(sig)+'</span></a>';
+  return '<a class="chip" href="#lane-card-doubao" title="跳到 豆包（桌面端） 通道卡"><i class="shp '+shape+' '+cls+'"></i>豆包<span class="sig">'+esc(sig)+'</span></a>';
 }
 function tokensChipHtml(t){
-  return '<a class="chip" href="#" data-goto-history="1" title="外部桥接累计 token 用量（in=提示词/out=回复；点击查看历史明细）"><i class="shp s-sq c-acc"></i>累计 tokens<span class="sig num">'+fmtInt(t.tokensIn)+' / '+fmtInt(t.tokensOut)+'</span></a>';
+  return '<a class="chip" href="#" data-goto-history="1" title="外部桥接累计 token 用量（in=提示词/out=回复；无用量记录（含豆包 lane——桌面端不走 API 计量）不计入；点击查看历史明细）"><i class="shp s-sq c-acc"></i>累计 tokens<span class="sig num">'+fmtInt(t.tokensIn)+' / '+fmtInt(t.tokensOut)+'</span></a>';
 }
 function laneCardsHtml(s){
   const lanes=s.lanes.slice().sort(function(a,b){
     const ra=laneTier(a).rank,rb=laneTier(b).rank;
     return (ra-rb)||(LANE_ORDER_UI.indexOf(a.key)-LANE_ORDER_UI.indexOf(b.key));
   });
-  return lanes.map(function(l){return l.key==='cline'?clineCardHtml(l,s):wbCardHtml(l)}).join('');
+  return lanes.map(function(l){
+    if(l.key==='cline')return clineCardHtml(l,s);
+    if(l.key==='doubao')return doubaoCardHtml(l);   // v13：豆包升格 lane 卡进 grid（静态 #doubao-card 退役）
+    return wbCardHtml(l);
+  }).join('');
 }
 function wbCardHtml(l){
   const t=laneTier(l);
@@ -831,6 +821,66 @@ function wbCardHtml(l){
     +'<span class="k">endpoint</span><span class="v"><span class="vtxt" title="'+esc(l.endpoint)+'">'+esc(l.endpoint)+'</span>'+copyBtn(l.endpoint)+'</span>'
     +'<span class="k">登录模板</span><span class="v">'+(l.templateExists?'<span class="badge ok">有</span>':'<span class="badge warn">缺（启动一次桌面版）</span>')+'</span>'
     +'</div></div></details></div></div>';
+}
+// v13：豆包第四 lane 卡（原静态 #doubao-card 升格）。徽标=4 态探针（/api/doubao + loadDoubao()
+// 数据通路，badge/proc/cdp 三个 id 随卡迁入 grid，loadDoubao 无需改动）；详情保留 launch.ps1
+// 复制行、使用说明与排障、三处诚实声明全文；调度入口与手工直通（零落盘旁路）双入口并列。
+function doubaoCardHtml(l){
+  const badge='<span class="badge neutral" id="doubao-badge">检测中…</span>';
+  const askCmd='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs" ask --as doubao "任务文本"';
+  const doubaoAskCmd='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs" doubao ask "任务文本"';
+  const launchCmd='powershell -ExecutionPolicy Bypass -File "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'doubao'+BS+'launch.ps1" -Force';
+  const stCmd='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs" doubao status';
+  const ntCmd='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs" doubao new-task';
+  const cfgCmd='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs" doubao configure';
+  const sendCmd='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs" doubao send "任务文本"';
+  const rdCmd='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs" doubao read';
+  const hint2='（cmd 写法，PowerShell 把 %USERPROFILE% 换成 $env:USERPROFILE、Git Bash 换成 ~）';
+  return '<div class="card'+(l.disabled?' off':'')+'" id="lane-card-doubao">'
+    +'<div class="card__hd"><span class="card__title">'+esc(laneTitle('doubao'))+'</span>'+badge
+    +'<span class="card__sub">工作任务模式 · 桥侧零凭证</span>'
+    +'<label class="pwr"><input type="checkbox" class="power" data-lane="doubao"'+(l.disabled?'':' checked')+' aria-label="启用或停用 豆包" title="停用 / 启用此通道（即时写 config disabled-lanes）"></label></div>'
+    +'<div class="card__bd"><div class="kv">'
+    +'<span class="k">成本</span><span class="v"><span class="cost neutral" title="消耗豆包会员额度（会员期内可用）；工作模式耗额度明显快于普通对话（官方口径）">会员额度</span></span>'
+    +'<span class="k">模型</span><span class="v"><span class="vtxt" title="模型与推理档由豆包桌面端工具自管理，任务级 --model/--effort 不生效">豆包 2.1 Pro · 推理高（工具自管理）</span></span>'
+    +'<span class="k">能力档</span><span class="v"><span class="vtxt">L0 纯文本（不承载 L1/L2：桌面 agent 不受桥控）</span></span>'
+    +'<span class="k">客户端进程</span><span class="v" id="doubao-proc">检测中…</span>'
+    +'<span class="k">调试口 9225</span><span class="v" id="doubao-cdp">检测中…</span>'
+    +'</div>'
+    +'<div class="copyline"><span class="t">'+esc(askCmd)+'</span>'+copyBtn(askCmd)+'</div>'
+    +'<p class="hint">调度入口（第四 lane，进历史记录；免费 lane 优先，豆包排回退链最末）'+hint2+'。</p>'
+    +'<details aria-expanded="false"><summary>使用说明与排障</summary><div class="dbd">'
+    +'<p class="hint">诚实声明（三处必读）：① 这是临时工具——依托豆包客户端当前 UI 结构（data-testid 锚点）工作，客户端升级随时可能失效；② Windows-only——依赖 Windows 进程模型、netstat 与 PowerShell，未在其他平台验证；③ 非官方——豆包官方未公开桌面端编程接口，本工具走 Chromium 官方调试开关（CDP）驱动已登录客户端，与字节跳动无关，不属于任何受支持的集成方式。</p>'
+    +'<p class="hint">前置条件：Windows 10/11 + Node.js ≥ 18（playwright-core 已随 doubao/ 目录复制，无需下载浏览器）；豆包桌面端已登录（登录态由你在豆包 GUI 内自理，本工具不做任何凭证自动化，脚本与文档零凭证）；豆包需以调试端口运行。工具位置：全局形态 ~/.zcode/wbx-bridge/doubao/（self-install 复制，v6.3 起）；本仓库开发形态 tools/doubao-bridge/。</p>'
+    +'<p class="hint">启动方式（检测到豆包已运行时，需 -Force 才会结束它们；请先保存豆包里未发送的草稿）：</p>'
+    +'<div class="copyline"><span class="t">'+esc(launchCmd)+'</span>'+copyBtn(launchCmd)+'</div>'
+    +'<div class="warn-box">调试口开放期间=本地攻击面：本机任意进程可经 9225 接管已登录客户端；launch.ps1 已校验只绑 127.0.0.1。用完正常退出豆包、再普通启动，即恢复无调试态。</div>'
+    +'<p class="hint">手工直通（零落盘旁路：不经调度、不入历史，个人对话用这条；分步命令同 doubao.mjs）：</p>'
+    +'<div class="copyline"><span class="t">'+esc(doubaoAskCmd)+'</span>'+copyBtn(doubaoAskCmd)+'</div>'
+    +'<p class="hint">装过 self-install 后任何项目任何目录可用。一条命令=新工作任务→显式配 Pro+推理「高」→发送→取回结果；本仓库开发形态仍可 cd tools/doubao-bridge/ 后 node doubao.mjs …。</p>'
+    +'<p class="hint">桥脚本位置（doubao.mjs 双候选：全局 ~/.zcode/wbx-bridge/doubao/ → 仓库 tools/doubao-bridge/）：</p>'
+    +'<div class="copyline"><span class="t">'+esc(l.bridgeDir||'未找到 doubao.mjs')+'</span>'+(l.bridgeDir?copyBtn(l.bridgeDir):'')+'</div>'
+    +'<p class="hint">分步命令速查（全局入口 = node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs"，下同；仓库形态=cd tools/doubao-bridge/ 后 node doubao.mjs）：</p>'
+    +'<div class="copyline"><span class="t">'+esc(stCmd)+'</span>'+copyBtn(stCmd)+'</div>'
+    +'<p class="hint">status — CDP 是否可达、当前模型/推理档/环境。</p>'
+    +'<div class="copyline"><span class="t">'+esc(ntCmd)+'</span>'+copyBtn(ntCmd)+'</div>'
+    +'<p class="hint">new-task — 新建工作任务（注意：新会话会把推理档重置回「中」）。</p>'
+    +'<div class="copyline"><span class="t">'+esc(cfgCmd)+'</span>'+copyBtn(cfgCmd)+'</div>'
+    +'<p class="hint">configure — 显式选「豆包 2.1 Pro」+「高」（可 --model / --reasoning 覆盖）。</p>'
+    +'<div class="copyline"><span class="t">'+esc(sendCmd)+'</span>'+copyBtn(sendCmd)+'</div>'
+    +'<p class="hint">send — 发送（发送前自动重验配置，不符则先重配）。</p>'
+    +'<div class="copyline"><span class="t">'+esc(rdCmd)+'</span>'+copyBtn(rdCmd)+'</div>'
+    +'<p class="hint">read — 轮询取回最新回复（--wait-ms / --poll-ms 可调）。</p>'
+    +'<p class="hint">输出与退出码：所有命令输出单行 JSON；退出码 0 成功 / 2 锚点失配（立即停止，不硬重试）/ 3 CDP 不可达 / 4 配置校验失败 / 5 读结果超时 / 1 其他。</p>'
+    +'<p class="hint">已知坑（实测）：</p>'
+    +'<ul>'
+    +'<li class="hint">① 新会话可能重置推理档：点「新工作任务」后推理档可能从「高」跳回「中」（实测不稳定复现，模型档 Pro 一般保留）——所以 send/ask 在发送前都会重读状态栏并按需重配；直接手工操作时也请发送前瞄一眼状态栏。</li>'
+    +'<li class="hint">② 侧栏收起时：侧栏里的「新工作任务」按钮在视口外不可点——doubao.mjs 会自动回退到应用内置快捷键 Ctrl+N，并校验落入工作模式首页。</li>'
+    +'<li class="hint">③ 选择器脆弱：锚点均集中在 anchors.json（每锚点 ≥2 候选），豆包升级改 UI 即可能失配；全候选失配时 CLI 立即以退出码 2 停止，绝不盲目重试——按 README 锚点修复流程重跑勘探，更新 anchors.json 后再跑一次 status 与无害小任务验证。</li>'
+    +'<li class="hint">④ 单行道：工作模式与普通对话在会话中途不可互切（切了上下文作废）——工具只用「新工作任务」开新会话，不动你既有会话。</li>'
+    +'</ul>'
+    +'<p class="hint">工作模式耗额度明显快于普通对话（官方口径）。</p>'
+    +'</div></details></div></div>';
 }
 function clineCardHtml(l,s){
   const t=laneTier(l);
@@ -882,7 +932,7 @@ function renderRoute(s){
   pill.querySelectorAll('button').forEach(function(b){b.classList.toggle('active',b.dataset.v===s.config['default-lane'])});
   $('route-hint').textContent='当前生效默认路由：'+(s.defaultLane==='auto'?'自动 → '+laneLabel(s.effectiveLane):laneLabel(s.defaultLane))+'；可用通道：'+(s.readyCount>0?s.readyCount+' 个':'0 个');
   const fix=s.config['default-lane'];
-  const fixedDisabled=(fix==='ai'||fix==='cn'||fix==='cline')&&(s.lanes.find(function(l){return l.key===fix})||{}).disabled;
+  const fixedDisabled=(fix==='ai'||fix==='cn'||fix==='cline'||fix==='doubao')&&(s.lanes.find(function(l){return l.key===fix})||{}).disabled;
   const w=$('route-warn');
   if(fixedDisabled){
     w.style.display='block';
@@ -1060,7 +1110,7 @@ function renderFanRows(){
     const r=fanRows[i];
     h+='<div class="fan-row">'
       +'<input type="text" data-i="'+i+'" data-f="id" value="'+esc(r.id)+'" placeholder="任务 ID">'
-      +'<select data-i="'+i+'" data-f="lane"><option value="">自动</option><option value="ai"'+(r.lane==='ai'?' selected':'')+'>WorkBuddy AI</option><option value="cn"'+(r.lane==='cn'?' selected':'')+'>WorkBuddy</option><option value="cline"'+(r.lane==='cline'?' selected':'')+'>Cline</option></select>'
+      +'<select data-i="'+i+'" data-f="lane"><option value="">自动</option><option value="ai"'+(r.lane==='ai'?' selected':'')+'>WorkBuddy AI</option><option value="cn"'+(r.lane==='cn'?' selected':'')+'>WorkBuddy</option><option value="cline"'+(r.lane==='cline'?' selected':'')+'>Cline</option><option value="doubao"'+(r.lane==='doubao'?' selected':'')+'>豆包</option></select>'
       +'<select data-i="'+i+'" data-f="caps" title="能力档：L0 纯文本（默认）/ L1 联网+只读（仅 WorkBuddy AI、国内版）"><option value=""'+(!r.caps?' selected':'')+'>L0</option><option value="L1"'+(r.caps==='L1'?' selected':'')+'>L1 联网</option></select>'
       +'<textarea data-i="'+i+'" data-f="prompt" style="min-height:44px" placeholder="worker 提示词">'+esc(r.prompt)+'</textarea>'
       +'<button class="fan-del" data-del="'+i+'" title="删除此任务行">×</button></div>';
@@ -1112,10 +1162,10 @@ async function loadHistory(){
     let cnt='共 '+h.jobs.length+' 条';
     if(h.totals){
       cnt+=' · 累计 tokens in '+fmtInt(h.totals.tokensIn)+' / out '+fmtInt(h.totals.tokensOut);
-      if(h.totals.unknownUsage)cnt+=' · '+fmtInt(h.totals.unknownUsage)+' 条旧记录无用量';
+      if(h.totals.unknownUsage)cnt+=' · '+fmtInt(h.totals.unknownUsage)+' 条无用量记录';
     }
     $('hist-count').textContent=cnt;
-    $('hist-count').title='汇总全部历史任务（含旧版兼容目录）；in=提示词/out=回复 token。';
+    $('hist-count').title='汇总全部历史任务（含旧版兼容目录）；in=提示词/out=回复 token；无用量记录（含豆包 lane——桌面端不走 API 计量）。';
     const tb=$('hist-table').querySelector('tbody');
     tb.innerHTML='';
     h.jobs.forEach(function(j){
@@ -1424,7 +1474,7 @@ async function handler(req, res) {
       let as = null;
       if (b.lane && b.lane !== 'auto') {
         as = parseLane(b.lane);
-        if (!as) return sendJson(res, 400, { error: `lane 取值只支持 auto|ai|cn|cline（ai=WorkBuddy AI，cn=WorkBuddy，cline=Cline；收到 ${b.lane}）` });
+        if (!as) return sendJson(res, 400, { error: `lane 取值只支持 auto|ai|cn|cline|doubao（ai=WorkBuddy AI，cn=WorkBuddy，cline=Cline，doubao=豆包桌面端；收到 ${b.lane}）` });
       }
       // v6 caps：任务契约字段——不合法值/lane 不匹配/L2 未交付均 400（绝不静默降档或改路）
       let caps = null;
@@ -1432,8 +1482,8 @@ async function handler(req, res) {
         caps = parseCaps(b.caps);
         if (!caps) return sendJson(res, 400, { error: `caps 只支持 L0 | L1 | L2（收到 ${b.caps}）` });
       }
-      if (caps === 'L1' && as === 'cline') {
-        return sendJson(res, 400, { error: 'caps L1 与通道 cline 不匹配：L1 仅支持 WorkBuddy AI / 国内版（ai/cn）' });
+      if (caps === 'L1' && (as === 'cline' || as === 'doubao')) {
+        return sendJson(res, 400, { error: `caps L1 与通道 ${as} 不匹配：L1 仅支持 WorkBuddy AI / 国内版（ai/cn）` });
       }
       const jobId = newJobId();
       runAskJob({
@@ -1490,7 +1540,8 @@ async function handler(req, res) {
     if (req.method === 'POST' && p === '/api/login/start') {
       const b = await readBody(req);
       const lane = parseLane(b.lane);
-      if (!lane) return sendJson(res, 400, { error: 'lane 只支持 ai|cn' });
+      // v13：仅 ai/cn 有 SSO 登录流（cline=CLI OAuth；doubao=客户端 GUI 自理，均不走此端点）
+      if (!lane || lane === 'cline' || lane === 'doubao') return sendJson(res, 400, { error: 'lane 只支持 ai|cn' });
       if (loginState.status === 'pending') return sendJson(res, 409, { error: `已有登录流程进行中（lane ${loginState.lane}）` });
       loginState.status = 'pending'; // 先占位防并发登录流（TOCTOU），失败回滚
       loginState.lane = lane;

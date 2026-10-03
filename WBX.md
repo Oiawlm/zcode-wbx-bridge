@@ -1,4 +1,4 @@
-# WBX — ZCode ↔ 外部算力联动桥（v6.5：三 lane 子代理化高频调度 · doubao 桌面桥直通（无痕） · 控制台 · 界面产品化）
+# WBX — ZCode ↔ 外部算力联动桥（v6.6：四 lane 完全调度（doubao 第四 lane） · 子代理化高频调度 · 控制台 · 界面产品化）
 
 > **v5.3**：控制台「产品化」改造——只动展示层（后端 handler/API 字段/config 键/守护/安全面/术语表
 > 零改动）：状态页信息架构重排（健康总览条/通道卡三层分层/路由与停用分家/体检空态+分组）、
@@ -1586,3 +1586,70 @@ unparseable 的主因（v11.1 假设⑤由部分证伪翻转为证实），9/28-
   tokens chip 与历史合计仍在。
 - 发布：self-install 同步全局副本 + `ui --stop` 后 `--detach` 重启生效（/__health 版本=6.5.0）；
   commit 本地完成，push 待用户指示。
+
+## v6.6 章：v13 完全 lane 化——豆包桥升格第四 lane（路由/回退/fanout 全进调度体系）
+
+- 用户触发（2026-10-03 第三次输入）：「完全lan化，你是规划窗口，给我产出一个给执行窗口的提示词」
+  ——三选项（维持现状/半 lane 化/完全 lane 化）中拍板**完全**：豆包进路由、回退链、fanout 全部
+  调度体系，会员额度由桥自动决定消耗（额度不设上限=2026-09-30 既有裁决延续）。UI-SPEC contract
+  **v1.3.0 → v1.4.0**；新增第七套门禁 `internal/v13-regression.mjs`。
+- **lane 注册**：`LANE_ORDER=['ai','cn','cline','doubao']`、`FALLBACK_ORDER=['cn','ai','cline',
+  'doubao']`——doubao **排最末**（会员额度 lane 只在前三条免费 lane 全不可用时被 auto/回退到达，
+  免费优先序不变，v6 ④a/④b 断言天然保持绿）；`LANE_BRAND.doubao='豆包（桌面端）'`；
+  `parseLane` +doubao；`doubaoReady()`=win32 + doubao.mjs 双候选可解析（全局 `~/.zcode/wbx-bridge/
+  doubao/` → 仓库 `tools/doubao-bridge/`，与 cmdDoubao 同款）挂进 laneReady；**CDP 在线性不进
+  laneReady**（同步探测太贵）——askOnceDoubao 快速失败（客户端未开调试口时 doubao.mjs exit 3
+  秒退）触发回退链自然跳过。
+- **worker**：`askOnceDoubao({prompt,model,timeoutMs})` spawn `node doubao.mjs ask`（>12k 字符走
+  `--file` 临时文件同 v4 阈值语义 + `--timeout-ms` 透传）；末行 JSON 用独立纯函数
+  `parseDoubaoPayload(stdoutText)` 解析（向前兜底扫描最后对象行，四态可测）；成功
+  `{ok:true,text,model:modelAtSend,usage:null,durationMs}`（桌面端不走 API 计量→tokenTotals 落
+  unknownUsage 诚实口径）；失败 kind=timeout/cli-error+fix-hint（hint=doubao-launch）。任务级
+  `--model`/`--effort` 对 doubao 不生效（工具自管理豆包 2.1 Pro·推理高，ask 每次自动重验），
+  help/文档如实注明。
+- **caps**：askOnce 的 doubao 分流在 caps 校验之前（对齐 cline 先例）；askOnceDoubao 内部
+  L1/L2 → `caps-lane-mismatch`/`caps-l2-not-delivered` 明确报错（豆包桌面 agent 不受桥控、无法
+  承诺只读语义），绝不静默降档；`--as doubao --caps L1` 报错文案在案（v13 门禁 ③b）。
+- **config**：`default-lane` enum +doubao；新增 `doubao-parallel`（int 默认 1、min 1 max 2，
+  单客户端 UI 串行保护）+ `laneParallelOf` doubao 分支；`disabled-lanes` 接受 doubao（随时刹车）。
+- **doctor 第 8 段**：「通道 豆包（桌面端）· 会员额度 · 可选通道」——doubao.mjs status 4 态探测
+  （进程+CDP，免费不耗额度；**不做 tiny-ask**：豆包走会员额度，探测性提问也真实消耗一次工作
+  任务，与 ai/cn 段的免费探测刻意差异化，理由写进代码注释）；未运行/未装=WARN（good:null）不
+  影响 exit 0；laneRows/steps 通路打通（UI 体检卡自动显示）；禁用态显示 SKIP 行。
+- **UI 升格**（v1.4.0 内容级 lane 化）：静态 `#doubao-card` 退役 → `doubaoCardHtml()` 渲染豆包
+  lane 卡进 `#lane-cards` grid（通道卡×3→×4）：4 态探针徽标（复用 /api/doubao+loadDoubao 通路，
+  badge/proc/cdp 三 id 随卡迁入）+ 电源开关（data-lane="doubao" 写 disabled-lanes）+ 成本行
+  「会员额度」（`.cost` 第四档，复用 neutral 视觉，UI-SPEC §2/§5.1 三改四随 v1.4.0 登记）+ 模型
+  行「豆包 2.1 Pro · 推理高（工具自管理）」+ 调试口 9225 行 + 详情保留 launch.ps1 复制行/分步
+  速查/三处诚实声明全文+手工直通零落盘旁路入口。`LANE_LABEL/LANE_TITLE/LANE_ORDER_UI` +doubao；
+  路由卡 +「固定 豆包」；ask 分段器与 fanout 行下拉 +豆包；总览豆包 chip 锚点 `#doubao-card`→
+  `#lane-card-doubao`、title 去「非三 lane」；登录页说明卡文案改「豆包已是第四 lane，但登录仍在
+  豆包客户端内自理、桥侧零凭证」（消除「不是三 lane」失实）；tokens chip/hist-count 的
+  unknownUsage 提示扩「含豆包 lane——桌面端不走 API 计量」。
+- **历史语义自洽**（与 v12.3 翻案不冲突）：豆包**调度**任务（`ask --as doubao`/fanout `"as":
+  "doubao"`）走标准 ask/fanout 记录路径进历史（type=ask/fanout、lane=doubao）——桥派的单属于
+  外部算力调度记录；`wbx doubao` 手工直通**保持零落盘**（help/内嵌 AGENTS 块/README/SKILL 全部
+  改写为「手工直通零落盘旁路」双入口表述）。D2 TYPE_LABEL 键集不动（调度任务 type=ask/fanout）。
+- **守卫**：`wbx login --identity doubao`、`wbx models --as doubao` 明确报错指路（parseLane 放行
+  后无对应流程，拦下防误落 cn 分支）；cmdAsk 成功行 usage 空计量显示「—（无用量计量）」。
+- 内嵌用户 AGENTS 标记块（userBlockText）四 lane 化：标题/导语/lane 清单/ask 枚举 +doubao；
+  wbx-setup /wbx 命令描述与 INSTALL-README 同步；仓库根 AGENTS.md 75 行整卡预算（lane 表 +1 行
+  doubao、回退链 ai→cn→cline→doubao→自己做、双入口表述）。
+- **真机 e2e（2026-10-03，豆包客户端在线）**：①`wbx ask --as doubao --text "连接测试…"` 全链路
+  成功（18.6s，model=豆包 2.1 Pro高，tokens=—（无用量计量）），job 20261003-131746-gpk 记录
+  type=ask lane=doubao、CLI history 与 UI 历史页均可见；②fanout 任务 `"as":"doubao"` 成功
+  （18.7s，job 20261003-131858-2wh，lanes ai,cn,cline,doubao 并发 ai=2 cn=2 cline=1 doubao=1）；
+  ③`disabled-lanes ["doubao"]` 刹车：ask --as doubao 明确报错、doctor 显示 SKIP、fanout 绑定
+  doubao 的任务改投公共队列由 ai 执行（任务不丢），验后恢复 `[]`；④控制台四页签目测：四张
+  通道卡（3+1 换行）、总览五 chip（豆包=调试口在线）、路由五按钮（+固定 豆包）、体检豆包段、
+  历史豆包行（183 条中 2 条无用量记录=两条豆包调度任务的诚实计数）；⑤1280/800 两档视口
+  零横向溢出、豆包卡内部零溢出（详情展开态量测在案）。
+- **修复（本轮发现）**：豆包徽标/探针行竞态——lane 化后 badge/proc/cdp 随卡动态渲染，
+  loadDoubao 与 loadStatus 并发时探针先返回则元素未渲染、写入落空（徽标永久「检测中…」）。
+  修复=paintDoubaoCard() 从 DOUBAO_LAST/DOUBAO_RAW 回填，renderDoubao 与 loadStatus 双向调用。
+- **直通零落盘复验**：`wbx doubao status/ask` 输出与退出码与直跑 doubao.mjs 一致（exit 0）、
+  jobs/ 目录数 203→203 零新增（无痕直通未回退；与 lane 调度记录并存=v13 双入口语义实证）。
+- 门禁（2026-10-03，竞态修复后重验）：v6 24/24 + v7 27/27 + v7-merge 24/24 + v8 22/22 +
+  v11.3 38/38 + **v13 新套件 52/52** + contract 23/23 + 红测全绿（含恢复自证）——八套件全绿。
+- 发布：self-install 同步全局副本（5 模块逐文件 diff 一致）+ `ui --stop` 后 `--detach` 重启
+  （/__health 版本=6.6.0）；commit 本地完成，push 待用户指示。

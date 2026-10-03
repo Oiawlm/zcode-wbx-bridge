@@ -1,4 +1,4 @@
-# UI-SPEC — wbx 桥控制台 UI 风格契约（contract v1.3.0）
+# UI-SPEC — wbx 桥控制台 UI 风格契约（contract v1.4.0）
 
 > 授权来源：用户 2026-09-25「风格和方向可以基本锁定」「该固定的部分先固定下来，之后基本就是
 > 新增或者删减一些内容」。冻结登记见 `internal/FROZEN.md`「UI 契约冻结」项；变更须用户显式授权
@@ -184,11 +184,11 @@
 #### 成本徽标 `.cost` [frozen]
 - **结构**：inline-flex padding 2px 10px、--r-pill、--fs-xs 500 nowrap、cursor:help；纯胶囊无形状，细则进 title。
 - **API**：三档 `.acc`（免费，--acc-text 字+--acc-soft 底）/`.neutral`（近免费，--dim-hi 字+--neutral-soft 底）/`.warn`（免费·限时配额，--warn 字+--warn-soft 底）；title=原始口径全文。
-- **用法**：通道卡扫读层成本行（ai=免费/cn=近免费/cline=免费·限时配额）。
-- **Do**：成本一律三档枚举，原始口径（x0.00/x0.03/限时轮换说明）进 title。
-- **Don't**：不要新造成本档位措辞（三档是编码层冻结）；不要加形状点（与 badge 刻意区分）。
+- **用法**：通道卡扫读层成本行（ai=免费/cn=近免费/cline=免费·限时配额/doubao=会员额度，v1.4.0 起四通道）。
+- **Do**：成本一律按通道枚举取档（v1.4.0 起四档枚举），原始口径（x0.00/x0.03/限时轮换说明/会员额度说明）进 title。
+- **Don't**：不要新造成本档位措辞（四档是编码层冻结）；不要加形状点（与 badge 刻意区分）。
 - **何时不用**：非成本语义的强调用 badge；成本徽标只承载「这条通道花不花钱」。
-- **A11y 与不变量**：三档映射为编码层冻结（机器断言 S3 守护标签映射的存在性机制）；title 兜底完整口径。
+- **A11y 与不变量**：四档映射为编码层冻结（机器断言 S3 守护标签映射的存在性机制）；title 兜底完整口径。
 - **相关组件**：badge、kv。
 
 #### status-dot `.dot--running` [extension]
@@ -226,7 +226,7 @@
 #### card `.card` [extension]
 - **结构**：--panel 底+--line 边+--r-md+--shadow-1+margin-bottom --s4+scroll-margin-top --s4；hover(`@media(hover:hover)`) translateY(-1px)+--shadow-2+边框亮化；`.off` 变体（bd/title/sub opacity .62）；grid3 内 margin-bottom:0。
 - **API**：变体 `.off`；槽位=卡头/卡体/任意内容。
-- **用法**：通道卡×3（grid3）、豆包桥工具卡（v12.1 内容级新增，位于通道卡与路由卡之间）、路由卡、体检卡、调用卡、历史表卡、job 详情卡、登录卡×3（登录引导 + Cline 折叠卡 + 豆包说明卡，v6.5 起豆包卡为内容级新增）。
+- **用法**：通道卡×4（grid3，v1.4.0 起含豆包 lane 卡）、路由卡、体检卡、调用卡、历史表卡、job 详情卡、登录卡×3（登录引导 + Cline 折叠卡 + 豆包说明卡，v6.5 起豆包卡为内容级新增；v1.4.0 起说明卡文案=「豆包已是第四 lane，登录在客户端自理」）。原静态豆包桥工具卡（v12.1 内容级新增）已于 v1.4.0 升格为豆包 lane 卡进 grid（退役静态卡）。
 - **Do**：抬升只 1px 且包 hover:hover；停用卡用 `.off` 降亮而非改文字色。
 - **Don't**：不要用 --line 表达可交互边界（只作装饰分隔 1.31:1）。
 - **何时不用**：多个同级条目天然成表时用 table，不堆卡片。
@@ -463,8 +463,8 @@ T4/C3/C5/D4 的保活前置）、形状双编码（S1）、阈值乱序（S2）�
 - **组件层**：§2 各 [frozen] 组件的类名契约与结构（badge 八变体、toast 三型、table 容器、button
   三档、form-control、tabs 四页签、details aria 机制、kv 网格、chip 三重编码、power、copybtn）。
 - **IA 层**：四页签（状态/调用/历史/登录）与三层信息分层尺子（扫读→详情→排障）。
-- **编码层**：四态→形状→颜色映射；到期色阶阈值（≤0 红 / ≤7 橙 / ≤30 黄 / >30 绿）；成本三档
-  （免费/近免费/免费·限时配额）。
+- **编码层**：四态→形状→颜色映射；到期色阶阈值（≤0 红 / ≤7 橙 / ≤30 黄 / >30 绿）；成本四档
+  （免费/近免费/免费·限时配额/会员额度，v1.4.0 起随通道枚举）。
 - **术语层**：v5.2 冻结术语表全文继承。
 - **安全层**：零依赖零外部资源；toast 全面替代 alert()。
 
@@ -510,3 +510,4 @@ T4/C3/C5/D4 的保活前置）、形状双编码（S1）、阈值乱序（S2）�
 | v1.1.0 | 2026-09-25 | efeee49b0e（token 零改动） | 语义升级（授权=用户原话「我点击一个条目，希望它的详细内容直接出现在条目下方」）：历史页详情从页底 #job-detail 卡改为**点击行正下方行内展开**（tr.job-inline + .job-inline-card，手风琴单开沿用，页底卡退役）；新增内容级元素：调用页 caps 选择器（L2 disabled 标未交付）、taskHead caps 徽标、概览/通道卡「能力档」行、L1 工具轨迹 trace-box 折叠件；ui-contract 新增 H1–H4 断言（19→23）；token 键集与值零改动 |
 | v1.2.0 | 2026-10-03 | efeee49b0e（token 零改动） | D2 契约变更（授权=用户 2026-10-03「历史记录里面怎么没有豆包的桥接」）：TYPE_LABEL/type 枚举扩展 `doubao`（豆包桥直通 ask/send/read 落 job 记录进历史，ui-contract FROZEN_TYPE_KEYS 同步）。内容级新增（§5.2/§5.4 放行）：①豆包桥工具卡从状态页底部上移至通道卡之后（用户同日反馈「豆包的桥接怎么放在最下面了」）；②总览条新增豆包状态 chip 与「累计 tokens」chip（v6.4 tokenTotals，历史页右上角同步展示合计）；③历史表改 table-layout:fixed（修复点击行内展开后整表横向胀开，用户同日反馈）。token 键集与值零改动 |
 | v1.3.0 | 2026-10-03 | efeee49b0e（token 零改动） | D2 契约回退（授权=用户 2026-10-03 翻案原话「怎么把我和豆包的聊天记录放进去了？上面还写着"豆包桥接"，这是错误的」）：TYPE_LABEL/type 枚举收回 `doubao`（v1.2.0 的 D2 扩展整体回退），LANE_LABEL/LANE_TITLE 同步回 v6.3 形态；ui-contract FROZEN_TYPE_KEYS 与 v7 ⑤c/v8 ④a 断言同步回退；tokenTotals 去 doubaoTasks、历史页豆包表述清理（豆包直通恢复零落盘，历史页语义=外部算力调度记录）。内容级新增（§5.2/§5.4 放行）：登录页新增豆包（桌面端）说明卡（无需在此登录+launch.ps1 指引，不造假登录按钮）。内容级修复：Cline 卡免费模型下拉 `#cline-free-select` 内联 min-width:220px → min-width:0;width:100%（宽屏撑破卡片）。v1.2.0 其余内容级变更（豆包卡位置/总览 chip/历史表 fixed/累计 tokens chip）全部保留。token 键集与值零改动 |
+| v1.4.0 | 2026-10-03 | efeee49b0e（token 零改动） | 内容级 lane 化升格（授权=用户 2026-10-03 原话「完全lan化」——豆包升格第四 lane，路由/回退/fanout 全进调度体系；桥 v6.6.0）：①静态豆包桥工具卡退役，新增 `doubaoCardHtml()` 渲染的豆包 lane 卡进 `#lane-cards` grid（通道卡×3→×4；4 态探针徽标/电源开关/成本行「会员额度」/调试口 9225 行/launch.ps1 详情与三处诚实声明全文保留）；②成本徽标 `.cost` 新增第四档「会员额度」（doubao，复用 `.neutral` 视觉档，title 兜底原始口径——§2 条目与 §5.1 编码层同步三改四）；③LANE_LABEL +`doubao:'豆包'`、LANE_TITLE +`doubao:'豆包（桌面端）'`、LANE_ORDER_UI +doubao（内容级：三 lane 冻结术语不减，纯新增）；④路由卡 +「固定 豆包」按钮、调用页 ask 分段器与 fanout 行下拉 +豆包；⑤总览豆包 chip 锚点 `#doubao-card`→`#lane-card-doubao`、title 去「非三 lane」；⑥登录页豆包说明卡文案改「豆包已是第四 lane，登录仍在客户端自理」（消除失实）；⑦tokens chip/hist-count 的 unknownUsage hint 扩「含豆包 lane——桌面端不走 API 计量」。D2 TYPE_LABEL 键集不动（豆包调度任务 type=ask/fanout）；token 键集与值零改动 |

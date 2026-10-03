@@ -7,6 +7,7 @@
  *
  * 双 lane：ai = 国际版（deepseek-v4.1-flash x0.00 免费）；cn = 国内版（x0.03 近免费）。
  * cline lane（v5.1）：默认免费孪生 cline-free/deepseek-v4.1-flash（限时轮换+每日配额）。
+ * doubao lane（v13）：豆包桌面端第四 lane（会员额度；回退链最末）+ 手工直通双入口并存。
  * 默认路由由 config.default-lane 决定（auto = ai 免费优先）；失败/限流自动回退另一 lane（各一次）。
  *
  * 用法（node wbx.mjs <子命令>，详见 --help）：
@@ -17,7 +18,8 @@
  *   self-install / self-uninstall                   v3 用户级全局安装（~/.zcode + ~/.wbx）
  *   ui [--port 7788]                                v3 本地 Web UI（127.0.0.1，无常驻）
  *   export-bundle [--out <dir>]                     v3 分发打包（零凭证，含自检断言）
- *   doubao <doubao.mjs 子命令…>                     v6.3 豆包桌面桥直通（可选工具，非 lane；参数原样转发）
+ *   doubao <doubao.mjs 子命令…>                     v6.3 豆包桌面桥手工直通（v13 起与第四 lane 并存；
+ *                                                   参数原样转发，零落盘旁路语义不变）
  *
  * 约束：绝不写 ~/.workbuddy、~/.workbuddy-ai；凭证只存 .wbx/ 或 ~/.wbx/（均 gitignore），
  * 绝不打印其内容。
@@ -60,7 +62,13 @@ async function cmdDoctor(opts) {
 // ---------- 子命令：login ----------
 async function cmdLogin(opts) {
   ensureDirs();
-  const identity = opts.identity ? (() => { const k = parseLane(opts.identity); if (!k) die(`--identity 只支持 ai | cn | cline（收到 ${opts.identity}）`); return k; })() : 'cn';
+  const identity = opts.identity ? (() => {
+    const k = parseLane(opts.identity);
+    if (!k) die(`--identity 只支持 ai | cn | cline（收到 ${opts.identity}）`);
+    // v13：parseLane 已含 doubao（lane 化），但豆包无登录流程——登录态在客户端 GUI 内自理，拦下防误落 cn
+    if (k === 'doubao') die('豆包无「登录豆包」流程：登录态由你在豆包桌面客户端内自理，桥侧零凭证。检查就绪态：wbx doubao status（或先跑 doubao/launch.ps1 以调试口 9225 拉起）');
+    return k;
+  })() : 'cn';
 
   // cline lane：OAuth 设备授权流（spawn cline auth，stdio 直通，用户在浏览器完成）
   if (identity === 'cline') {
@@ -167,7 +175,7 @@ async function cmdAsk(opts) {
       maxTurns: opts.maxTurns ?? null,
     });
     if (r.ok) {
-      console.error(`[OK] lane=${r.lane} model=${r.model} 耗时=${fmtMs(r.durationMs)} tokens(in/out)=${r.usage.in ?? '?'}/${r.usage.out ?? '?'}${r.caps && r.caps !== 'L0' ? ` caps=${r.caps}` : ''}`);
+      console.error(`[OK] lane=${r.lane} model=${r.model} 耗时=${fmtMs(r.durationMs)} tokens(in/out)=${r.usage ? `${r.usage.in ?? '?'}/${r.usage.out ?? '?'}` : '—（无用量计量）'}${r.caps && r.caps !== 'L0' ? ` caps=${r.caps}` : ''}`);
       if (r.fallbackFrom) console.error(`[FALLBACK] 主 lane ${r.fallbackFrom} 失败，已改投 lane ${r.lane}`);
       if (r.toolTrace && Object.keys(r.toolTrace.counts).length) console.error(`[TRACE] 工具轨迹：${Object.entries(r.toolTrace.counts).map(([k, v]) => `${k}×${v}`).join('、')}`);
       console.error(`[job] 记录 -> ${r.jobDir}`);
@@ -266,7 +274,13 @@ async function readProductConfigModels(laneKey) {
 
 async function cmdModels(opts) {
   ensureDirs();
-  const lane = opts.as ? (() => { const k = parseLane(opts.as); if (!k) die(`--as 只支持 ai | cn | cline（收到 ${opts.as}）`); return k; })() : resolveDefaultLane();
+  const lane = opts.as ? (() => {
+    const k = parseLane(opts.as);
+    if (!k) die(`--as 只支持 ai | cn | cline（收到 ${opts.as}）`);
+    // v13：doubao 无模型清单概念（工具自管理豆包 2.1 Pro + 推理高），模型探测不适用
+    if (k === 'doubao') die('doubao lane 无模型探测：模型由豆包桌面端工具自管理（豆包 2.1 Pro · 推理高，ask 每次自动重验）。检查就绪态：wbx doubao status');
+    return k;
+  })() : resolveDefaultLane();
   if (lane === 'cline') {
     const cfg = loadConfig();
     console.error(`lane = cline（provider=${cfg['cline-provider']}，thinking=${cfg['cline-thinking']}，compaction=${cfg['cline-compaction']}）`);
@@ -538,7 +552,7 @@ async function cmdDoubao(restArgs) {
     die(
       `未找到豆包桥 doubao.mjs（已查：\n  ${candidates.join('\n  ')}）。\n` +
       '全局形态：在装有本桥的源码仓里跑 wbx self-install，会把 tools/doubao-bridge/ 一并复制到 ~/.zcode/wbx-bridge/doubao/。\n' +
-      '豆包桥是可选工具（v12 交付物，Windows-only），缺失不影响三 lane。'
+      '豆包桥是可选工具（v12 交付物，Windows-only），缺失不影响其余 lane（ai/cn/cline）。'
     );
   }
   const { spawn } = await import('node:child_process');
@@ -603,16 +617,20 @@ function parseArgs(argv) {
   return opts;
 }
 
-const HELP = `wbx — ZCode <-> 外部算力联动桥（v${WBX_VERSION} 三 lane：WorkBuddy 双 lane + 可选 Cline CLI）
+const HELP = `wbx — ZCode <-> 外部算力联动桥（v${WBX_VERSION} 四 lane：WorkBuddy 双 lane + 可选 Cline CLI + 可选豆包桌面端）
 
 lane：ai = 国际版 WorkBuddy AI（deepseek-v4.1-flash x0.00 免费）
       cn = 国内版 WorkBuddy（x0.03 近免费）
       cline = Cline CLI（可选第三 lane：默认免费调 DeepSeek——cline-free/deepseek-v4.1-flash 孪生，
               限时轮换+每日配额，--thinking xhigh --compaction off；清单：models --as cline --free）
-默认路由：config default-lane（auto=ai 免费优先，cline 永远排最后）；失败/限流自动跨 lane 回退
-（ai→cn→cline 各一次，仍是 DeepSeek；cline 内部绝不换非 DeepSeek 模型顶替）；cline 未装/未登录直接跳过。
+      doubao = 豆包桌面端（可选第四 lane，耗会员额度；工作任务模式 CDP 驱动，模型由工具自管理
+              豆包 2.1 Pro · 推理高；任务级 --model/--effort 对 doubao 不生效）
+默认路由：config default-lane（auto=ai 免费优先，cline 次之，doubao 会员额度 lane 永远排最后）；
+失败/限流自动跨 lane 回退（cn→ai→cline→doubao 各一次，仍是 DeepSeek；cline 内部绝不换非 DeepSeek
+模型顶替）；cline 未装/未登录直接跳过；doubao 客户端调试口不在线时 ask 秒退失败自然跳过。
 运行时根：WBX_HOME env -> ~/.wbx/（装过 self-install 即全局形态） -> 项目 .wbx/
 cline 隔离：桥的 cline 状态只在 <运行时根>/cline-home/（HOME 覆盖），绝不读写用户 ~/.cline。
+doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao …」手工直通为零落盘旁路（不经调度、不入历史）。
 
 用法：
   node wbx.mjs doctor  [--no-probe]                 自检向导：node/CLI 探测/模板/两 lane 凭证+模型探测
@@ -621,23 +639,24 @@ cline 隔离：桥的 cline 状态只在 <运行时根>/cline-home/（HOME 覆�
                      cline 为 OAuth 设备授权，浏览器完成）
                      [--wait 300] [--no-open] [--force]
   node wbx.mjs ask     --file t.txt | --text "..."  单次调用（落盘为 job）；stdout=结果，stderr=用量/lane
-                     [--as ai|cn|cline] [--model M] [--effort low] [--timeout 300] [--json] [--stdin]
+                     [--as ai|cn|cline|doubao] [--model M] [--effort low] [--timeout 300] [--json] [--stdin]
                      [--caps L0|L1|L2]                能力档（v6，默认 L0=config default-caps）：L0 纯文本；
                                                       L1 只读+联网（仅 ai/cn，缺省超时上浮 600s，轨迹落盘）；
                                                       L2 本版未交付（声明即报错，等上游命令级 deny）
                      [--max-turns N]                  L1 回合上限（v6.2，整数 1-64，仅 --caps L1 生效；
                                                       缺省 config caps-l1-max-turns=24；耗尽报 l1-turns-exhausted）
   node wbx.mjs fanout  --file tasks.json            并发池批量执行；任务可用 files:[路径] 拼材料；结果写 <运行时根>/jobs/<jobId>/
-                     [--lanes ai,cn,cline] [--parallel 2] [--timeout 300] [--retry 1]
+                     [--lanes ai,cn,cline,doubao] [--parallel 2] [--timeout 300] [--retry 1]
                                                       任务对象支持 "caps":"L1"（任务级能力档，语义同 ask --caps）
                                                       与 "maxTurns":N（任务级 L1 回合上限，语义同 ask --max-turns）
   node wbx.mjs models  [--as cn|ai|cline] [--probe "m1,m2"]   探测模型可用性并列出产品配置中的模型
                      [--free]     （--as cline --free：列当前免费模型组，recommended-models 端点实时）
   node wbx.mjs config  list | get <key> | set <key> <value>
-                                                   配置：default-lane=auto|ai|cn|cline、disabled-lanes=["cn"]、
+                                                   配置：default-lane=auto|ai|cn|cline|doubao、disabled-lanes=["cn"]、
                                                    parallel-per-lane、model、cli-path、cline-path/data-dir/provider/
                                                    model（默认 cline-free/deepseek-v4.1-flash）/thinking/compaction、
-                                                   cline-parallel、default-caps=L0|L1|L2（缺省能力档，默认 L0）、
+                                                   cline-parallel、doubao-parallel（默认 1 上限 2，单客户端 UI 串行保护）、
+                                                   default-caps=L0|L1|L2（缺省能力档，默认 L0）、
                                                    caps-l1-max-turns=24（L1 缺省回合上限，v6.2 起 8→24）、
                                                    caps-l2-enabled=true|false（L2 总闸，默认 false）
                                                    （存 <运行时根>/config.json）
@@ -654,15 +673,16 @@ cline 隔离：桥的 cline 状态只在 <运行时根>/cline-home/（HOME 覆�
   node wbx.mjs self-uninstall [--purge]            全局卸载（--purge 连 ~/.wbx/ 凭证一起删，默认保留）
   node wbx.mjs export-bundle [--out <dir|.zip>]    生成分发 zip（零凭证自检；含 INSTALL-README.md）
   node wbx.mjs install-user | uninstall-user       向 ~/.zcode/AGENTS.md 注入/移除全局分派标记块（v2 兼容）
-  node wbx.mjs doubao  <doubao.mjs 子命令与参数…>   豆包桌面桥直通（v6.3 可选工具·非 lane·Windows-only：
-                                                   status | new-task | configure | send | read | ask；
-                                                   参数原样转发，子命令说明见 doubao.mjs 自身 usage）
+  node wbx.mjs doubao  <doubao.mjs 子命令与参数…>   豆包桌面桥手工直通（v6.3 可选工具·v13 兼第四 lane 的零落盘旁路·
+                                                   Windows-only：status | new-task | configure | send | read | ask；
+                                                   参数原样转发，子命令说明见 doubao.mjs 自身 usage；不经调度、
+                                                   零落盘副作用、不入历史——调度请用 ask --as doubao / fanout 任务绑定）
                                                    需豆包以调试口 9225 运行（cmd 写法；PowerShell 换 $env:USERPROFILE）：
                                                    powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"
                                                    目录解析：全局 ~/.zcode/wbx-bridge/doubao/（self-install 复制）
-                                                   -> 仓库 tools/doubao-bridge/（v12 源；未装则明确报错，不影响三 lane）
+                                                   -> 仓库 tools/doubao-bridge/（v12 源；未装则明确报错，不影响其余 lane）
 
-tasks.json 格式：[{"id":"t1","prompt":"...","as?":"ai|cn|cline","model?":"...","effort?":"low","file?":"p.txt","files?":["a.js"]}]
+tasks.json 格式：[{"id":"t1","prompt":"...","as?":"ai|cn|cline|doubao","model?":"...","effort?":"low","file?":"p.txt","files?":["a.js"]}]
 
 环境变量（均可选）：WBX_HOME（运行时根）、WBX_CLI、WBX_CLINE（cline 二进制）、WBX_MODEL、
 WBX_PROJECT_ROOT、WBX_PRODUCT_CONFIG（login 模板）`;

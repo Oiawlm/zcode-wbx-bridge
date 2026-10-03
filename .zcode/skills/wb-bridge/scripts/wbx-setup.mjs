@@ -120,7 +120,7 @@ export function wbxCommandText() {
   const gscript = globalBridgeScript();
   return [
     '---',
-    'description: 把任务描述经 wbx 桥分派给外部免费算力（三 lane：WorkBuddy 双 lane DeepSeek V4.1 Flash + 可选 Cline CLI）执行并汇总',
+    'description: 把任务描述经 wbx 桥分派给外部算力（四 lane：WorkBuddy 双 lane DeepSeek V4.1 Flash + 可选 Cline CLI + 可选豆包桌面端）执行并汇总',
     'argument-hint: <任务描述>',
     'skills: wb-bridge',
     '---',
@@ -146,8 +146,9 @@ export function installReadmeText() {
   const L = [
     '# wbx 桥安装说明（v' + WBX_VERSION + '）',
     '',
-    '把合适的子任务并行分派给外部免费算力（三 lane）：WorkBuddy 双 lane 的 DeepSeek V4.1 Flash',
-    '（国际版 x0.00 免费 / 国内版 x0.03 近免费）+ 可选 Cline CLI lane（免费额度轮换模型组），',
+    '把合适的子任务并行分派给外部算力（四 lane）：WorkBuddy 双 lane 的 DeepSeek V4.1 Flash',
+    '（国际版 x0.00 免费 / 国内版 x0.03 近免费）+ 可选 Cline CLI lane（免费额度轮换模型组）',
+    '+ 可选豆包桌面端 lane（耗会员额度；免费 lane 优先，回退链最末），',
     '由 ZCode 会话编排与校验。',
     '',
     '## 前提（缺一不可）',
@@ -278,9 +279,9 @@ export async function selfInstall({ adopt = false, keepProject = true } = {}) {
   docsCopied = copiedDocs.length > 0;
   report.push(`桥本体 -> ${GLOBAL_BRIDGE_DIR}（scripts: ${copiedScripts.join(', ')}${examplesCopied ? ' + examples' : ''}${promptsCopied ? ' + PROMPTS.md' : ''}${docsCopied ? ' + docs: ' + copiedDocs.join(', ') : ''}）`);
 
-  // 1b. 豆包桥（v6.3 可选工具，非 lane）：tools/doubao-bridge/ 整目录 -> ~/.zcode/wbx-bridge/doubao/。
+  // 1b. 豆包桥（v6.3 可选工具；v13 起兼第四 lane 运行时，直通旁路不变）：tools/doubao-bridge/ 整目录 -> ~/.zcode/wbx-bridge/doubao/。
   //     先清旧副本再复制——node_modules 内文件可能改名/删除，纯覆盖复制会留陈旧残留；
-  //     缺失/失败只 WARN 不阻断（豆包桥独立于三 lane，export-bundle 分发包亦不含它）。
+  //     缺失/失败只 WARN 不阻断（豆包桥直通零安装物新增（v13 lane 化零新安装物），export-bundle 分发包亦不含它）。
   let doubaoCopied = false;
   const srcDoubao = path.join(PROJECT_ROOT, 'tools', 'doubao-bridge');
   if (fs.existsSync(path.join(srcDoubao, 'doubao.mjs'))) {
@@ -294,10 +295,10 @@ export async function selfInstall({ adopt = false, keepProject = true } = {}) {
       doubaoCopied = true;
       report.push(`豆包桥 -> ${path.join(GLOBAL_BRIDGE_DIR, 'doubao')}${path.sep}（v6.3 可选工具；入口 wbx doubao <子命令>，含 node_modules 副本）`);
     } catch (e) {
-      report.push(`[WARN] 豆包桥复制失败（${e && e.message}）——不影响三 lane；可手动整目录复制 ${srcDoubao} -> ${path.join(GLOBAL_BRIDGE_DIR, 'doubao')}`);
+      report.push(`[WARN] 豆包桥复制失败（${e && e.message}）——不影响其余 lane；可手动整目录复制 ${srcDoubao} -> ${path.join(GLOBAL_BRIDGE_DIR, 'doubao')}`);
     }
   } else {
-    report.push(`[WARN] 未找到 ${srcDoubao}（豆包桥为可选工具，跳过；不影响三 lane）`);
+    report.push(`[WARN] 未找到 ${srcDoubao}（豆包桥为可选工具，跳过；不影响其余 lane）`);
   }
 
   // 2. 用户级 skill（绝对路径版；PROMPTS.md 原样随附，供 SKILL.md 相对引用）

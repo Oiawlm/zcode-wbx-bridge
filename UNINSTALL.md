@@ -1,4 +1,4 @@
-# UNINSTALL — wbx 联动桥卸载手册（v6.5：三 lane + doubao 直通；兼容 v2–v6 全部形态）
+# UNINSTALL — wbx 联动桥卸载手册（v6.6：四 lane + doubao 手工直通；兼容 v2–v6 全部形态）
 
 > 原则：桥有两种形态——**项目形态**（一切都在项目文件夹内，删目录即净）与
 > **全局形态**（`wbx self-install` 之后：`~/.zcode/` 四处 + `~/.wbx/` 运行时）。
@@ -45,7 +45,7 @@ node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" self-uninstall --purge  #
 卸载后项目桥自动回到项目形态（运行时根变回 `<项目>/.wbx/`）。
 若全局桥已被手动删除，用下面项目桥路径运行亦可：`node "<项目>\.zcode\skills\wb-bridge\scripts\wbx.mjs" self-uninstall`。
 
-## 一、完整卸载（项目形态：桥 + 三 lane + 分派体系全删）
+## 一、完整卸载（项目形态：桥 + 四 lane + 分派体系全删）
 
 ```powershell
 # PowerShell（或资源管理器手动删）
@@ -160,7 +160,10 @@ v3 的 `self-uninstall` 会顺带做同一件事，无需重复执行。
 ## 八、v12 豆包桥接工具（tools/doubao-bridge/，2026-09-30 新增；v6.3 起随 self-install 全局化）
 
 v12 交付的豆包桌面端驱动工具（`launch.ps1` / `doubao.mjs` / `anchors.json` / `README.md`），
-新增安装物两处——仓库内 npm 包 + v6.3 self-install 复制的全局副本：
+新增安装物两处——仓库内 npm 包 + v6.3 self-install 复制的全局副本。
+**v13（v6.6.0）注记**：豆包升格第四 lane 为纯调度层变更（config 键 `doubao-parallel` + 桥代码逻辑），
+**零新安装物**——全局副本仍是 v6.3 同款四件套+node_modules，卸载面与本节所列完全一致；
+停用第四 lane 用 `wbx config set disabled-lanes ["doubao"]`（config.json 内一个键，非安装物）：
 
 | 位置 | 内容 | 清理命令 |
 |---|---|---|
