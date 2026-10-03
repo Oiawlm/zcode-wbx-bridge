@@ -9,7 +9,7 @@
  *   GET  /api/status                 概览（lane 状态/到期倒计时/配置/形态 + v6.4 累计 token 用量）——不含任何凭证
  *   GET  /api/doctor?probe=1         体检（probe=1 含模型探测，较慢）
  *   GET  /api/doubao                 豆包桥工具状态（Doubao.exe 进程态 + 9225 CDP 探测；v12.1）
- *   GET  /api/history                job 列表（含旧 .wbx/tasks/ 兼容条目 + v6.4 全量 token 用量汇总；type 含 v6.4 doubao）
+ *   GET  /api/history                job 列表（含旧 .wbx/tasks/ 兼容条目 + v6.4 全量 token 用量汇总）
  *   GET  /api/job/:id[?brief=1]      job 详情（brief 不含 prompt/回复正文，用于轮询）
  *   POST /api/ask                    {prompt, lane, model, effort, timeout, caps} -> {jobId}（caps=L0|L1|L2，v6）
  *   POST /api/fanout                 {tasks:[{id,prompt,as,caps}], lanes, parallel, timeout, retry} -> {jobId}
@@ -494,7 +494,7 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
         <thead><tr><th>时间</th><th>类型</th><th class="num">任务数</th><th class="num">成功率</th><th>任务 ID</th></tr></thead>
         <tbody></tbody>
       </table></div>
-      <p class="hint" style="margin-top:8px">点击行内任意位置，详情直接展开在该行下方（v6 行内化）；再点收起。任务 ID 列点击复制。右上角合计为全部历史的累计 token 用量（in=提示词/out=回复；豆包桥接走桌面端、不走 API 计量，不计入 in/out，单列次数）。</p>
+      <p class="hint" style="margin-top:8px">点击行内任意位置，详情直接展开在该行下方（v6 行内化）；再点收起。任务 ID 列点击复制。右上角合计为全部历史的累计 token 用量（in=提示词/out=回复）。</p>
     </div>
   </div>
 </section>
@@ -523,6 +523,18 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
       </details>
     </div>
   </div>
+  <div class="card">
+    <div class="card__bd" style="padding:0">
+      <details id="doubao-guide">
+        <summary>豆包（桌面端）· 无需在此登录</summary>
+        <div class="dbd">
+          <p class="hint">豆包不是三 lane 之一，也没有「登录豆包」流程：<b>登录态由你在豆包桌面客户端内自理</b>，桥侧零凭证（本页与桥都不读写任何豆包账号信息）。桥只需要豆包以调试端口 9225 运行，启动方式：</p>
+          <div class="copyline"><span class="t">powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1" -Force</span><button class="copybtn" data-copy='powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1" -Force'>复制</button></div>
+          <p class="hint">装过 self-install 后任何项目任何目录可用（上面为 cmd 写法，PowerShell 把 %USERPROFILE% 换成 $env:USERPROFILE、Git Bash 换成 ~；-Force 会在豆包已运行时先结束它们，请先保存未发送的草稿）。连接是否就绪，到「状态」页<b>豆包桥工具</b>卡看探针（客户端进程 + 调试口 9225）。</p>
+        </div>
+      </details>
+    </div>
+  </div>
 </section>
 
 </main>
@@ -530,9 +542,9 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
 <script>
 'use strict';
 // ---------- 渲染层中文化映射表（v5.2 冻结术语，v5.3 只改排布/密度/编码，不改译法；数据值/config 键/API 字段一律不动） ----------
-const LANE_LABEL={ai:'WorkBuddy AI',cn:'WorkBuddy',cline:'Cline',auto:'自动',doubao:'豆包'};            // 短称：下拉/表格列/回退（v6.4 +doubao）
-const LANE_TITLE={ai:'WorkBuddy AI（国际版）',cn:'WorkBuddy（国内版）',cline:'Cline CLI（可选通道）',doubao:'豆包桥（桌面工作模式）'}; // 全称：卡片标题
-const TYPE_LABEL={ask:'单条调用',fanout:'批量并行',unknown:'未知',doubao:'豆包桥接'};                    // 历史「类型」列（v6.4 +doubao）
+const LANE_LABEL={ai:'WorkBuddy AI',cn:'WorkBuddy',cline:'Cline',auto:'自动'};            // 短称：下拉/表格列/回退
+const LANE_TITLE={ai:'WorkBuddy AI（国际版）',cn:'WorkBuddy（国内版）',cline:'Cline CLI（可选通道）'}; // 全称：卡片标题
+const TYPE_LABEL={ask:'单条调用',fanout:'批量并行',unknown:'未知'};                        // 历史「类型」列（v6.5 回退 v6.4 +doubao：豆包历史已翻案移除）
 const TASK_STATUS_LABEL={success:'成功',failed:'失败'};
 const JOB_STATUS_LABEL={done:'已完成',running:'进行中',pending:'等待中'};
 const LANE_ORDER_UI=['ai','cn','cline'];
@@ -784,7 +796,7 @@ function doubaoChipHtml(){
   return '<a class="chip" href="#doubao-card" title="跳到 豆包桥工具 卡片（桌面工作模式，非三 lane）"><i class="shp '+shape+' '+cls+'"></i>豆包<span class="sig">'+esc(sig)+'</span></a>';
 }
 function tokensChipHtml(t){
-  return '<a class="chip" href="#" data-goto-history="1" title="外部桥接累计 token 用量（in=提示词/out=回复；豆包桌面端不走 API 计量不计入；点击查看历史明细）"><i class="shp s-sq c-acc"></i>累计 tokens<span class="sig num">'+fmtInt(t.tokensIn)+' / '+fmtInt(t.tokensOut)+'</span></a>';
+  return '<a class="chip" href="#" data-goto-history="1" title="外部桥接累计 token 用量（in=提示词/out=回复；点击查看历史明细）"><i class="shp s-sq c-acc"></i>累计 tokens<span class="sig num">'+fmtInt(t.tokensIn)+' / '+fmtInt(t.tokensOut)+'</span></a>';
 }
 function laneCardsHtml(s){
   const lanes=s.lanes.slice().sort(function(a,b){
@@ -839,7 +851,7 @@ function clineCardHtml(l,s){
       const cur=(l.model||'')===fm.id;
       return '<option value="'+esc(fm.id)+'"'+(cur?' selected':'')+'>'+esc(fm.id)+(fm.name?(' · '+esc(fm.name)):'')+(fm.deepseek?'':'（非 DeepSeek）')+'</option>';
     }).join('');
-    freeSel='<span class="k">免费模型</span><span class="v"><select id="cline-free-select" style="max-width:100%;min-width:220px">'+opts+'</select></span>'
+    freeSel='<span class="k">免费模型</span><span class="v"><select id="cline-free-select" style="min-width:0;width:100%">'+opts+'</select></span>'
       +'<span class="k">说明</span><span class="v"><span class="hint vtxt">'+esc(s.clineFreeModelsNote||'切换即写 config cline-model')+'</span></span>';
   }else{
     freeSel='<span class="k">免费模型</span><span class="v"><span class="hint vtxt">清单不可用：'+esc(s.clineFreeModelsNote||'未知原因')+'；命令行：wbx models --as cline --free</span></span>';
@@ -1100,11 +1112,10 @@ async function loadHistory(){
     let cnt='共 '+h.jobs.length+' 条';
     if(h.totals){
       cnt+=' · 累计 tokens in '+fmtInt(h.totals.tokensIn)+' / out '+fmtInt(h.totals.tokensOut);
-      if(h.totals.doubaoTasks)cnt+=' · 豆包桥接 '+fmtInt(h.totals.doubaoTasks)+' 次（桌面端不计量）';
       if(h.totals.unknownUsage)cnt+=' · '+fmtInt(h.totals.unknownUsage)+' 条旧记录无用量';
     }
     $('hist-count').textContent=cnt;
-    $('hist-count').title='汇总全部历史任务（含旧版兼容目录）；in=提示词/out=回复 token；豆包桥接走豆包桌面端、无 API token 计量，单列次数不计入 in/out。';
+    $('hist-count').title='汇总全部历史任务（含旧版兼容目录）；in=提示词/out=回复 token。';
     const tb=$('hist-table').querySelector('tbody');
     tb.innerHTML='';
     h.jobs.forEach(function(j){

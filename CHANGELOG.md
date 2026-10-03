@@ -2,6 +2,21 @@
 
 本文件记录 zcode-wbx-bridge 的版本变更，格式参考 Keep a Changelog。
 
+## 6.5.0 - 2026-10-03
+
+回退 + 修复（授权=用户 2026-10-03 第二次反馈原话：①翻案「怎么把我和豆包的聊天记录放进去了？上面还写着"豆包桥接"，这是错误的」；②「没看到豆包的连接或者登录选项……你自己判断一下」（委托判断）；③「免费模型那一行右侧的按钮超出了方框的边界」。改动面：`wbx.mjs`（doubao 直通恢复 v6.3 无痕）、`wbx-core.mjs`（版本号 + tokenTotals 去 doubaoTasks）、`wbx-ui.mjs`（映射表回退/文案清理/登录页说明卡/下拉溢出修复）、internal 契约与门禁同步、运行时 type=doubao 数据清理（2 个 job 目录，隐私清理只报 jobId）；三 lane 行为零变化）
+
+### Changed
+- **豆包直通恢复 v6.3 无痕行为（翻案 6.4.0「豆包桥接进历史」）**：删除 `wbx doubao ask|send|read` 的 job 记录落盘（`DOUBAO_RECORDED_SUBS`/`writeDoubaoJob`/stdout 捕获-回放分支全移除），恢复纯 `stdio:'inherit'` 直通——任何子命令输出与退出码不变、零落盘副作用；子命令解析、目录双候选解析、fix-hint 报错不动。历史页语义定案=外部算力（三 lane）调度记录。
+- **UI 契约 D2 回退**（UI-SPEC §6 v1.3.0，token 键集零改动）：TYPE_LABEL/LANE_LABEL/LANE_TITLE 回 v6.3 形态（枚举收回 `doubao`）；ui-contract FROZEN_TYPE_KEYS 与 v7 ⑤c/v8 ④a 断言同步；`tokenTotals()` 去 `doubaoTasks`（in/out 与 unknownUsage 口径不变）；历史页底部提示/tokens chip title/hist-count 合计行与 title 去豆包表述（保留累计 tokens in/out 与 unknownUsage 提示）。
+- **运行时数据清理**：删除现存 type=doubao 的 job 目录 2 个（隐私清理，只报 jobId 不读取内容）。
+
+### Added
+- **登录页豆包说明卡**：登录页 Cline 折叠卡之后新增「豆包（桌面端）」说明卡——无需在此登录（登录态在豆包客户端内自理，桥侧零凭证），桥只需要豆包以调试口 9225 运行 + launch.ps1 复制行 + 指路「状态」页豆包桥工具卡看连接探针；内容级增删（UI-SPEC §5.2/§5.4），零新端点、零服务端进程拉起、不造假登录按钮。
+
+### Fixed
+- **Cline 免费模型下拉溢出**：`#cline-free-select` 内联 `min-width:220px`（CSS 规范 min-width 优先于 max-width，宽屏三列布局下撑破通道卡）改 `min-width:0;width:100%`——随列收缩、占满所在列；1280/~800 两档视口展开详情均无溢出，切换写 config cline-model 功能回归正常。
+
 ## 6.4.0 - 2026-10-03
 
 新增（全盘联动同步 + 控制台四项体验修复；授权=用户 2026-10-03 全盘扫描指令与四项前端反馈原话「历史记录里边……点一下……左右两边可能会胀开」「豆包的桥接怎么放在最下面了」「历史记录里面怎么没有豆包的桥接」「可以加入总 token 数」。改动面：`wbx-core.mjs`（版本号 + tokenTotals）、`wbx.mjs`（doubao 结果型子命令落历史）、`wbx-ui.mjs`（历史表 fixed 布局/豆包卡上移/总览与历史 token 合计/doubao 类型渲染）；三 lane 行为零变化）

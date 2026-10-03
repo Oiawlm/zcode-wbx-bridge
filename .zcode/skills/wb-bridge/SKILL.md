@@ -167,7 +167,7 @@ node .zcode/skills/wb-bridge/scripts/wbx.mjs fanout --file tasks.json [--lanes a
 | `wbx login [--identity cn\|ai\|cline]` | 登录（cn 微信扫码；ai 邮箱/OneID+锦囊；cline 浏览器 OAuth 设备授权） |
 | `wbx ask --file p.txt [--as ai\|cn\|cline] [--caps L0\|L1\|L2] [--max-turns 1-64]` | 单次调用，stdout 出结果，失败自动跨 lane 回退，落盘 job（L1 附轨迹与 transcript；--max-turns 为 v6.2 任务级 L1 回合上限，仅 L1 生效） |
 | `wbx fanout --file t.json [--lanes ai,cn,cline]` | 多 lane 并发池批量，结果落 `.wbx/jobs/<jobId>/`（任务支持 `"caps":"L1"` 与 `"maxTurns":1-64`） |
-| `wbx history [--last 10]` / `wbx history <jobId>` | 历史列表 / 完整回放双向对话（含旧 tasks/ 兼容；v6.4 起含豆包桥接记录与全量 token 用量） |
+| `wbx history [--last 10]` / `wbx history <jobId>` | 历史列表 / 完整回放双向对话（含旧 tasks/ 兼容；v6.4 起历史页含全量 token 用量合计） |
 | `wbx config list\|get\|set` | 配置：default-lane（auto/ai/cn/cline）、disabled-lanes、parallel-per-lane、model、cli-path、cline-*（path/data-dir/provider/model/thinking/compaction/parallel）、default-caps（L0/L1/L2）、caps-l1-max-turns（默认 24，v6.2）、caps-l2-enabled（默认 false） |
 | `wbx models [--as cn\|ai\|cline]` | 探测模型可用性 + 列出产品配置模型；`--as cline --free` 列当前免费模型组（端点实时） |
 | `wbx ui [--port 7788]` | 本地 Web UI（127.0.0.1）：三 lane 状态/路由开关/免费模型选择/ask/fanout/历史/登录引导 |

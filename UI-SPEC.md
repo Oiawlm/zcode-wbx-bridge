@@ -1,4 +1,4 @@
-# UI-SPEC — wbx 桥控制台 UI 风格契约（contract v1.1.0）
+# UI-SPEC — wbx 桥控制台 UI 风格契约（contract v1.3.0）
 
 > 授权来源：用户 2026-09-25「风格和方向可以基本锁定」「该固定的部分先固定下来，之后基本就是
 > 新增或者删减一些内容」。冻结登记见 `internal/FROZEN.md`「UI 契约冻结」项；变更须用户显式授权
@@ -226,7 +226,7 @@
 #### card `.card` [extension]
 - **结构**：--panel 底+--line 边+--r-md+--shadow-1+margin-bottom --s4+scroll-margin-top --s4；hover(`@media(hover:hover)`) translateY(-1px)+--shadow-2+边框亮化；`.off` 变体（bd/title/sub opacity .62）；grid3 内 margin-bottom:0。
 - **API**：变体 `.off`；槽位=卡头/卡体/任意内容。
-- **用法**：通道卡×3（grid3）、豆包桥工具卡（v12.1 内容级新增，位于通道卡与路由卡之间）、路由卡、体检卡、调用卡、历史表卡、job 详情卡、登录卡×2。
+- **用法**：通道卡×3（grid3）、豆包桥工具卡（v12.1 内容级新增，位于通道卡与路由卡之间）、路由卡、体检卡、调用卡、历史表卡、job 详情卡、登录卡×3（登录引导 + Cline 折叠卡 + 豆包说明卡，v6.5 起豆包卡为内容级新增）。
 - **Do**：抬升只 1px 且包 hover:hover；停用卡用 `.off` 降亮而非改文字色。
 - **Don't**：不要用 --line 表达可交互边界（只作装饰分隔 1.31:1）。
 - **何时不用**：多个同级条目天然成表时用 table，不堆卡片。
@@ -354,7 +354,7 @@
 #### details `details` [frozen]
 - **结构**：--panel-inset 底+--line 边+--r-sm、margin-top --s3；summary --fs-xs --dim-hi 无 marker+`::before` 4px --dim 三角 --t-fast（open 时 rotate90）；`.adv-sum` 右侧摘要；`.dbd` padding --s2 --s3 --s3。
 - **API**：summary/.adv-sum/.dbd；aria-expanded 由捕获 toggle 监听+initAria() 同步。
-- **用法**：高级（思考档/模型/超时/并发摘要）、详情与排障、体检三分组、任务提示词、summary.md、cline 引导。
+- **用法**：高级（思考档/模型/超时/并发摘要）、详情与排障、体检三分组、任务提示词、summary.md、cline 引导、豆包说明卡（v6.5 内容级新增，登录页）。
 - **Do**：折叠态用 .adv-sum 暴露当前值；aria-expanded 同步保证键盘一致。
 - **Don't**：不要隐藏 marker 后不给三角；高频操作不藏进 details（三层尺子：高频在扫读层）。
 - **何时不用**：整页/整卡切换用 tabs。
@@ -509,3 +509,4 @@ T4/C3/C5/D4 的保活前置）、形状双编码（S1）、阈值乱序（S2）�
 | v1.0.0 | 2026-09-25 | efeee49b0e | 契约起步：v5.3 已收敛风格显式化（58 token+20 组件+3 Pattern+IA/编码/术语冻结）；随桥 v5.4.0 发布（token 语义化改名 --acc-text/--acc-hover/--panel-inset 已并入基线） |
 | v1.1.0 | 2026-09-25 | efeee49b0e（token 零改动） | 语义升级（授权=用户原话「我点击一个条目，希望它的详细内容直接出现在条目下方」）：历史页详情从页底 #job-detail 卡改为**点击行正下方行内展开**（tr.job-inline + .job-inline-card，手风琴单开沿用，页底卡退役）；新增内容级元素：调用页 caps 选择器（L2 disabled 标未交付）、taskHead caps 徽标、概览/通道卡「能力档」行、L1 工具轨迹 trace-box 折叠件；ui-contract 新增 H1–H4 断言（19→23）；token 键集与值零改动 |
 | v1.2.0 | 2026-10-03 | efeee49b0e（token 零改动） | D2 契约变更（授权=用户 2026-10-03「历史记录里面怎么没有豆包的桥接」）：TYPE_LABEL/type 枚举扩展 `doubao`（豆包桥直通 ask/send/read 落 job 记录进历史，ui-contract FROZEN_TYPE_KEYS 同步）。内容级新增（§5.2/§5.4 放行）：①豆包桥工具卡从状态页底部上移至通道卡之后（用户同日反馈「豆包的桥接怎么放在最下面了」）；②总览条新增豆包状态 chip 与「累计 tokens」chip（v6.4 tokenTotals，历史页右上角同步展示合计）；③历史表改 table-layout:fixed（修复点击行内展开后整表横向胀开，用户同日反馈）。token 键集与值零改动 |
+| v1.3.0 | 2026-10-03 | efeee49b0e（token 零改动） | D2 契约回退（授权=用户 2026-10-03 翻案原话「怎么把我和豆包的聊天记录放进去了？上面还写着"豆包桥接"，这是错误的」）：TYPE_LABEL/type 枚举收回 `doubao`（v1.2.0 的 D2 扩展整体回退），LANE_LABEL/LANE_TITLE 同步回 v6.3 形态；ui-contract FROZEN_TYPE_KEYS 与 v7 ⑤c/v8 ④a 断言同步回退；tokenTotals 去 doubaoTasks、历史页豆包表述清理（豆包直通恢复零落盘，历史页语义=外部算力调度记录）。内容级新增（§5.2/§5.4 放行）：登录页新增豆包（桌面端）说明卡（无需在此登录+launch.ps1 指引，不造假登录按钮）。内容级修复：Cline 卡免费模型下拉 `#cline-free-select` 内联 min-width:220px → min-width:0;width:100%（宽屏撑破卡片）。v1.2.0 其余内容级变更（豆包卡位置/总览 chip/历史表 fixed/累计 tokens chip）全部保留。token 键集与值零改动 |

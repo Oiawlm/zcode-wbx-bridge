@@ -231,17 +231,17 @@ node .zcode\skills\wb-bridge\scripts\wbx.mjs config set cline-model "<免费模�
 | `wbx login [--identity cn\|ai\|cline]` | 登录（cn 微信扫码；ai 邮箱/OneID；cline 浏览器 OAuth） |
 | `wbx ask --file p.txt` 或 `--text "…"` | 单条任务；stdout 出结果，失败自动换 lane（可加 `--caps L1` 联网档、`--max-turns` 回合上限） |
 | `wbx fanout --file tasks.json` | 批量并行（任务文件格式见 [examples](.zcode/skills/wb-bridge/examples/tasks.example.json)；任务可绑 lane、可挂材料文件、可写 caps/maxTurns） |
-| `wbx history --last 10` / `wbx history <jobId>` | 历史列表 / 回放某次任务的完整双向对话（v6.4 起含豆包桥接记录） |
+| `wbx history --last 10` / `wbx history <jobId>` | 历史列表 / 回放某次任务的完整双向对话（v6.4 起历史页含全量 token 用量合计） |
 | `wbx config list` / `set <key> <value>` | 路由与并发配置（default-lane、disabled-lanes、parallel-per-lane、default-caps、caps-l1-max-turns、cline-* 等） |
 | `wbx models` | 探测模型可用性、列出账号下全部模型（`--as cline --free` 列当前免费模型组） |
 | `wbx ui --detach` / `--stop` / `--status` | 常开可视化控制台（幂等后台守护，浏览器开 127.0.0.1:7788）/ 停止 / 查看三态 |
 | `wbx ui --install-autostart` | 装 ZCode 会话自启钩子（新开会话自动拉起控制台；`--remove-autostart` 摘除） |
-| `wbx doubao <doubao.mjs 子命令…>` | 豆包桌面桥直通（v6.3 可选工具·非 lane·Windows-only）：status/new-task/configure/send/read/ask；需豆包以调试口运行（先跑 `%USERPROFILE%\.zcode\wbx-bridge\doubao\launch.ps1`，装过 self-install 后任何目录可用；ask/send/read 自动记入历史） |
+| `wbx doubao <doubao.mjs 子命令…>` | 豆包桌面桥直通（v6.3 可选工具·非 lane·Windows-only）：status/new-task/configure/send/read/ask；需豆包以调试口运行（先跑 `%USERPROFILE%\.zcode\wbx-bridge\doubao\launch.ps1`，装过 self-install 后任何目录可用；v6.5 注记：直通零落盘，不进桥历史） |
 | `wbx self-install --adopt` | 全局安装：任何项目可用 + `/wbx` 斜杠命令（v6.3 起携带豆包桥副本） |
 | `wbx self-uninstall [--purge]` | 全局卸载一键还原（`--purge` 连凭证一起删） |
 | `wbx export-bundle` | 生成零凭证分发包 zip，可发给同事在其他机器安装 |
 
-另外两个入口：ZCode 会话里输入 `/wbx <任务描述>`（全局安装后可用）= 一键分派流程；`wbx ui` = 网页控制台，可视化看三 lane 状态、发起任务、翻历史记录（v6.4 起历史页含累计 token 用量与豆包桥接记录）。另有 `wbx doubao …` 直通本机豆包桌面端（工作任务模式，可选工具，见上表与 `tools/doubao-bridge/README.md`）。
+另外两个入口：ZCode 会话里输入 `/wbx <任务描述>`（全局安装后可用）= 一键分派流程；`wbx ui` = 网页控制台，可视化看三 lane 状态、发起任务、翻历史记录（v6.4 起历史页含全量 token 用量合计）。另有 `wbx doubao …` 直通本机豆包桌面端（工作任务模式，可选工具，见上表与 `tools/doubao-bridge/README.md`）。
 
 **质量与安全提示**：免费算力输出质量有方差，外包结果先校验再使用（代码产物必须审查/运行后才进交付物，v5 起集成前默认过一道评审批判）；worker 无联网能力，「调研」产出是模型已有知识、可能过时；涉密内容绝不外包。完整分派准则与 worker 提示词模板见 [SKILL.md](.zcode/skills/wb-bridge/SKILL.md) 与 [PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md)（v2 知识库：12 条原则、9 类模板、经验条目库与决策速查表），技术细节见 [WBX.md](WBX.md)。
 

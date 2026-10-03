@@ -23,7 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '6.4.0';
+export const WBX_VERSION = '6.5.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -1296,9 +1296,10 @@ export function listJobs() {
 }
 
 // ---------- 全量 token 用量汇总（v6.4：历史页/总览展示；与 listJobs 同源遍历，只读） ----------
-// 口径：任务记录 rec.usage（usageOf 同款字段回退）；豆包桥接任务（lane=doubao）桌面端不走 API
-// 计量、usage 为 null，单列为 doubaoTasks 不计入 tokensIn/Out。unknownUsage = 成功但无任何
-// usage 数字的旧格式记录数（诚实展示用，不猜数）。
+// 口径：任务记录 rec.usage（usageOf 同款字段回退）。unknownUsage = 成功但无任何
+// usage 数字的旧格式记录数（诚实展示用，不猜数）。v6.5 注记：v6.4 曾单列 doubaoTasks
+// （豆包桥接不计入 in/out），随豆包历史回退一并移除（历史=三 lane 外部算力调度记录）。
+// 豆包直通自 v6.5 起零落盘，不会产生 lane=doubao 的记录。
 const usageNumOf = (u, keys) => {
   for (const k of keys) {
     const v = u ? u[k] : null;
@@ -1310,7 +1311,7 @@ const usageNumOf = (u, keys) => {
 export function tokenTotals() {
   const roots = [JOBS_DIR, LEGACY_TASKS_DIR, LEGACY_JOBS_DIR];
   const seen = new Set();
-  let tasks = 0, okTasks = 0, tokensIn = 0, tokensOut = 0, doubaoTasks = 0, unknownUsage = 0;
+  let tasks = 0, okTasks = 0, tokensIn = 0, tokensOut = 0, unknownUsage = 0;
   for (const root of roots) {
     let entries = [];
     try { entries = fs.readdirSync(root); } catch { continue; /* 目录不存在 */ }
@@ -1328,7 +1329,6 @@ export function tokenTotals() {
         if (!rec || typeof rec !== 'object') continue;
         tasks++;
         if (rec.status === 'success') okTasks++;
-        if (rec.lane === 'doubao') doubaoTasks++;
         const fin = usageNumOf(rec.usage, ['in', 'input_tokens', 'inputTokens', 'prompt_tokens']);
         const fout = usageNumOf(rec.usage, ['out', 'output_tokens', 'outputTokens', 'completion_tokens']);
         if (fin == null && fout == null) {
@@ -1340,7 +1340,7 @@ export function tokenTotals() {
       }
     }
   }
-  return { tasks, okTasks, tokensIn, tokensOut, doubaoTasks, unknownUsage };
+  return { tasks, okTasks, tokensIn, tokensOut, unknownUsage };
 }
 
 export async function getJob(jobId) {

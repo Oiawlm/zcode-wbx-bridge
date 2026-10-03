@@ -1,4 +1,4 @@
-# UNINSTALL — wbx 联动桥卸载手册（v6.4：三 lane + doubao 直通；兼容 v2–v6 全部形态）
+# UNINSTALL — wbx 联动桥卸载手册（v6.5：三 lane + doubao 直通；兼容 v2–v6 全部形态）
 
 > 原则：桥有两种形态——**项目形态**（一切都在项目文件夹内，删目录即净）与
 > **全局形态**（`wbx self-install` 之后：`~/.zcode/` 四处 + `~/.wbx/` 运行时）。
@@ -114,7 +114,7 @@ v3 的 `self-uninstall` 会顺带做同一件事，无需重复执行。
   卸载用 `wbx ui --remove-autostart`（只摘我们那条，其余键原样保留；实测与安装前逐字节一致）。
   若桥已删而钩子还在，手动编辑该文件删掉 `hooks.events.SessionStart` 里 `args` 含
   `wbx-bridge\scripts\wbx.mjs` 的那条；`hooks` 里再无别的内容时可整体删去 `hooks` 键。
-- `wbx export-bundle` 生成的 zip（默认在 `~/Desktop/wbx-bridge-v<版本>-<日期>.zip`（如 wbx-bridge-v6.4.0-20261003））是**零凭证**分发包
+- `wbx export-bundle` 生成的 zip（默认在 `~/Desktop/wbx-bridge-v<版本>-<日期>.zip`（如 wbx-bridge-v6.5.0-20261003））是**零凭证**分发包
   （导出时逐成员比对本地 accessToken 做过断言），可随手删除或外发。
 - 在别处用分包装过的机器：在那台机器上运行 `node scripts\wbx.mjs self-uninstall [--purge]`
   （装过 cline lane 的机器再 `npm uninstall -g cline`）。

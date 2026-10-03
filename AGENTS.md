@@ -1,4 +1,4 @@
-# AGENTS — wbx 三 lane 桥常驻指令（v6.4：子代理化高频调度 + doubao 直通）
+# AGENTS — wbx 三 lane 桥常驻指令（v6.5：子代理化高频调度 + doubao 无痕直通）
 
 > 本仓库是 wbx 联动桥（ZCode 技能 + Node CLI）。ZCode 会话在本项目内工作时，除用户明确要求外，应遵守以下常驻规则。桥的技术细节见 [WBX.md](WBX.md)，卸载见 [UNINSTALL.md](UNINSTALL.md)。
 
