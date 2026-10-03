@@ -1,4 +1,4 @@
-# WBX — ZCode ↔ 外部算力联动桥（v5.3：三 lane 子代理化高频调度 · cline 免费孪生 · 控制台常开 · 界面产品化）
+# WBX — ZCode ↔ 外部算力联动桥（v6.4：三 lane 子代理化高频调度 · doubao 桌面桥直通 · 控制台 · 界面产品化）
 
 > **v5.3**：控制台「产品化」改造——只动展示层（后端 handler/API 字段/config 键/守护/安全面/术语表
 > 零改动）：状态页信息架构重排（健康总览条/通道卡三层分层/路由与停用分家/体检空态+分组）、
@@ -1506,3 +1506,48 @@ unparseable 的主因（v11.1 假设⑤由部分证伪翻转为证实），9/28-
 - 发布（2026-10-01）：版本常量/CHANGELOG/本章三处 6.3.0 一致；FROZEN 语义冻结项零触碰（UI 卡
   为内容级文案，UI-SPEC §5.2/§5.4 放行）；UNINSTALL.md §八补登全局副本行（一键还原承诺保持）。
   commit/push 待用户指示。
+
+## v6.4 章：全盘联动同步 + 控制台四项体验修复（历史胀开 / 豆包卡位置 / 豆包进历史 / 累计 token）
+
+- 用户触发（2026-10-03）：①全盘扫描「改一处其他文件没联动改、该删的删、结构该整理的整理」；
+  ②历史记录点击一条「左右两边胀开」；③豆包桥接怎么放在最下面；④历史记录里没有豆包的桥接；
+  ⑤加入总 token 数（外部桥接一共用了多少）。
+- ①历史表胀开（真机复现：点击 job 20261001-115144-6lo 后表格 1017→1605px，横向溢出 588px）：
+  根因=auto 表格布局下行内详情行（colspan=5，含大块 pre/md）参与列宽计算，把整表撑宽。修复=
+  `#hist-table` 改 `table-layout:fixed` + colgroup 定宽 + 详情行 overflow/white-space 收口 +
+  `.md` overflow-wrap:break-word。实测点击全库最长内容记录溢出 0px，行内详情正常。
+- ②豆包卡上移：状态页从最底（体检卡之后）移到通道卡之后、路由卡之前；总览条新增豆包 chip
+  （四态探测信号：调试口在线/未开调试口/未运行/状态未知，点击跳豆包卡）。
+- ③豆包进历史（**D2 契约变更，用户同日原话授权**「历史记录里面怎么没有豆包的桥接」）：
+  `wbx doubao ask|send|read` 执行后落 job 记录（type=doubao，`<运行时根>/jobs/`，manifest +
+  tasks-input + doubao.json 三件套，schema 与 getJob/D3 超集兼容）；stdout 捕获后等冲刷原样回放、
+  退出码透传语义不变（T7-S1 沿用）；status/new-task/configure/help 等状态类不落防刷屏；记录落盘
+  失败仅 WARN 绝不影响直通结果。UI：TYPE_LABEL +`doubao:'豆包桥接'`、LANE_LABEL +doubao、
+  Token 数无计量显示 `—`（豆包桌面端不走 API 计量，usage 恒 null）。契约同步：ui-contract
+  FROZEN_TYPE_KEYS +doubao；UI-SPEC §6 v1.2.0；v7 ⑤c / v8 ④a 断言枚举同步扩展。
+- ④累计 token（v6.4 新增 tokenTotals()）：与 listJobs 同源遍历 jobs/*+旧 tasks/+项目 jobs/，
+  usage 字段按 usageOf 同款回退兼容旧格式；豆包任务单列 doubaoTasks 不计入 in/out；成功但无
+  用量的旧格式记录计 unknownUsage（诚实展示不猜数）。/api/status 与 /api/history 均附带；UI=
+  总览「累计 tokens in/out」chip（点击跳历史页）+ 历史页右上角合计（含豆包桥接次数与旧记录
+  无用量提示）。实测全历史 319 任务：in 15,432,702 / out 1,812,749。
+- 全盘联动同步（只读扫描子代理全仓排查；主因=README 停在 v6.1 之前）：
+  README（命令表补 doubao/self-uninstall/--caps/--max-turns 行、caps 节补 L1 回合上限段、FAQ
+  cline-home 修径、速查注 v6.4）；UNINSTALL（标题 v6.4 口径、桥本例行去 SKILL.md 补 doubao/
+  副本、export zip 命名改版本无关、cline/→cline-home/ 两处）；SECURITY（cline 凭证路径补
+  cline-home/.cline 三段）；CONTRIBUTING（白名单补 UI-SPEC/wbx-daemon/knowledge/豆包桥四组、
+  「零第三方依赖」加 doubao-bridge 例外、cline 计价示例换免费孪生口径）；SKILL 速查（ask
+  --max-turns、fanout maxTurns、config caps-l1-max-turns、+export-bundle 行）；AGENTS 调用入口
+  +self-uninstall/doubao；wbx-setup（self-install docFiles 与 export-bundle docs 去 PLAN.md
+  死引用、INSTALL-README 桥本例行去 SKILL.md 补 doubao/）；launch.ps1 头注内部文档引用改可达路径。
+- 仓库卫生：internal/ 124 个一次性产物按版本轮归档 `internal/archive/{v6..v12,docs}/`（治理
+  27 件 + 门禁工具 8 件 + 2 个被活跃代码引用的基线文档留顶层；文件名不变，ROUTE L3「grep 文件名
+  定位」协议不受影响，FROZEN/launch.ps1 路径指针已同步）；删除 ui-baseline.pid/log、临时回归
+  输出、发布 zip、v10-before-ui/、v12-staging/、像素比对对照组截图、config 快照；项目内
+  `.wbx/`（项目形态时期运行时残留：2.3 万文件 WorkBuddy CLI config、9/24 冒烟 jobs/tasks、
+  旧凭证）整体删除——现行运行时在 `~/.wbx`，零影响；.gitignore 追加 `.zcode/plans/`（FROZEN
+  一.2 只追加不删改）。
+- 门禁（2026-10-03）：v6 24/24 + v7 27/27（⑤c +doubao）+ v8 22/22（④a +doubao）+ v11.3 38/38
+  （含 cline 真机调用）+ contract 23/23 + 红测全绿（含恢复自证）。真机验证：`wbx doubao read`/
+  `status` 直通输出与退出码不变（read 落 job、status 不落）；UI 四项修复逐一实测通过。
+- 发布：self-install 同步全局副本（scripts 五模块 + doubao/ 整目录）+ `ui --stop` 后 `--detach`
+  重启生效；commit/push 待用户指示。

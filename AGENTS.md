@@ -1,4 +1,4 @@
-# AGENTS — wbx 三 lane 桥常驻指令（v5：子代理化高频调度）
+# AGENTS — wbx 三 lane 桥常驻指令（v6.4：子代理化高频调度 + doubao 直通）
 
 > 本仓库是 wbx 联动桥（ZCode 技能 + Node CLI）。ZCode 会话在本项目内工作时，除用户明确要求外，应遵守以下常驻规则。桥的技术细节见 [WBX.md](WBX.md)，卸载见 [UNINSTALL.md](UNINSTALL.md)。
 
@@ -17,7 +17,7 @@
 - 成本理由：ai 免费、cn 近免费、cline 免费孪生、ZCode 自身耗订阅额度——所以放开用。cline 免费组
   **限时轮换**：清单实时查 `wbx models --as cline --free`，doctor 校验默认孪生在组内；超额报
   `Daily free model limit reached`（带重置时间提示）。
-- 调用入口：`node .zcode/skills/wb-bridge/scripts/wbx.mjs {doctor|login|ask|fanout|models|config|history|ui|self-install|export-bundle}`（使用前先 `doctor`）。
+- 调用入口：`node .zcode/skills/wb-bridge/scripts/wbx.mjs {doctor|login|ask|fanout|models|config|history|ui|self-install|self-uninstall|export-bundle|doubao}`（使用前先 `doctor`；doubao=豆包桌面桥直通，可选工具非 lane）。
 - 版本演进史见 [WBX.md](WBX.md) 各版本章与 CHANGELOG.md。
 - 用法与 worker 提示词模板见 `.zcode/skills/wb-bridge/SKILL.md` 与
   `.zcode/skills/wb-bridge/PROMPTS.md`（v3 知识库：原则 14 条 + 模板 T1–T10 + 经验条目

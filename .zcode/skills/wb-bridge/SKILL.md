@@ -165,15 +165,16 @@ node .zcode/skills/wb-bridge/scripts/wbx.mjs fanout --file tasks.json [--lanes a
 |---|---|
 | `wbx doctor` | 自检向导（node/CLI 探测/模板/lane 凭证/模型探测 + cline 可选段） |
 | `wbx login [--identity cn\|ai\|cline]` | 登录（cn 微信扫码；ai 邮箱/OneID+锦囊；cline 浏览器 OAuth 设备授权） |
-| `wbx ask --file p.txt [--as ai\|cn\|cline] [--caps L0\|L1\|L2]` | 单次调用，stdout 出结果，失败自动跨 lane 回退，落盘 job（L1 附轨迹与 transcript） |
-| `wbx fanout --file t.json [--lanes ai,cn,cline]` | 多 lane 并发池批量，结果落 `.wbx/jobs/<jobId>/`（任务支持 `"caps":"L1"`） |
-| `wbx history [--last 10]` / `wbx history <jobId>` | 历史列表 / 完整回放双向对话（含旧 tasks/ 兼容） |
-| `wbx config list\|get\|set` | 配置：default-lane（auto/ai/cn/cline）、disabled-lanes、parallel-per-lane、model、cli-path、cline-*（path/data-dir/provider/model/thinking/compaction/parallel）、default-caps（L0/L1/L2）、caps-l2-enabled（默认 false） |
+| `wbx ask --file p.txt [--as ai\|cn\|cline] [--caps L0\|L1\|L2] [--max-turns 1-64]` | 单次调用，stdout 出结果，失败自动跨 lane 回退，落盘 job（L1 附轨迹与 transcript；--max-turns 为 v6.2 任务级 L1 回合上限，仅 L1 生效） |
+| `wbx fanout --file t.json [--lanes ai,cn,cline]` | 多 lane 并发池批量，结果落 `.wbx/jobs/<jobId>/`（任务支持 `"caps":"L1"` 与 `"maxTurns":1-64`） |
+| `wbx history [--last 10]` / `wbx history <jobId>` | 历史列表 / 完整回放双向对话（含旧 tasks/ 兼容；v6.4 起含豆包桥接记录与全量 token 用量） |
+| `wbx config list\|get\|set` | 配置：default-lane（auto/ai/cn/cline）、disabled-lanes、parallel-per-lane、model、cli-path、cline-*（path/data-dir/provider/model/thinking/compaction/parallel）、default-caps（L0/L1/L2）、caps-l1-max-turns（默认 24，v6.2）、caps-l2-enabled（默认 false） |
 | `wbx models [--as cn\|ai\|cline]` | 探测模型可用性 + 列出产品配置模型；`--as cline --free` 列当前免费模型组（端点实时） |
 | `wbx ui [--port 7788]` | 本地 Web UI（127.0.0.1）：三 lane 状态/路由开关/免费模型选择/ask/fanout/历史/登录引导 |
 | `wbx ui --detach / --stop / --status` | 控制台后台守护（幂等复用绝不新起）/ 停止（HTTP 优雅优先）/ 三态查看；日志 `~/.wbx/logs/ui.log` |
 | `wbx ui --install-autostart / --remove-autostart` | 装/摘 ZCode SessionStart 自启钩子（新开会话自动拉起控制台；config.json 只做读-改-写合并，摘除逐键还原） |
 | `wbx doubao <doubao.mjs 子命令…>` | 豆包桌面桥直通（v6.3 可选工具·非 lane·Windows-only）：status/new-task/configure/send/read/ask，参数原样转发；需豆包以调试口 9225 运行（先跑 `~/.zcode/wbx-bridge/doubao/launch.ps1`，装过 self-install 后任何目录可用）；详见 tools/doubao-bridge/README.md |
+| `wbx export-bundle [--out <dir>]` | 分发打包（零凭证 zip + INSTALL-README + 自检断言；有意不含豆包桥与任何凭证） |
 | `wbx self-install / self-uninstall` | 用户级全局安装（/wbx 命令 + 用户级 skill + ~/.wbx + 豆包桥 doubao/ 副本）/ 一键还原（豆包副本随桥本体删） |
 | `wbx install-user / uninstall-user` | 仅向 `~/.zcode/AGENTS.md` 注入/移除全局主动分派块 |
 

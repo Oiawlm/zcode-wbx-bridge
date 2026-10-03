@@ -6,3 +6,6 @@ node_modules/
 
 # 内部文件（规划、执行提示词、冻结清单），绝不入库
 internal/
+
+# ZCode 会话本地计划（一次性产物，不入库不挂 status）
+.zcode/plans/

@@ -12,9 +12,9 @@
 - **tokens-sha**：`efeee49b0e`（58 个 token）。算法：取哨兵块内全部 `--name: value;` 声明 →
   每条规范化为 `name=value`（value 转小写、删全部空白）→ 按 name 排序 → `\n` 连接 → sha256 前
   10 位。重算脚本：`node internal/v9-tokens-sha.mjs`。
-- **机器验证**：`node internal/ui-contract.mjs`（19 条断言，编号枚举 T1-T5 / C1-C6 / S1-S4 / D1-D4——
-  worker B 报告标题称 18 条但其枚举即 19，以枚举为准；T2 为全 58 token 值逐值快照）；与 v6/v7/v8
-  回归串行构成发布门禁。断言脚本位于 `internal/`（本仓库 gitignore 的工程内部件，不入发布 bundle）；
+- **机器验证**：`node internal/ui-contract.mjs`（23 条断言，编号枚举 T1-T5 / C1-C6 / S1-S4 / D1-D4 +
+  H1-H4（v6 行内详情族，2026-09-25）——worker B 报告标题称 18 条但其枚举即 19，以枚举为准；T2 为全 58
+  token 值逐值快照）；与 v6/v7/v8 回归串行构成发布门禁。断言脚本位于 `internal/`（本仓库 gitignore 的工程内部件，不入发布 bundle）；
   远端仓库以本文档为人读契约。
 - **怎么读**：只有 §5（不变量与扩展点）需要反复读——它是契约主体；§1-§4 是可跳读的参照手册；
   §2 组件的实例清单以浏览器实机核对为准（http://127.0.0.1:7788/）。
@@ -226,7 +226,7 @@
 #### card `.card` [extension]
 - **结构**：--panel 底+--line 边+--r-md+--shadow-1+margin-bottom --s4+scroll-margin-top --s4；hover(`@media(hover:hover)`) translateY(-1px)+--shadow-2+边框亮化；`.off` 变体（bd/title/sub opacity .62）；grid3 内 margin-bottom:0。
 - **API**：变体 `.off`；槽位=卡头/卡体/任意内容。
-- **用法**：通道卡×3（grid3）、路由卡、体检卡、调用卡、历史表卡、job 详情卡、登录卡×2。
+- **用法**：通道卡×3（grid3）、豆包桥工具卡（v12.1 内容级新增，位于通道卡与路由卡之间）、路由卡、体检卡、调用卡、历史表卡、job 详情卡、登录卡×2。
 - **Do**：抬升只 1px 且包 hover:hover；停用卡用 `.off` 降亮而非改文字色。
 - **Don't**：不要用 --line 表达可交互边界（只作装饰分隔 1.31:1）。
 - **何时不用**：多个同级条目天然成表时用 table，不堆卡片。
@@ -508,3 +508,4 @@ T4/C3/C5/D4 的保活前置）、形状双编码（S1）、阈值乱序（S2）�
 |---|---|---|---|
 | v1.0.0 | 2026-09-25 | efeee49b0e | 契约起步：v5.3 已收敛风格显式化（58 token+20 组件+3 Pattern+IA/编码/术语冻结）；随桥 v5.4.0 发布（token 语义化改名 --acc-text/--acc-hover/--panel-inset 已并入基线） |
 | v1.1.0 | 2026-09-25 | efeee49b0e（token 零改动） | 语义升级（授权=用户原话「我点击一个条目，希望它的详细内容直接出现在条目下方」）：历史页详情从页底 #job-detail 卡改为**点击行正下方行内展开**（tr.job-inline + .job-inline-card，手风琴单开沿用，页底卡退役）；新增内容级元素：调用页 caps 选择器（L2 disabled 标未交付）、taskHead caps 徽标、概览/通道卡「能力档」行、L1 工具轨迹 trace-box 折叠件；ui-contract 新增 H1–H4 断言（19→23）；token 键集与值零改动 |
+| v1.2.0 | 2026-10-03 | efeee49b0e（token 零改动） | D2 契约变更（授权=用户 2026-10-03「历史记录里面怎么没有豆包的桥接」）：TYPE_LABEL/type 枚举扩展 `doubao`（豆包桥直通 ask/send/read 落 job 记录进历史，ui-contract FROZEN_TYPE_KEYS 同步）。内容级新增（§5.2/§5.4 放行）：①豆包桥工具卡从状态页底部上移至通道卡之后（用户同日反馈「豆包的桥接怎么放在最下面了」）；②总览条新增豆包状态 chip 与「累计 tokens」chip（v6.4 tokenTotals，历史页右上角同步展示合计）；③历史表改 table-layout:fixed（修复点击行内展开后整表横向胀开，用户同日反馈）。token 键集与值零改动 |

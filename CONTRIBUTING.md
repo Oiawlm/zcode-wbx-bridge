@@ -7,8 +7,10 @@
 ### 文件白名单
 - 仓库只接受白名单内的文件；**新增文件必须先在白名单登记并说明理由**，未登记者一律拒收。
 - 现有白名单：
-  - 根目录：`LICENSE`、`.gitignore`、`README.md`、`WBX.md`、`UNINSTALL.md`、`AGENTS.md`、`SECURITY.md`、`CONTRIBUTING.md`、`CHANGELOG.md`
-  - 技能目录：`.zcode/skills/wb-bridge/{SKILL.md, PROMPTS.md, examples/tasks.example.json, scripts/wbx.mjs, scripts/wbx-core.mjs, scripts/wbx-setup.mjs, scripts/wbx-ui.mjs}`
+  - 根目录：`LICENSE`、`.gitignore`、`README.md`、`WBX.md`、`UI-SPEC.md`、`UNINSTALL.md`、`AGENTS.md`、`SECURITY.md`、`CONTRIBUTING.md`、`CHANGELOG.md`
+  - 技能目录：`.zcode/skills/wb-bridge/{SKILL.md, PROMPTS.md, examples/tasks.example.json, scripts/wbx.mjs, scripts/wbx-core.mjs, scripts/wbx-setup.mjs, scripts/wbx-daemon.mjs, scripts/wbx-ui.mjs}`
+  - 知识库：`knowledge/PROMPT-GUIDE.md`（v11 起）
+  - 豆包桥（v12 起，可选工具）：`tools/doubao-bridge/{README.md, anchors.json, doubao.mjs, launch.ps1, package.json, package-lock.json}`（`node_modules/` 不入库）
 - `internal/` 已在 `.gitignore`（策划材料不入库）；`.wbx/`、`~/.wbx/` **绝不入库**。
 
 ### 发布白名单流程（冻结，不可简化）
@@ -29,7 +31,7 @@
 - 桥的 cline 状态**只**允许落在 `~/.wbx/cline-home/`（以 HOME/USERPROFILE 覆盖实现隔离）。
 
 ### 代码风格
-- 纯 Node ESM（`.mjs`），**零第三方依赖**，双引号 + 分号 + 2 空格缩进。
+- 纯 Node ESM（`.mjs`），桥本体 `scripts/` 五模块**零第三方依赖**（`tools/doubao-bridge/` 例外：依赖 `playwright-core` 走 CDP，Windows 本机可选工具）；双引号 + 分号 + 2 空格缩进。
 
 ## 二、如何提交 PR
 - 基于**单 main 分支**直接提交 PR，无需额外分支模型。
@@ -44,7 +46,7 @@
 - 门槛汇总：改动在白名单内 + 全部脚本 `node --check` 通过 + 全命令回归已跑并贴输出 + 文档同步 + 无敏感内容。
 
 ## 三、文档与措辞纪律
-- `README.md` / `WBX.md` 不夸大：**禁止**「生产级 / 企业级 / 最强」等表述；成本表述以实测为准（如 cline lane 写「按量微付费（实测单次 $0.0003-0.004）」而非「免费」）。
+- `README.md` / `WBX.md` 不夸大：**禁止**「生产级 / 企业级 / 最强」等表述；成本表述以实测为准（例：cline lane 免费模型写「免费·限时轮换+每日配额，计价 id 才按量扣费」，不写无条件的「免费」）。
 - 三处诚实声明**不得删除**：临时工具、Windows-only、非官方。
 - 文档改动与代码改动同 PR 提交，避免滞后。
 

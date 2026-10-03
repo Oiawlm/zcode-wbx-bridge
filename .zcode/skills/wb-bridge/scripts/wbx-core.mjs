@@ -23,7 +23,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '6.3.0';
+export const WBX_VERSION = '6.4.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -1293,6 +1293,54 @@ export function listJobs() {
   }
   rows.sort((a, b) => String(b.id).localeCompare(String(a.id)));
   return rows;
+}
+
+// ---------- 全量 token 用量汇总（v6.4：历史页/总览展示；与 listJobs 同源遍历，只读） ----------
+// 口径：任务记录 rec.usage（usageOf 同款字段回退）；豆包桥接任务（lane=doubao）桌面端不走 API
+// 计量、usage 为 null，单列为 doubaoTasks 不计入 tokensIn/Out。unknownUsage = 成功但无任何
+// usage 数字的旧格式记录数（诚实展示用，不猜数）。
+const usageNumOf = (u, keys) => {
+  for (const k of keys) {
+    const v = u ? u[k] : null;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+  }
+  return null;
+};
+
+export function tokenTotals() {
+  const roots = [JOBS_DIR, LEGACY_TASKS_DIR, LEGACY_JOBS_DIR];
+  const seen = new Set();
+  let tasks = 0, okTasks = 0, tokensIn = 0, tokensOut = 0, doubaoTasks = 0, unknownUsage = 0;
+  for (const root of roots) {
+    let entries = [];
+    try { entries = fs.readdirSync(root); } catch { continue; /* 目录不存在 */ }
+    for (const e of entries) {
+      if (seen.has(e)) continue;
+      const dir = path.join(root, e);
+      try { if (!fs.statSync(dir).isDirectory()) continue; } catch { continue; }
+      seen.add(e);
+      let files = [];
+      try { files = fs.readdirSync(dir); } catch { continue; }
+      for (const f of files) {
+        if (!isTaskRecordFile(f)) continue;
+        let rec = null;
+        try { rec = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { continue; }
+        if (!rec || typeof rec !== 'object') continue;
+        tasks++;
+        if (rec.status === 'success') okTasks++;
+        if (rec.lane === 'doubao') doubaoTasks++;
+        const fin = usageNumOf(rec.usage, ['in', 'input_tokens', 'inputTokens', 'prompt_tokens']);
+        const fout = usageNumOf(rec.usage, ['out', 'output_tokens', 'outputTokens', 'completion_tokens']);
+        if (fin == null && fout == null) {
+          if (rec.status === 'success') unknownUsage++;
+          continue;
+        }
+        tokensIn += fin || 0;
+        tokensOut += fout || 0;
+      }
+    }
+  }
+  return { tasks, okTasks, tokensIn, tokensOut, doubaoTasks, unknownUsage };
 }
 
 export async function getJob(jobId) {

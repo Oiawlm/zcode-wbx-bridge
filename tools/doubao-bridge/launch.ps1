@@ -5,7 +5,7 @@
     通过 connectOverCDP 连接。
 
 .DESCRIPTION
-    行为严格对齐 v12-contract.md §3：
+    行为对齐 v12 立项时的行为契约（存项目 internal/archive/v12/ 留档；要点：只绑 127.0.0.1）：
       1) 已有 Doubao 进程时：无 -Force 只提示并退出 1，绝不擅自结束用户可能带未保存会话的进程；
          有 -Force 才 taskkill /IM Doubao.exe /F，并循环等待进程归零（最多 15s），未归零退出 2
          —— 豆包是单实例应用，旧实例不归零时新实例只会把 --remote-debugging-port 转发给旧实例，

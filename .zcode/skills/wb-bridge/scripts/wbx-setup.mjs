@@ -205,7 +205,7 @@ export function installReadmeText() {
     '',
     '| 位置 | 内容 |',
     '|---|---|',
-    '| ' + B + '~/.zcode/wbx-bridge/' + B + ' | 桥本体（scripts + SKILL.md + PROMPTS.md + examples + docs） |',
+    '| ' + B + '~/.zcode/wbx-bridge/' + B + ' | 桥本体（scripts + PROMPTS.md + examples + docs + doubao/ 豆包桥副本） |',
     '| ' + B + '~/.zcode/skills/wb-bridge/' + B + ' | 用户级 skill（遮蔽同名项目级 skill，内容一致） |',
     '| ' + B + '~/.zcode/commands/wbx.md' + B + ' | /wbx 斜杠命令 |',
     '| ' + B + '~/.zcode/AGENTS.md' + B + ' | ' + B + '<!-- wbx:begin/end -->' + B + ' 标记块 |',
@@ -270,7 +270,7 @@ export async function selfInstall({ adopt = false, keepProject = true } = {}) {
   let skillCopied = false, examplesCopied = false, docsCopied = false;
   try { await copyDir(path.join(srcSkillDir, 'examples'), path.join(GLOBAL_BRIDGE_DIR, 'examples')); examplesCopied = true; } catch { /* 无 examples */ }
   const promptsCopied = await copyIfExists(path.join(srcSkillDir, 'PROMPTS.md'), path.join(GLOBAL_BRIDGE_DIR, 'PROMPTS.md'));
-  const docFiles = ['WBX.md', 'PLAN.md', 'UNINSTALL.md'];
+  const docFiles = ['WBX.md', 'UNINSTALL.md'];   // v6.4：去 PLAN.md（早已移入 internal/，原为死引用）
   const copiedDocs = [];
   for (const d of docFiles) {
     if (await copyIfExists(path.join(PROJECT_ROOT, d), path.join(GLOBAL_BRIDGE_DIR, d))) copiedDocs.push(d);
@@ -430,7 +430,7 @@ function collectBundleEntries() {
     }
   }
   // docs/
-  for (const d of ['WBX.md', 'PLAN.md', 'UNINSTALL.md']) {
+  for (const d of ['WBX.md', 'UNINSTALL.md']) {
     const p = path.join(PROJECT_ROOT, d);
     if (fs.existsSync(p)) add(`${root}docs/${d}`, fs.readFileSync(p));
   }

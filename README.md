@@ -94,6 +94,8 @@ wbx ui
 
 用法：`wbx ask --caps L1 --file 任务.txt`；fanout 任务里写 `"caps": "L1"`；控制台调用页「高级」里选能力档（L2 灰显标注未交付）。历史/详情页会显示「L1 联网档」徽标与工具轨迹（如 `WebSearch×6、WebFetch×1`）。
 
+**L1 回合上限（v6.2）**：L1 任务缺省回合上限 24（`config` 键 `caps-l1-max-turns`），单任务可 `wbx ask --max-turns 1-64` 或 fanout 任务里写 `"maxTurns": n` 覆盖（仅 L1 生效，L0 无回合概念）；回合耗尽任务显式报 `l1-turns-exhausted`，绝不静默截断。
+
 两条如实声明：① L1 下 WebFetch 在默认权限档会被拒，联网主力是 WebSearch；② cline lane 用的是免费模型组（限时轮换 + 每日配额，超额报 `Daily free model limit reached` 并带重置时间），与本节 caps 分级是两回事——caps 管能力边界，配额管用量。
 
 ## 适合 / 不适合
@@ -227,18 +229,19 @@ node .zcode\skills\wb-bridge\scripts\wbx.mjs config set cline-model "<免费模�
 |---|---|
 | `wbx doctor` | 自检：node/CLI 路径/模板/各 lane 凭证与模型探测（含 cline 可选段） |
 | `wbx login [--identity cn\|ai\|cline]` | 登录（cn 微信扫码；ai 邮箱/OneID；cline 浏览器 OAuth） |
-| `wbx ask --file p.txt` 或 `--text "…"` | 单条任务；stdout 出结果，失败自动换 lane |
-| `wbx fanout --file tasks.json` | 批量并行（任务文件格式见 [examples](.zcode/skills/wb-bridge/examples/tasks.example.json)；任务可绑 lane、可挂材料文件） |
-| `wbx history --last 10` / `wbx history <jobId>` | 历史列表 / 回放某次任务的完整双向对话 |
-| `wbx config list` / `set <key> <value>` | 路由与并发配置（default-lane、disabled-lanes、parallel-per-lane、cline-* 等） |
+| `wbx ask --file p.txt` 或 `--text "…"` | 单条任务；stdout 出结果，失败自动换 lane（可加 `--caps L1` 联网档、`--max-turns` 回合上限） |
+| `wbx fanout --file tasks.json` | 批量并行（任务文件格式见 [examples](.zcode/skills/wb-bridge/examples/tasks.example.json)；任务可绑 lane、可挂材料文件、可写 caps/maxTurns） |
+| `wbx history --last 10` / `wbx history <jobId>` | 历史列表 / 回放某次任务的完整双向对话（v6.4 起含豆包桥接记录） |
+| `wbx config list` / `set <key> <value>` | 路由与并发配置（default-lane、disabled-lanes、parallel-per-lane、default-caps、caps-l1-max-turns、cline-* 等） |
 | `wbx models` | 探测模型可用性、列出账号下全部模型（`--as cline --free` 列当前免费模型组） |
 | `wbx ui --detach` / `--stop` / `--status` | 常开可视化控制台（幂等后台守护，浏览器开 127.0.0.1:7788）/ 停止 / 查看三态 |
 | `wbx ui --install-autostart` | 装 ZCode 会话自启钩子（新开会话自动拉起控制台；`--remove-autostart` 摘除） |
-| `wbx self-install --adopt` | 全局安装：任何项目可用 + `/wbx` 斜杠命令 |
+| `wbx doubao <doubao.mjs 子命令…>` | 豆包桌面桥直通（v6.3 可选工具·非 lane·Windows-only）：status/new-task/configure/send/read/ask；需豆包以调试口运行（先跑 `%USERPROFILE%\.zcode\wbx-bridge\doubao\launch.ps1`，装过 self-install 后任何目录可用；ask/send/read 自动记入历史） |
+| `wbx self-install --adopt` | 全局安装：任何项目可用 + `/wbx` 斜杠命令（v6.3 起携带豆包桥副本） |
 | `wbx self-uninstall [--purge]` | 全局卸载一键还原（`--purge` 连凭证一起删） |
 | `wbx export-bundle` | 生成零凭证分发包 zip，可发给同事在其他机器安装 |
 
-另外两个入口：ZCode 会话里输入 `/wbx <任务描述>`（全局安装后可用）= 一键分派流程；`wbx ui` = 网页控制台，可视化看三 lane 状态、发起任务、翻历史记录。
+另外两个入口：ZCode 会话里输入 `/wbx <任务描述>`（全局安装后可用）= 一键分派流程；`wbx ui` = 网页控制台，可视化看三 lane 状态、发起任务、翻历史记录（v6.4 起历史页含累计 token 用量与豆包桥接记录）。另有 `wbx doubao …` 直通本机豆包桌面端（工作任务模式，可选工具，见上表与 `tools/doubao-bridge/README.md`）。
 
 **质量与安全提示**：免费算力输出质量有方差，外包结果先校验再使用（代码产物必须审查/运行后才进交付物，v5 起集成前默认过一道评审批判）；worker 无联网能力，「调研」产出是模型已有知识、可能过时；涉密内容绝不外包。完整分派准则与 worker 提示词模板见 [SKILL.md](.zcode/skills/wb-bridge/SKILL.md) 与 [PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md)（v2 知识库：12 条原则、9 类模板、经验条目库与决策速查表），技术细节见 [WBX.md](WBX.md)。
 
@@ -269,7 +272,7 @@ node .zcode\skills\wb-bridge\scripts\wbx.mjs config set cline-model "<免费模�
 表现：任务失败、错误里出现 quota / 429 / 限流字样。处置顺序：降并发（`fanout --parallel 1`）稍后再试 → 换 lane（`ask --as <lane>` 或 `config set default-lane`，比如 ai 限流就改走 cn）→ 启用 cline lane 作第三算力 → 都不行就先停用外包，由主力模型自己做。免费策略随时可能变化，不再划算就卸载（[UNINSTALL.md](UNINSTALL.md)）。
 
 **cline lane 的 OAuth 登录失败怎么办？**
-`wbx login --identity cline` 是设备码流程：终端会显示一个 code 和授权 URL，浏览器打开后确认即可。code 有效期有限——超时会报 `WorkOS device authorization timed out`，重新运行登录命令拿新 code 就行。凭证落 `~\.wbx\cline\`（与你自己 `~\.cline` 无关）；成功后 doctor 的 cline 段应全绿。
+`wbx login --identity cline` 是设备码流程：终端会显示一个 code 和授权 URL，浏览器打开后确认即可。code 有效期有限——超时会报 `WorkOS device authorization timed out`，重新运行登录命令拿新 code 就行。凭证落 `~\.wbx\cline-home\`（与你自己 `~\.cline` 无关）；成功后 doctor 的 cline 段应全绿。
 
 **best-of-N 是什么？为什么同一任务派两份？**
 v5 的调度模式：关键产物（关键代码模块/对外文案）用**同一契约**并行派 2 份，两份只有一句「附加侧重」不同（比如一份侧重可读性、一份侧重边界完备），你的 AI 助手评审后择优集成并留档。外部算力几乎免费，多派一份换的是质量下限——两份侧重点刻意不同，不是重复劳动。

@@ -1,4 +1,4 @@
-# UNINSTALL — wbx 联动桥卸载手册（v5：三 lane；兼容 v2/v3/v4/v5.1/v5.2 全部形态）
+# UNINSTALL — wbx 联动桥卸载手册（v6.4：三 lane + doubao 直通；兼容 v2–v6 全部形态）
 
 > 原则：桥有两种形态——**项目形态**（一切都在项目文件夹内，删目录即净）与
 > **全局形态**（`wbx self-install` 之后：`~/.zcode/` 四处 + `~/.wbx/` 运行时）。
@@ -28,14 +28,14 @@ node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" ui --stop                
 node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" ui --remove-autostart    # 摘除 ZCode 会话自启钩子（config.json 逐键还原）
 # 用全局桥自己卸载（或用项目桥，等价）：
 node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" self-uninstall          # 移除 ~/.zcode/ 四处（含自动停守护+摘钩子），保留 ~/.wbx/ 凭证
-node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" self-uninstall --purge  # 连 ~/.wbx/（含两 lane 凭证 + cline/ 隔离数据 + run/logs）一起删
+node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" self-uninstall --purge  # 连 ~/.wbx/（含两 lane 凭证 + cline-home/ 隔离数据 + run/logs）一起删
 ```
 
 移除清单（self-uninstall 自动处理并逐项报告）：
 
 | 位置 | 内容 |
 |---|---|
-| `~/.zcode/wbx-bridge/` | 桥本体（scripts 五模块（v5.2 起 +wbx-daemon.mjs） + SKILL.md + PROMPTS.md + examples + docs 副本） |
+| `~/.zcode/wbx-bridge/` | 桥本体（scripts 五模块（v5.2 起 +wbx-daemon.mjs） + PROMPTS.md + examples + docs 副本 + doubao/ 豆包桥副本（v6.3 起，可选）） |
 | `~/.zcode/skills/wb-bridge/` | 用户级 skill（SKILL.md + PROMPTS.md，遮蔽同名项目级 skill） |
 | `~/.zcode/commands/wbx.md` | `/wbx` 斜杠命令 |
 | `~/.zcode/AGENTS.md` | `<!-- wbx:begin/end -->` 标记块（文件只剩它时连文件删除，其余内容保留） |
@@ -114,7 +114,7 @@ v3 的 `self-uninstall` 会顺带做同一件事，无需重复执行。
   卸载用 `wbx ui --remove-autostart`（只摘我们那条，其余键原样保留；实测与安装前逐字节一致）。
   若桥已删而钩子还在，手动编辑该文件删掉 `hooks.events.SessionStart` 里 `args` 含
   `wbx-bridge\scripts\wbx.mjs` 的那条；`hooks` 里再无别的内容时可整体删去 `hooks` 键。
-- `wbx export-bundle` 生成的 zip（默认在 `~/Desktop/wbx-bridge-v5-*.zip`）是**零凭证**分发包
+- `wbx export-bundle` 生成的 zip（默认在 `~/Desktop/wbx-bridge-v<版本>-<日期>.zip`（如 wbx-bridge-v6.4.0-20261003））是**零凭证**分发包
   （导出时逐成员比对本地 accessToken 做过断言），可随手删除或外发。
 - 在别处用分包装过的机器：在那台机器上运行 `node scripts\wbx.mjs self-uninstall [--purge]`
   （装过 cline lane 的机器再 `npm uninstall -g cline`）。
@@ -139,7 +139,7 @@ v3 的 `self-uninstall` 会顺带做同一件事，无需重复执行。
 |---|---|
 | 桌面版 WorkBuddy 国内版（`~/.workbuddy`） | 只读过 cache，未写入任何文件 ✅ |
 | 桌面版 WorkBuddy AI 国际版（`~/.workbuddy-ai`） | 只读过 cache，未写入任何文件 ✅ |
-| 用户自己的 Cline 状态（`~/.cline`） | **从未读写**（桥的 cline 状态只在 `~/.wbx/cline/`）✅ |
+| 用户自己的 Cline 状态（`~/.cline`） | **从未读写**（桥的 cline 状态只在 `~/.wbx/cline-home/`）✅ |
 | WorkBuddy 安装目录（如 `%LOCALAPPDATA%\Programs\WorkBuddy*`） | 未修改 ✅ |
 | `%LOCALAPPDATA%\CodeBuddyExtension` | 未修改 ✅ |
 | 系统环境变量 / PATH | 从未改动（所有 env 只在 spawn 时注入）✅ |

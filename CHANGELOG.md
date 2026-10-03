@@ -2,6 +2,26 @@
 
 本文件记录 zcode-wbx-bridge 的版本变更，格式参考 Keep a Changelog。
 
+## 6.4.0 - 2026-10-03
+
+新增（全盘联动同步 + 控制台四项体验修复；授权=用户 2026-10-03 全盘扫描指令与四项前端反馈原话「历史记录里边……点一下……左右两边可能会胀开」「豆包的桥接怎么放在最下面了」「历史记录里面怎么没有豆包的桥接」「可以加入总 token 数」。改动面：`wbx-core.mjs`（版本号 + tokenTotals）、`wbx.mjs`（doubao 结果型子命令落历史）、`wbx-ui.mjs`（历史表 fixed 布局/豆包卡上移/总览与历史 token 合计/doubao 类型渲染）；三 lane 行为零变化）
+
+### Added
+- **累计 token 用量统计**：core 新增 `tokenTotals()`（与 job 列表同源遍历，含旧版兼容目录；usage 字段按 usageOf 同款回退兼容旧格式），`/api/status` 与 `/api/history` 附带返回；控制台总览条新增「累计 tokens in/out」chip（点击跳历史页），历史页右上角显示合计 + 豆包桥接次数（桌面端不走 API 计量，单列不计入 in/out）+ 旧格式无用量记录数。
+- **豆包桥接进历史**（UI 契约 D2 变更，UI-SPEC §6 v1.2.0）：`wbx doubao ask|send|read` 执行后落 job 记录（type=doubao，manifest/tasks-input/record 三件套与回放兼容），stdout 捕获后原样回放、退出码透传不变；status/new-task/configure/help 不落记录；历史类型列显示「豆包桥接」，详情 Token 数显示 `—`（无 API 计量）。ui-contract FROZEN_TYPE_KEYS 与 v7 ⑤c/v8 ④a 断言同步扩展。
+
+### Fixed
+- **历史页「点开胀开」**：行内详情行（colspan=5）在 auto 表格布局下参与列宽计算，点击含长内容的记录后整表横向溢出（实测 1017→1605px）。修复：历史表改 `table-layout:fixed` + colgroup 定宽 + 详情行 overflow 收口 + `.md` overflow-wrap。实测最长记录溢出 0px。
+- **豆包桥工具卡位置**：从状态页最底部上移至通道卡之后、路由卡之前（用户反馈「怎么放在最下面」）；总览条新增豆包状态 chip。
+- **跨文档联动同步**（全盘扫描发现）：README 命令表/caps 节补 v6.2/v6.3 内容（doubao、--caps/--max-turns、caps-l1-max-turns）+ FAQ cline 凭证路径修为 cline-home；UNINSTALL 标题口径/桥本体系目（去 SKILL.md 补 doubao/）/zip 命名/cline 路径两处；SECURITY cline 凭证路径；CONTRIBUTING 白名单补登 UI-SPEC/wbx-daemon.mjs/knowledge/豆包桥四组 + 零依赖表述加豆包例外 + cline 计价示例换免费孪生口径；SKILL 速查补 --max-turns/maxTurns/caps-l1-max-turns/export-bundle；AGENTS 调用入口补 self-uninstall/doubao；wbx-setup 安装清单去 PLAN.md 死引用 + INSTALL-README 桥本体系目修正；launch.ps1 内部文档引用改可达路径。
+
+### Chore
+- 仓库卫生：internal/ 124 个一次性产物按版本轮归档 internal/archive/{v6..v12,docs}/（治理与门禁工具留顶层）；删除运行时残留（ui-baseline.pid/log、临时回归输出、发布 zip、v10-before-ui/、v12-staging/、对照截图、config 快照）；删除项目内 .wbx/（项目形态时期运行时残留，含 2.3 万文件 CLI config 与旧凭证；现行运行时在 ~/.wbx 不受影响）；.gitignore 追加 .zcode/plans/。
+
+### 实证与回归
+- 六套门禁全绿：v6 24/24 + v7 27/27（⑤c 枚举 +doubao）+ v8 22/22（④a 枚举 +doubao）+ v11.3 38/38（含 cline 真机）+ ui-contract 23/23 + v9 红测全绿（含恢复自证）。
+- 真机验证：`wbx doubao read`/`status` 直通输出与退出码不变（read 落 job、status 不落）；控制台四项修复逐一实测（历史点击溢出 0px、豆包卡就位、豆包记录渲染、token 合计展示；全历史实测 tokens in 15,432,702 / out 1,812,749）。
+
 ## 6.3.0 - 2026-10-01
 
 新增（豆包桥并入 wbx 全局形态·全项目通用；授权=用户 2026-10-01 原话「你现在立马给我把豆包桥也做成一个全项目通用的……你把它给我放进去啊（WBX 桥里）……所有的项目都能够更高效率的去运作」。改动面：`wbx.mjs`（doubao 直通子命令）、`wbx-setup.mjs`（self-install/uninstall 携带 doubao/）、`wbx-ui.mjs`（豆包卡文案全局化）、`wbx-core.mjs`（版本号 + AGENTS 标记块速查行）；三 lane 行为零变化，L0 参数序列逐字不变）
@@ -10,6 +30,9 @@
 - **`wbx doubao <doubao.mjs 子命令与参数…>` 直通子命令**：在 parseArgs 之前拦截、参数原样转发（豆包旗标集 `--cdp-url/--wait-ms` 等与 wbx 解析器不兼容，混用会误报未知参数）；usage/退出码/单行 JSON 输出均由 doubao.mjs 自理（无参=usage+exit 1，不挂起）。目录解析：全局 `~/.zcode/wbx-bridge/doubao/` → 仓库 `tools/doubao-bridge/`，双 miss 明确报错并给 self-install 修复指引（可选工具，绝不影响三 lane）。
 - **self-install 携带豆包桥**：`tools/doubao-bridge/` 整目录复制到 `~/.zcode/wbx-bridge/doubao/`——先 rm 旧副本再复制（防 node_modules 陈旧残留），装完即验 `doubao.mjs`/`anchors.json`/`launch.ps1`/`node_modules/playwright-core` 四要素，缺一即 WARN 并提示手动整拷；源缺失/复制失败只 WARN 不阻断安装。`self-uninstall` 随桥本体一并删除（报告标签明示含 doubao/ 副本，无新增独立清理项）；export-bundle 分发包仍不含豆包（Windows 本机可选工具，有意排除）。
 - **用户 AGENTS.md 标记块与控制台豆包卡速查全局化**：速查命令改为全局入口形态（`wbx doubao status|ask …` + launch.ps1 的 `%USERPROFILE%` 路径，注明 PowerShell/Git Bash 变量替换）——装过 self-install 的任何项目会话可直接发现与调用；UI 卡为内容级文案改动（UI-SPEC §5.2/§5.4 放行，不触发 FROZEN 2.7，contract v1.1.0 不变）。
+
+### 补记
+- v12（豆包桌面桥工具 tools/doubao-bridge/ 四件套，commit 9536d59）与 v12.1（控制台豆包工具卡，commit 9fe18e9）两个交付当时未在 CHANGELOG 立条目，随 6.3.0（v12.2 并入全局形态）一并官宣补记；技术细节见 WBX.md v6.3 章与 UNINSTALL §八。
 
 ### 实证与回归
 - 既有六套门禁零回退：v6 24/24 + v7 27/27 + v8 22/22 + v11.3 38/38 + ui-contract 23/23 + v9 红测全绿（含恢复自证：源文件哈希=基线）。

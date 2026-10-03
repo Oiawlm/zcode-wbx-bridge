@@ -36,7 +36,7 @@ import {
   resolveDefaultLane, laneStatusInfo, parseLane, laneReady,
   askOnce, resolveModel, fetchClineFreeModels,
   runAskJob, runFanoutJob,
-  listJobs, getJob,
+  listJobs, getJob, newJobId,
   startLogin, pollLoginToken, fetchAccountInfo, persistLogin,
   doctorStatus,
   USER_AGENTS_PATH, installUserBlock, uninstallUserBlock,
@@ -524,6 +524,58 @@ async function cmdUi(opts) {
 // ---------- 子命令：doubao（v6.3 豆包桌面桥直通；可选工具，非 lane） ----------
 // 参数不经 parseArgs 原样转发：豆包旗标集（--cdp-url/--timeout-ms/--wait-ms/--poll-ms/--index…）
 // 与 wbx 自身不同，由 doubao.mjs 自己解析并负责 usage/退出码；本函数只做目录解析 + 子进程直通。
+// v6.4：结果型子命令（ask/send/read）执行后落 job 记录（<运行时根>/jobs/，type=doubao）进控制台
+//       历史；status/new-task/configure/help 等状态类不记，防刷屏。记录失败只 WARN，绝不影响
+//       直通输出与退出码。豆包桌面端不走 API 计量，usage 恒为 null（历史 Token 数显示 —）。
+const DOUBAO_RECORDED_SUBS = new Set(['ask', 'send', 'read']);
+
+async function writeDoubaoJob({ sub, args, startedAt, exitCode, stdoutText }) {
+  try {
+    ensureDirs();
+    const id = newJobId();
+    const dir = path.join(JOBS_DIR, id);
+    fs.mkdirSync(dir, { recursive: true });
+    let payload = null;
+    try { payload = JSON.parse(stdoutText.trim().split(/\r?\n/).pop()); } catch { /* 非 JSON 输出（老版本/异常） */ }
+    const durMs = Date.now() - startedAt;
+    const ok = payload ? payload.ok === true : exitCode === 0;
+    const textArg = (() => {
+      const i = args.indexOf('--file');
+      if (i >= 0) return args[i + 1] ? `（来自文件 ${args[i + 1]}）` : null;
+      return args.slice(1).join(' ').trim() || null;
+    })();
+    const manifest = {
+      id, type: 'doubao', createdAt: new Date(startedAt).toISOString(),
+      finishedAt: new Date().toISOString(), status: 'done',
+      params: { source: 'wbx-doubao', subcommand: sub, args },
+      lanes: ['doubao'], config: loadConfig(), runtimeRoot: RUNTIME_ROOT,
+      stats: { total: 1, ok: ok ? 1 : 0, failed: ok ? 0 : 1, durationMs: durMs },
+    };
+    await fsp.writeFile(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+    await fsp.writeFile(path.join(dir, 'tasks-input.json'), JSON.stringify([
+      { id: 'doubao', prompt: sub + (textArg ? ' ' + textArg : '') },
+    ], null, 2), 'utf8');
+    const rec = {
+      id: 'doubao', lane: 'doubao', status: ok ? 'success' : 'failed',
+      attempts: 1, durationMs: durMs,
+      model: payload?.modelAtSend || payload?.model || null,
+      effort: null, caps: null,
+      usage: null,   // 豆包桌面端不走 API 计量，无 token 数据（诚实展示 —）
+    };
+    if (ok) {
+      rec.result = (typeof payload?.text === 'string' && payload.text)
+        ? payload.text
+        : (sub === 'send' ? '已发送（用 doubao read 取回回复）' : JSON.stringify(payload ?? {}));
+    } else {
+      rec.error = `doubao exit ${exitCode}${payload?.reason ? ': ' + payload.reason : ''}`;
+    }
+    if (payload?.conversationUrl) rec.conversationUrl = payload.conversationUrl;
+    await fsp.writeFile(path.join(dir, 'doubao.json'), JSON.stringify(rec, null, 2), 'utf8');
+  } catch (e) {
+    console.error(`[WARN] doubao job 记录落盘失败（不影响本次调用结果）：${e?.message || e}`);
+  }
+}
+
 async function cmdDoubao(restArgs) {
   const candidates = [
     path.join(path.dirname(SCRIPT_DIR), 'doubao'),        // 全局形态：~/.zcode/wbx-bridge/doubao/（self-install 复制）
@@ -538,11 +590,27 @@ async function cmdDoubao(restArgs) {
     );
   }
   const { spawn } = await import('node:child_process');
-  const child = spawn(process.execPath, [path.join(dir, 'doubao.mjs'), ...restArgs], { stdio: 'inherit' });
+  const sub = String(restArgs[0] || '');
+  if (!DOUBAO_RECORDED_SUBS.has(sub)) {
+    const child0 = spawn(process.execPath, [path.join(dir, 'doubao.mjs'), ...restArgs], { stdio: 'inherit' });
+    child0.on('error', (e) => { console.error(`[FAIL] 启动豆包桥失败：${e.message}`); process.exit(1); });
+    child0.on('close', (code, signal) => {
+      // 只透传退出码，不重抛同名信号——非 POSIX 语义下 signal 名可能不被识别（T7-S1）
+      process.exit(code ?? (signal ? 1 : 0));
+    });
+    return;
+  }
+  // 结果型子命令：捕获 stdout 以落历史记录，结束后原样回放（stderr 保持直通；单行 JSON 本就最后输出）
+  const startedAt = Date.now();
+  const child = spawn(process.execPath, [path.join(dir, 'doubao.mjs'), ...restArgs], { stdio: ['inherit', 'pipe', 'inherit'] });
+  const chunks = [];
+  child.stdout.on('data', (c) => chunks.push(c));
   child.on('error', (e) => { console.error(`[FAIL] 启动豆包桥失败：${e.message}`); process.exit(1); });
-  child.on('close', (code, signal) => {
-    // 只透传退出码，不重抛同名信号——非 POSIX 语义下 signal 名可能不被识别（T7-S1）
-    process.exit(code ?? (signal ? 1 : 0));
+  child.on('close', async (code, signal) => {
+    const out = Buffer.concat(chunks).toString('utf8');
+    if (out) await new Promise((r) => process.stdout.write(out, r));   // 等冲刷完再退，防大输出截断
+    await writeDoubaoJob({ sub, args: restArgs, startedAt, exitCode: code, stdoutText: out });
+    process.exit(code ?? (signal ? 1 : 0));   // 只透传退出码（T7-S1）
   });
 }
 

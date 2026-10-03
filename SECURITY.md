@@ -58,7 +58,7 @@
 桥在本地保存两类凭证，二者均被 `.gitignore` 覆盖：
 
 - WorkBuddy `accessToken`：位于 `.wbx/` 或 `~/.wbx/` 下的 `sessions` / `product` 目录。
-- Cline OAuth 凭证：`~/.wbx/cline/data/settings/providers.json`。
+- Cline OAuth 凭证：`~/.wbx/cline-home/.cline/data/settings/providers.json`（cline-home 为桥的隔离主目录）。
 
 建议自查：
 
