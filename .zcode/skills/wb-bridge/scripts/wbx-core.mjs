@@ -20,7 +20,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '6.7.0';
+export const WBX_VERSION = '6.7.1';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -1032,6 +1032,10 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000,
 // ---------- cline lane：NDJSON 解析 + 一次性调用 ----------
 // parseClineNdjson —— 解析 cline --json 的 stdout 全文（纯函数，零依赖，任何输入不抛异常）。
 // 初稿由 wbx fanout 外包产出（job 20260925-120106-jh7），ZCode 审查修订后集成。
+// 正文不变量：text = 流内全部 text 内容块按序拼接，且与 run_result.text 至少同尾——上游
+// 输出上限压缩续写后 run_result.text 只含末次 iteration 正文（实测 job 20261003-171054-6tl：
+// 4074 恰为末块，全块拼接 5789 为完整答案）。落盘完整性的唯一出口在解析层，ask 返回值/
+// fanout 任务记录/UI 历史共用此结果。
 function makeEmptyClineResult() {
   return { events: 0, text: null, finishReason: null, usage: { in: null, out: null }, model: null, durationMs: null, error: null, hasRunResult: false };
 }
@@ -1043,7 +1047,9 @@ export function parseClineNdjson(text) {
   const out = makeEmptyClineResult();
   if (typeof text !== 'string' || text.length === 0) return out;
   const normalized = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;  // 去 BOM
-  const agentTexts = [];
+  const blocks = [];   // contentType==="text" 内容块（跨 iteration 按流序；压缩续写时答案分属多块）
+  let open = null;     // 未闭合块：流中断无 content_end 时靠该块增量兜底
+  let doneText = null;
   let lastRunResult = null;
   let firstErrorMessage = null;
   for (const rawLine of normalized.split(/\r?\n/)) {
@@ -1059,8 +1065,19 @@ export function parseClineNdjson(text) {
         const msg = asNonEmptyString_(parsed.event.error?.message);
         if (msg !== null && firstErrorMessage === null) firstErrorMessage = msg;   // 多处错误取首个
       }
-      const chunk = asNonEmptyString_(parsed.event.text);
-      if (chunk !== null) agentTexts.push(chunk);   // 正文增量（成功场景待实测，容错跳过缺字段行）
+      // 正文只认 contentType==="text" 内容块：content_end 携带该块全文（单一权威事件）；
+      // content_start 为流式增量，仅在流中断缺 content_end 时兜底（全量收集，纯空白增量也保）。
+      // done.text 与末块全文重复，不并入拼接（仅作无块无 run_result 时的末位兜底）。
+      if (parsed.event.type === 'content_start' && parsed.event.contentType === 'text') {
+        if (open === null) { open = { deltas: [], endText: null }; blocks.push(open); }
+        if (typeof parsed.event.text === 'string') open.deltas.push(parsed.event.text);
+      } else if (parsed.event.type === 'content_end' && parsed.event.contentType === 'text') {
+        if (open === null) { open = { deltas: [], endText: null }; blocks.push(open); }
+        open.endText = typeof parsed.event.text === 'string' ? parsed.event.text : null;
+        open = null;
+      } else if (parsed.event.type === 'done' && typeof parsed.event.text === 'string' && parsed.event.text !== '') {
+        doneText = parsed.event.text;
+      }
       continue;
     }
     // 兼容顶层 type:"error" 形态（实测出现在 stderr，stdout 理论上不出现）
@@ -1081,7 +1098,17 @@ export function parseClineNdjson(text) {
     out.model = isPlainObject_(lastRunResult.model) ? asNonEmptyString_(lastRunResult.model.id) : null;
     out.durationMs = asFiniteNumber_(lastRunResult.durationMs);
   }
-  if (out.text === null && agentTexts.length > 0) out.text = agentTexts.join('');
+  // 正文裁决（第一性：事件流是单次完整的事实源，run_result.text 是上游摘要字段）：后缀关系
+  // 成立取更全者——正常单块流两者相等 → 零变化；压缩续写流全块拼接以 run_result.text 结尾 →
+  // 取全块。无后缀关系（上游形态变化、流与摘要分歧）以 run_result.text 为权威，不臆造。
+  // run_result 缺席/无正文时按 流拼接 → done.text 兜底。
+  const streamText = blocks.map((b) => (b.endText !== null ? b.endText : b.deltas.join(''))).join('');
+  if (out.text !== null && streamText !== '') {
+    if (streamText.length >= out.text.length && streamText.endsWith(out.text)) out.text = streamText;
+  } else if (out.text === null) {
+    if (streamText !== '') out.text = streamText;
+    else if (doneText !== null) out.text = doneText;
+  }
   if (firstErrorMessage !== null) out.error = firstErrorMessage;
   else if (lastRunResult !== null && out.finishReason === 'error') out.error = asNonEmptyString_(lastRunResult.text);
   return out;
@@ -1226,7 +1253,7 @@ export function parseDoubaoPayload(stdoutText) {
 
 /**
  * doubao lane 一次性纯文本调用（第四 lane；会员额度，免费优先序最末；授权与额度口径见 CHANGELOG 6.6.0）。
- * 命令行：node <doubao.mjs> ask "<提示词>" | --file <临时文件> --timeout-ms <桥侧超时> --json
+ * 命令行：node <doubao.mjs> ask "<提示词>" | --file <临时文件> --timeout-ms <桥侧超时>
  * 桥侧零凭证：登录态在豆包客户端 GUI 内自理；客户端未以调试口 9225 运行时 doubao.mjs
  * exit 3 快速失败（秒退）→ 回退链自然跳过。>STDIN_THRESHOLD 字符走 --file 临时文件（同
  * ai/cn/cline 的 stdin 阈值语义，绕过 Windows 命令行长度上限），用完即删。任务级 model/effort
@@ -1254,7 +1281,7 @@ export async function askOnceDoubao({ prompt, model = null, timeoutMs = 300000, 
   }
   const useFile = prompt.length > STDIN_THRESHOLD;
   let tmpFile = null;
-  const args = [path.join(dir, 'doubao.mjs'), 'ask', '--timeout-ms', String(timeoutMs), '--json'];
+  const args = [path.join(dir, 'doubao.mjs'), 'ask', '--timeout-ms', String(timeoutMs)];
   if (useFile) {
     tmpFile = path.join(RUNTIME_ROOT, `doubao-ask-${stamp()}-${Math.random().toString(36).slice(2, 6)}.txt`);
     try {
@@ -2083,7 +2110,7 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
       laneRows.push(dinfo);
     } else {
       say('豆包桌面端状态探测中（doubao.mjs status，免费不耗额度）…');
-      const st = await spawnBin(process.execPath, [path.join(dinfo.bridgeDir, 'doubao.mjs'), 'status', '--timeout-ms', '8000', '--json'], { timeoutMs: 30000 });
+      const st = await spawnBin(process.execPath, [path.join(dinfo.bridgeDir, 'doubao.mjs'), 'status', '--timeout-ms', '8000'], { timeoutMs: 30000 });
       const payload = parseDoubaoPayload(ansiStrip(st.stdout || ''));
       const online = st.code === 0 && !!payload && payload.ok === true;
       const probeDetail = online

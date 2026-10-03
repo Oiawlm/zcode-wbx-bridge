@@ -25,7 +25,7 @@ const USAGE = [
   'doubao.mjs send <text...> | --file <path>',
   'doubao.mjs read [--wait-ms 180000] [--poll-ms 3000] [--index -1]',
   'doubao.mjs ask <text...> | --file <path>',
-  'global: --cdp-url <url> --timeout-ms <n> --json',
+  'global: --cdp-url <url> --timeout-ms <n>',
 ].join('\n');
 
 class CliError extends Error {
@@ -79,7 +79,6 @@ function parseArgv(argv) {
   const opts = {
     cdpUrl: 'http://127.0.0.1:9225',
     timeoutMs: 8000,
-    json: false,
     file: null,
     waitMs: 180000,
     pollMs: 3000,
@@ -121,7 +120,6 @@ function parseArgv(argv) {
       case 'model': { const [v, ni] = takeValue(arg, i); opts.model = v; i = ni; break; }
       case 'reasoning': { const [v, ni] = takeValue(arg, i); opts.reasoning = v; i = ni; break; }
       case 'file': { const [v, ni] = takeValue(arg, i); opts.file = v; i = ni; break; }
-      case 'json': opts.json = true; break;
       default: throw new CliError(`未知参数: ${arg}`, EXIT.GENERIC, { usage: USAGE });
     }
   }

@@ -1446,4 +1446,23 @@ pm）不覆盖此形态，`cline-path` 是官方支持的第二优先级解析�
   冻结集两条⑥叙事清零三条。纯文件/纯函数断言，不依赖任何 lane 在线。
 - **抽样审计说明**：版本章瘦身以 v6.6/v6.5/v6.0 三章做逐句对照抽样（diff 在案），v6.1–v6.4 同规则
   轻瘦身；v4/v5.x 章抽查确认为实测/调研记录主体，按规则保留。
-- 发布：commit 本地完成，push 待用户指示。
+- 发布：commit `3868bde` 已推 origin/main（2026-10-03 晚网络阻断，v14.1 轮网络恢复后补推，clone 复扫校验一致）。
+
+### v6.7.1 小节：v14.1 清欠——doubao `--json` 双侧同删 + cline `result.text` 截断根因修复
+
+修复轮（无新特性；UI 契约 v1.4.0 不动）。证据、双侧同删清单与等价验证记录见 **CHANGELOG 6.7.1**；
+本章只记本轮固化的不变量与上游语义备忘：
+
+- **cline 正文裁决不变量**（`parseClineNdjson`，ask 返回值/fanout 记录/UI 历史共用出口）：
+  text = 流内全部 `contentType:"text"` 内容块按流序拼接（`content_end` 块全文=单一权威事件；流中断
+  缺块尾时用该块增量兜底，纯空白增量保留）；与 `run_result.text` 后缀关系成立取更全者，分歧以
+  `run_result.text` 为权威不臆造；run_result 缺席按 流拼接 → `done.text` 兜底。
+- **上游 compaction 语义备忘**（截断根因，2026-10-03 实测 job `20261003-171054-6tl`）：输出命中上限后
+  CLI 自动恢复=notice `max_tokens_compaction`→nudging→`prompt_submit` 重提（流内多 iteration、正文分属
+  多 text 块、模型续写）；`run_result.text`/`done.text` **只携带末次 iteration 正文**——上游摘要字段
+  有损，事件流才是单次完整的事实源（原始流始终经 rawStream 全量落盘 `*.cline-stream.jsonl`）。
+- **doubao 输出契约**：doubao.mjs 全命令无条件单行 JSON（无 `--json` 旗标；wbx-core 两处 spawn 不传）。
+- 门禁增量：v6 ③i–③p 九断言（`internal/fixtures/` 真实流 fixture——长=6tl 缩样〔仅剔 reasoning 冗余〕、
+  短=job 181835 原样拷贝；参考提取器独立复核），v6 套件 24→33。
+- 发布：随 CHANGELOG 6.7.1 同轮 commit+push；操作终态（hash/远端校验）记录在
+  `internal/archive/v14.1/v14.1-exec-log.md`。

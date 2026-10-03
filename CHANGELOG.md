@@ -2,6 +2,18 @@
 
 本文件记录 zcode-wbx-bridge 的版本变更，格式参考 Keep a Changelog。
 
+## 6.7.1 - 2026-10-03
+
+修复轮（v14.1 清欠：v14 两项登记缺陷根因化 + push 补课；授权=用户 2026-10-03「怎么执行好怎么来」「该push就push」裁量，三原则与 FROZEN 持续有效。UI 契约 v1.4.0 不动，零 UI 改动）
+
+### Fixed
+- **doubao `--json` 死旗标双侧同删**（v14「报告不做」的授权续办，ROADMAP §一·五销项）：doubao.mjs 把 `--json` 解析进 `opts.json` 但全文件零读取（emit 单行 JSON 无条件），而 wbx-core 两处 spawn（`askOnceDoubao`/`doctorStatus` 豆包段）在传它——断链旗标。根因化=双侧同删（只删一侧=留断链）：doubao.mjs 删 `case 'json'` 分支、opts 初始 `json` 字段、USAGE `global:` 行三处；wbx-core 两处 spawn args 去 `--json` + 文档注释同步。等价验证：`wbx doubao status --timeout-ms 8000` vs 直跑 `doubao.mjs status` stdout 字节一致 + stderr 一致 + 退出码一致（0/0）；grep `--json` 于 doubao.mjs/wbx-core 豆包路径零残留（cline 的 `--json` 为真实用途保留）。doubao.mjs 其余保持只读复用不动。
+- **cline lane 长回复 `result.text` 落盘截断**（ROADMAP §一·五销项；实测证据 job `20261003-171054-6tl`，3MB 事件流在案）：根因=上游 CLI 输出命中上限后自动恢复（`max_tokens_compaction`→nudging→`prompt_submit` 重提，流内 3 个 iteration），`run_result.text`/`done.text` 只携带**末次 iteration 正文**（4074 字符恰为末块全文；完整答案=iter2 1715 + iter3 4074 = **5789** 字符，分属两个 text 内容块，模型续写「### 3.（续）」语义连贯）——桥原样落盘 `run_result.text` 即截断，桥解析本身无丢字。修复落在唯一正确位置：**`parseClineNdjson`**（ask 返回值/fanout 任务记录/UI 历史共用的正文出口，单点修复全链受益）改为逐块感知裁决：正文=全部 `contentType:"text"` 内容块按流序拼接（`content_end` 块全文为单一权威事件；流中断缺块尾时用该块增量兜底、纯空白增量保留）；与 `run_result.text` 后缀关系成立取更全者，无后缀关系（流与摘要分歧）以 run_result.text 为权威不臆造，run_result 缺席按流拼接→done.text 兜底。非补丁理由：数据源头单次正确（解析层一次裁决，非事后读流文件拼接、非下游记录修补），并顺带修复旧兜底 `agentTexts.join('')` 的既有缺陷（增量/块尾全文/done.text 合收双计、`asNonEmptyString_` 过滤丢纯空白增量、流-块混拼污染）。正常路径零变化：在案 5 个正常 job 流均 1 iteration/1 text 块，流拼接==run_result.text 逐字节相等（实测复核）；门禁 v6 ③i–③p 九断言含真实流 fixture（长=6tl 缩样：5789==参考提取器、与 rr 4074 同尾、首尾双锚；短=job 181835-5zu 原样拷贝：87==87 零变化；+分歧护栏+截断兜底两护栏）。
+- 证据勘误（如实记录）：v14 落盘的 `internal/archive/v14/v14-codereview-t2-full-report.txt`（11579 字符）实为全文**两遍拼接**的重复件；真实完整答案 5789 字符。档案按「不改史」原则原样保留，真相以本条与 `internal/fixtures/` fixture 为准。
+
+### Chore
+- push 补课：v14 commit `3868bde` 已推 origin/main（网络恢复后补推成功）；远端校验走匿名 clone 复扫（gh 未登录，v11.4 先例）：远端 HEAD==3868bde、文件清单与本地 tracked 全等、敏感模式复扫仅 WBX.md 审计模式清单自引用（v6.0/v14 先例零新增）。
+
 ## 6.7.0 - 2026-10-03
 
 重构（v14 根因化最简重构轮：单一事实来源 + 叙事清零 + 联动机器化；授权=用户 2026-10-03 三原则原话——「任何修改、修复或者新增的内容，都不能以打补丁的形式完成，必须遵循最佳实践，深度融合到代码逻辑内部，通过重构、调整或者结合现有逻辑的方式实现；不从根源解决只打表面补丁，严格禁止」+「保证最终代码最简——结果简洁且完整实现需求」+ 两窗口与一切子代理都用第一性原理、尽量用内置子代理与 WBX 桥。根因诊断与收敛定案见 `internal/RESEARCH-V14.md`。UI 契约 v1.4.0 不动（wbx-ui 改动为注释级+内部派生，渲染输出经四页签实渲染与 v13/v8/ui-contract 断言验证等价）。**本轮为行为等价重构**，唯二例外：`fanout --lanes doubao` bug 对齐 help 已述契约（原被校验拒绝）、死代码删除）
