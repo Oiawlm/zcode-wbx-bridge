@@ -173,7 +173,7 @@ https://docs.z.ai/guides/overview/concept-param.md、https://docs.z.ai/devpack/r
 
 ### 5.5 DeepSeek / Cline 增量（二手，wbx L1 worker 搜索摘要产出）
 
-来源：wbx job `20260929-163005-4lq`（worker deepseek-v4.1-flash，L1 档，83.2s，WebSearch×22 / WebFetch×4，WebFetch 被 default 权限拒，要点基于搜索摘要——与 E-012 一致）；域名 api-docs.deepseek.com 与 docs.cline.bot　访问日期：2026-09-29。参数细节另见 `.zcode/skills/wb-bridge/PROMPTS.md`「DeepSeek 参数增量（2026-09-29 增补）」小节。
+来源：wbx job `20260929-163005-4lq`（worker deepseek-v4.1-flash，L1 档，83.2s，WebSearch×22 / WebFetch×4，WebFetch 被 default 权限拒，要点基于搜索摘要——与 E-012 一致）；域名 api-docs.deepseek.com 与 docs.cline.bot　访问日期：2026-09-29。参数细节另见 `.zcode/skills/wb-bridge/PROMPTS.md`「模型画像与适配」章 DeepSeek 节「参数增量」小节。
 
 - DeepSeek `reasoning_effort` 实际三档 low/high/max（none 关闭；minimal→low、medium/xhigh→high、ultra→max 兼容映射）；思考模式下 temperature 与 presence/frequency penalty 全部失效，top_p 仅思考模式生效（区间 0.95–1.0）。
 - `reasoning_content` 回传规则：带 tools 时历史全部回传并拼入上下文；不带 tools 不回传。

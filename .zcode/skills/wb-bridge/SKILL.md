@@ -84,14 +84,16 @@ node .zcode/skills/wb-bridge/scripts/wbx.mjs doctor
 子代理管理整批（构造 tasks.json → 跑 fanout → 逐份校验 → 只回传摘要 + 关键引用），主会话
 不吞全部结果文本；层级 ≤2（子代理不得再开子代理派发）。
 
-## 提示词知识库（PROMPTS.md v3）——派发前按编号取用
+## 提示词知识库（PROMPTS.md v4）——派发前按编号取用
 
 - 通用原则（14 条，含 P13 注入防御/P14 来源清单）→ PROMPTS.md §1；模板正文与填好示例 → §2
   （T1 代码 / T2 翻译 / T3 摘要 / T4 调研 / T4-L1 联网调研（L1）/ T5 结构化抽取 / T6 文案变体 /
   T7 评审批判 / T8 best-of-N / T9 修复迭代 / T10 代码自测回路（L2，未交付））
+- 模型画像与适配（DeepSeek V4.1 Flash / 豆包 2.1 Pro·推理高：定位与调用形态/提示词要点/反模式/
+  参数增量/lane 特殊性）→ 「模型画像与适配」章，按 lane 对号入座
 - 经验条目（E-001…E-012，带来源与反例）→ §3，按适用场景命中
 - 沉淀闭环（history → 复盘 → 四标准入库）→ §4 末「沉淀闭环」
-- **决策速查表（含 caps 列）+ 派发前 4 项 checklist** → §5（每次派发前扫一眼）
+- **决策速查表（含 caps 列）+ 派发前 5 项 checklist** → §5（每次派发前扫一眼）
 
 ## 使用方法
 
@@ -136,7 +138,7 @@ node .zcode/skills/wb-bridge/scripts/wbx.mjs fanout --file tasks.json [--lanes a
 
 ## worker 提示词模板（务必遵守）
 
-完整模板库见 [PROMPTS.md](PROMPTS.md)（v3：十一类模板 + 14 条原则 + 经验条目库 + 决策速查表）。
+完整模板库见 [PROMPTS.md](PROMPTS.md)（v4：十一类模板 + 14 条原则 + 模型画像与适配 + 经验条目库 + 决策速查表）。
 骨架（**能力边界声明按 caps 档位选句**，原则 2）：
 
 ```
