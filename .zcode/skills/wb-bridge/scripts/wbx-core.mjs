@@ -12,15 +12,16 @@
  * 红线：凭证（accessToken/refreshToken）绝不进入日志、文档、HTTP 响应、导出产物。
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import http from 'node:http';
 import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '6.7.1';
+export const WBX_VERSION = '6.8.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -183,6 +184,78 @@ export function resolveDoubaoDir() {
 // 快速失败（客户端未开调试口时 doubao.mjs 秒退非零）触发回退链自然跳过。
 export function doubaoReady() {
   return process.platform === 'win32' && !!resolveDoubaoDir();
+}
+
+// ---------- 豆包自动拉起（桥自治；config doubao-autostart 默认 true） ----------
+// 第一性：launch.ps1 是唯一启动器——拉起/重启/就绪轮询（≤30s /json/version）语义全部复用它，
+// 桥只做「何时调它」的决策：派发链真正到达 doubao lane 且 CDP 不可达时，无进程→直接拉起；
+// 有进程无调试口→-Force 重启（等价 launch.ps1 -Force 语义：taskkill 后等归零再拉起）。
+// 成功路径（CDP 在线）零触碰豆包：askOnceDoubao 只在收到 CDP 不可达失败后才进来。
+export const DOUBAO_CDP_PORT = 9225;
+
+// CDP 在线探测（GET /json/version；200+合法 JSON+非空 Browser 才算在线——9225 被其他进程
+// 占用时因 Browser 校验不过判不在线）。任何异常降级 false，绝不 throw。
+export function doubaoCdpOnline(timeoutMs = 900) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    let req = null;
+    try {
+      req = http.get(`http://127.0.0.1:${DOUBAO_CDP_PORT}/json/version`, (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (c) => { body += c; if (body.length > 65536) { try { req.destroy(); } catch { /* 尽力而为 */ } finish(false); } });
+        res.on('end', () => {
+          if (res.statusCode !== 200) return finish(false);
+          let j = null;
+          try { j = JSON.parse(body); } catch { j = null; }
+          finish(!!(j && typeof j.Browser === 'string' && j.Browser.trim() !== ''));
+        });
+        res.on('error', () => finish(false));
+      });
+    } catch { finish(false); return; }
+    req.on('error', () => finish(false));
+    req.setTimeout(timeoutMs, () => { try { req.destroy(); } catch { /* 尽力而为 */ } finish(false); });
+  });
+}
+
+// 豆包进程探测（tasklist 过滤 Doubao.exe，3s 封顶；异常降级 false）——决定 launch.ps1 是否带 -Force
+function doubaoProcessRunning() {
+  if (process.platform !== 'win32') return false;
+  try {
+    const r = spawnSync('tasklist', ['/FI', 'IMAGENAME eq Doubao.exe', '/NH'], { timeout: 3000, encoding: 'utf8', windowsHide: true });
+    return !!(r && !r.error && r.stdout && /doubao\.exe/i.test(String(r.stdout)));
+  } catch { return false; }
+}
+
+let doubaoEnsureFlight_ = null;   // 单飞锁：并发派发共享同一次拉起，绝不双拉
+/**
+ * 确保豆包以调试口运行（幂等）：CDP 在线→零触碰原样返回；不可达→经 launch.ps1 拉起/重启。
+ * 返回 { ok, action: 'online'|'launched'|'restarted'|'failed'|'unavailable', detail?, exitCode? }。
+ * action=unavailable：非 Windows 或找不到 doubao.mjs（可选 lane 缺席，如实报告不重试）。
+ */
+export async function ensureDoubao() {
+  const cfg = loadConfig();
+  if (cfg['doubao-autostart'] === false) return { ok: false, action: 'failed', detail: 'doubao-autostart=off（自动拉起已关闭）' };
+  if (doubaoEnsureFlight_) return doubaoEnsureFlight_;
+  doubaoEnsureFlight_ = (async () => {
+    if (await doubaoCdpOnline()) return { ok: true, action: 'online' };
+    const dir = resolveDoubaoDir();
+    if (!dir || process.platform !== 'win32') {
+      return { ok: false, action: 'unavailable', detail: '豆包桥不可用（非 Windows 或未找到 doubao.mjs；在桥源码仓跑 wbx self-install）' };
+    }
+    const running = doubaoProcessRunning();
+    const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(dir, 'launch.ps1'), ...(running ? ['-Force'] : [])];
+    // launch.ps1 内部含 15s kill 等待 + 30s 就绪轮询，90s 封顶防挂
+    const r = await spawnBin('powershell', args, { timeoutMs: 90000 });
+    if (r.code === 0) {
+      return { ok: true, action: running ? 'restarted' : 'launched' };
+    }
+    const out = ansiStrip(String(r.stdout || '') + '\n' + String(r.stderr || '')).trim().split(/\r?\n/).filter(Boolean).slice(-3).join(' / ');
+    const reason = r.timedOut ? 'launch.ps1 超时（>90s）' : (brief(out) || `launch.ps1 exit=${r.code}`);
+    return { ok: false, action: 'failed', detail: `自动拉起失败（${reason}）`, exitCode: r.code };
+  })().finally(() => { doubaoEnsureFlight_ = null; });
+  return doubaoEnsureFlight_;
 }
 
 // ---------- cline 免费模型清单（recommended-models 端点） ----------
@@ -491,6 +564,14 @@ export const CONFIG_DEFS = {
     type: 'int', min: 1, max: 2, default: 1,
     desc: 'doubao lane 并发上限（默认 1，上限 2——单客户端 UI 串行保护：豆包桌面端一次只呈现一个工作任务，多并发会互相打断）',
   },
+  'doubao-autostart': {
+    type: 'boolean', default: true,
+    desc: '豆包客户端自动拉起（v6.8 桥自治，默认开）：派发链真正到达 doubao lane 且调试口 9225 不可达时，自动经 launch.ps1 拉起（已运行实例带 -Force 重启）；off=保持现状（快速失败回退，绝不碰豆包进程）',
+  },
+  'cline-auto-heal': {
+    type: 'boolean', default: true,
+    desc: 'cline 模型自愈（v6.8 桥自治，默认开）：配置 id 被免费组轮换下线（model-not-found 且实时清单确认不在组内）时，自动切换免费组首个可用 id、写回 config 并在派发链内重投一次；Daily limit（配额耗尽）不触发换模型，失败回退 ai/cn 语义不变',
+  },
   'default-caps': {
     type: 'enum', values: ['L0', 'L1', 'L2'], default: 'L0',
     desc: 'ask/fanout 缺省能力档：L0 纯文本（出厂默认，零回退）| L1 只读+联网（仅 ai/cn）| L2（本版未交付，声明即报错）',
@@ -544,6 +625,9 @@ export function loadConfig() {
   if (!Number.isInteger(out['doubao-parallel']) || out['doubao-parallel'] < 1 || out['doubao-parallel'] > 2) {
     out['doubao-parallel'] = 1;
   }
+  // 桥自治双键（v6.8）：非布尔回缺省 true（出厂开启；off 才是用户显式退出）
+  if (typeof out['doubao-autostart'] !== 'boolean') out['doubao-autostart'] = true;
+  if (typeof out['cline-auto-heal'] !== 'boolean') out['cline-auto-heal'] = true;
   // caps 键：default-caps 非法回退 L0；caps-l2-enabled 非布尔回退 false（出厂缺省）
   if (!CAPS_LEVELS.includes(out['default-caps'])) out['default-caps'] = 'L0';
   if (typeof out['caps-l2-enabled'] !== 'boolean') out['caps-l2-enabled'] = false;
@@ -708,6 +792,86 @@ export function laneStatusInfo(laneKey) {
     expiresInDays,
     templateExists: fs.existsSync(id.templatePath),
   };
+}
+
+// ---------- lane 余额探测（wbx usage 与 UI /api/balance 共用） ----------
+const LANE_BAL_CACHE = new Map();
+const balNum = (v) => (Number.isFinite(Number(v)) ? Number(v) : NaN);
+const BAL_NA_HINT = {
+  cline: '免费孪生无余额端点（官方未提供）',
+  doubao: '会员额度无 API——余额在豆包客户端内查看',
+};
+
+/**
+ * 探测 lane 余额（数据源：非官方社区 billing 端点 POST {endpoint}/billing/meter/get-user-resource，
+ * 官方未公开、实测可用（internal/archive/v16/v16-balance-recon.md），可能随上游改版失效，
+ * 失败一律优雅降级、绝不阻塞调用方）。模块级 TTL 缓存（默认 300000ms）仅缓存成功结果，
+ * ttl 内命中直接返回且 asOf 不刷新；失败结果绝不缓存、下次调用重试；force=true 跳过读缓存
+ * 但成功后照常写缓存，缓存对象绝不含 accessToken。凭证零进入：返回值绝不含 accessToken 及
+ * Uin/AppId/AccountId/DealName/PackageName 等账号侧字段。remain/total 保留原始精度不做四舍五入
+ * （展示层负责格式化）。绝不 throw、绝不 console 打印、绝不重试。
+ */
+export async function laneBalance(laneKey, { ttlMs = 300000, force = false } = {}) {
+  try {
+    return await laneBalanceProbe_(laneKey, { ttlMs, force });
+  } catch {
+    return { state: 'unavailable', hint: '探测异常', stability: 'community' };   // 兜底：任何未预期异常优雅降级
+  }
+}
+
+async function laneBalanceProbe_(laneKey, { ttlMs = 300000, force = false } = {}) {
+  if (laneKey !== 'ai' && laneKey !== 'cn') {
+    return { state: 'na', hint: BAL_NA_HINT[laneKey] || '未知 lane，无余额端点' };
+  }
+
+  const hit = !force && LANE_BAL_CACHE.get(laneKey);
+  if (hit && Date.now() - hit.at < ttlMs) return hit.value;
+
+  const session = readSession(laneKey);
+  if (!session || !session.auth || !session.auth.accessToken) {
+    return { state: 'unavailable', hint: '未登录（wbx login 后可查）', stability: 'community' };
+  }
+
+  const res = await httpJson('POST', `${session.endpoint}/billing/meter/get-user-resource`, {
+    headers: { Authorization: 'Bearer ' + session.auth.accessToken, 'X-Client-Platform': 'web' },
+    body: { PageNumber: 1, PageSize: 200, Status: [0, 3], OnlyValidPeriod: true },
+    timeoutMs: 15000,   // 侦察实证：国际版宿主常态 8-12s（internal/archive/v16/v16-balance-recon.md），10s 边缘超时
+  });
+
+  const status = res && typeof res.status === 'number' ? res.status : 0;
+  if (status !== 200) {
+    return { state: 'unavailable', hint: `端点不可用（HTTP ${status}）`, stability: 'community' };
+  }
+  const accounts = res.json && res.json.code === 0
+    ? res.json.data && res.json.data.Response && res.json.data.Response.Data && res.json.data.Response.Data.Accounts
+    : null;
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    return { state: 'unavailable', hint: '端点返回异常', stability: 'community' };
+  }
+
+  let total = 0;
+  let remain = 0;
+  let unit;
+  for (const a of accounts) {
+    const cap = balNum(a && a.CapacitySize);
+    if (!Number.isNaN(cap)) total += cap;
+    let r = balNum(a && a.CycleCapacityRemain);
+    if (Number.isNaN(r)) r = balNum(a && a.CapacityRemain);
+    if (!Number.isNaN(r)) remain += r;
+    if (unit == null && a && a.CapacityUnit) unit = a.CapacityUnit;
+  }
+
+  const value = {
+    state: 'ok',
+    remain,
+    total,
+    unit,
+    asOf: new Date().toISOString(),
+    stability: 'community',
+    packages: accounts.length,
+  };
+  LANE_BAL_CACHE.set(laneKey, { at: Date.now(), value });
+  return value;
 }
 
 // 默认路由：config.default-lane 固定任一 lane（未禁用），否则 auto（enabled+已登录 里 ai 优先，doubao 最末）
@@ -1231,6 +1395,36 @@ export async function runClineAuth() {
   return { exitCode, ok: clineHasCredential() };
 }
 
+// ---------- cline 模型自愈（桥自治；config cline-auto-heal 默认 true） ----------
+// 边界（用户 2026-10-08 定案）：本函数只做「配置修复」——配置 id 被免费组轮换下线
+//（失败分类 hint=model-not-found 且经 recommended-models 实时清单确认确实不在免费组）时，
+// 自动切换免费组首个可用 id 并写回 config，由调用方在派发链内重投一次；再失败照旧回退 ai/cn。
+// 「失败回退只投 ai/cn、绝不换非 DeepSeek 顶替」定案继续有效——它约束失败回退语义，
+// 不约束配置修复（免费组当前可含非 DeepSeek 孪生，修复结果如实标注 cline-model-healed）。
+// Daily limit（配额耗尽）绝不触发换模型。任何前置不满足返回 null（不写 config、不抛异常）。
+// usedModel：本次实际使用的模型 id（任务级显式 model 优先）。仅当显式 model 为空或恰为 config 值
+// 才自愈——失败来自任务级指定模型时不属配置失配，绝不改写 config。
+// 单飞锁：并发 cline 任务共享同一次修复（清单只取一次、config 只写一次、日志只说一次）。
+let clineHealFlight_ = null;
+export async function healClineModelIfNeeded(failRes, { log = () => {}, usedModel = null } = {}) {
+  if (loadConfig()['cline-auto-heal'] === false) return null;
+  if (!failRes || failRes.hint !== 'model-not-found') return null;
+  const cur = loadConfig()['cline-model'] || CLINE_FREE_DEFAULT_MODEL;
+  if (usedModel != null && usedModel !== cur) return null;   // 失败来自任务级显式模型：非配置失配，不改写 config
+  if (clineHealFlight_) return clineHealFlight_;
+  clineHealFlight_ = (async () => {
+    const fm = await fetchClineFreeModels();
+    if (!fm.ok || !Array.isArray(fm.models) || !fm.models.length) return null;   // 清单不可用：无从修复，交回退链
+    const curNow = loadConfig()['cline-model'] || CLINE_FREE_DEFAULT_MODEL;
+    if (fm.models.some((m) => m.id === curNow)) return null;   // 配置 id 仍在免费组：失败另有原因，不属本函数职责
+    const next = fm.models[0].id;
+    await setConfig('cline-model', next);
+    log(`cline auto-heal：配置模型 ${curNow} 已被免费组轮换下线，自动切换 -> ${next}（已写回 config，链内重投一次）`);
+    return { from: curNow, to: next };
+  })().finally(() => { clineHealFlight_ = null; });
+  return clineHealFlight_;
+}
+
 // ---------- doubao lane：末行 JSON 解析 + 一次性调用 ----------
 /**
  * parseDoubaoPayload —— 纯函数：doubao.mjs 所有命令都以 stdout 末行单行 JSON 收口（emit()）。
@@ -1255,7 +1449,9 @@ export function parseDoubaoPayload(stdoutText) {
  * doubao lane 一次性纯文本调用（第四 lane；会员额度，免费优先序最末；授权与额度口径见 CHANGELOG 6.6.0）。
  * 命令行：node <doubao.mjs> ask "<提示词>" | --file <临时文件> --timeout-ms <桥侧超时>
  * 桥侧零凭证：登录态在豆包客户端 GUI 内自理；客户端未以调试口 9225 运行时 doubao.mjs
- * exit 3 快速失败（秒退）→ 回退链自然跳过。>STDIN_THRESHOLD 字符走 --file 临时文件（同
+ * exit 3 快速失败（秒退）——v6.8 起 cdpDown 失败按 config doubao-autostart（默认开）经
+ * ensureDoubao 自动拉起/重启一次并重投（结果带 autostart 标注）；off 时保持现状秒退回退。
+ * >STDIN_THRESHOLD 字符走 --file 临时文件（同
  * ai/cn/cline 的 stdin 阈值语义，绕过 Windows 命令行长度上限），用完即删。任务级 model/effort
  * 对 doubao 不生效（工具自管理豆包 2.1 Pro + 推理高，ask 每次发送前自动重验配置），model 参数仅保持签名兼容。
  * caps：仅 L0；L1/L2 明确报错（caps-lane-mismatch——豆包桌面 agent 不受桥控、无法承诺
@@ -1295,35 +1491,61 @@ export async function askOnceDoubao({ prompt, model = null, timeoutMs = 300000, 
     args.push(prompt);
   }
 
-  const t0 = Date.now();
-  const r = await spawnBin(process.execPath, args, { timeoutMs: timeoutMs + 20000 });
-  const durationMs = Date.now() - t0;
-  if (tmpFile) { try { fs.rmSync(tmpFile, { force: true }); } catch { /* 清理失败不影响主流程 */ } }
-  const stdout = ansiStrip(r.stdout || '');
-  const stderr = ansiStrip(r.stderr || '');
-  const payload = parseDoubaoPayload(stdout);
-  const combined = stdout + '\n' + stderr;   // 失败 attempt 全量输出（随失败结果返回，编排器落盘）
-
-  if (r.timedOut) {
-    return { ok: false, kind: 'timeout', error: `执行超时（> ${Math.round(timeoutMs / 1000)}s，桥侧兜底 kill）`, durationMs, combined };
-  }
-  if (r.code !== 0 || !payload || payload.ok !== true || typeof payload.text !== 'string') {
-    const reason = payload && payload.reason ? String(payload.reason) : (brief(stderr || combined) || `exit=${r.code}，无输出`);
-    // 调试口不可达（客户端未以调试口 9225 运行，doubao.mjs exit 3）：fix-hint 指向 launch.ps1 与 doctor
-    const cdpDown = r.code === 3 || /CDP 不可达/i.test(reason);
+  // 单次派发（成功路径仅此一次执行；自动拉起后的重投只发生在 CDP 不可达失败之后）
+  const runOnce = async () => {
+    const t0 = Date.now();
+    const r = await spawnBin(process.execPath, args, { timeoutMs: timeoutMs + 20000 });
+    const stdout = ansiStrip(r.stdout || '');
+    const stderr = ansiStrip(r.stderr || '');
     return {
-      ok: false,
-      kind: 'cli-error',
-      error: cdpDown ? `豆包客户端调试口不可达（${reason}）` : reason,
-      durationMs, combined,
-      hint: cdpDown ? 'doubao-launch' : undefined,
+      r, stdout, stderr,
+      payload: parseDoubaoPayload(stdout),
+      durationMs: Date.now() - t0,
+      combined: stdout + '\n' + stderr,   // 失败 attempt 全量输出（随失败结果返回，编排器落盘）
     };
-  }
-  return {
-    ok: true, text: payload.text, usage: null, durationMs,
-    model: typeof payload.modelAtSend === 'string' && payload.modelAtSend ? payload.modelAtSend : '豆包 2.1 Pro',
-    raw: payload,
   };
+  const classify = (a) => {
+    if (a.r.timedOut) {
+      return { ok: false, kind: 'timeout', error: `执行超时（> ${Math.round(timeoutMs / 1000)}s，桥侧兜底 kill）`, durationMs: a.durationMs, combined: a.combined };
+    }
+    if (a.r.code !== 0 || !a.payload || a.payload.ok !== true || typeof a.payload.text !== 'string') {
+      const reason = a.payload && a.payload.reason ? String(a.payload.reason) : (brief(a.stderr || a.combined) || `exit=${a.r.code}，无输出`);
+      // 调试口不可达（客户端未以调试口 9225 运行，doubao.mjs exit 3）：fix-hint 指向 launch.ps1 与 doctor
+      const cdpDown = a.r.code === 3 || /CDP 不可达/i.test(reason);
+      return {
+        ok: false,
+        kind: 'cli-error',
+        error: cdpDown ? `豆包客户端调试口不可达（${reason}）` : reason,
+        durationMs: a.durationMs, combined: a.combined,
+        hint: cdpDown ? 'doubao-launch' : undefined,
+        cdpDown,
+      };
+    }
+    return {
+      ok: true, text: a.payload.text, usage: null, durationMs: a.durationMs,
+      model: typeof a.payload.modelAtSend === 'string' && a.payload.modelAtSend ? a.payload.modelAtSend : '豆包 2.1 Pro',
+      raw: a.payload,
+    };
+  };
+
+  let res = classify(await runOnce());
+  // 桥自治：CDP 不可达时按 doubao-autostart（默认开）自动拉起/重启一次并重投。
+  // 成功路径零触碰豆包（ensure 只在本失败分支进入）；off 时与现状完全一致（快速失败回退）。
+  if (!res.ok && res.cdpDown && loadConfig()['doubao-autostart'] !== false) {
+    const firstCombined = res.combined;   // 首次 CDP 不可达 attempt 全量输出（重投失败时随结果落盘，排查不失真）
+    const ens = await ensureDoubao();
+    if (ens.ok) {
+      res = classify(await runOnce());
+      res.autostart = ens.action;        // launched|restarted|online（任务成功与仍失败都如实标注）
+      if (!res.ok && res.combined) res.combined = `${res.combined}\n[首次 attempt·CDP 不可达]\n${firstCombined}`;
+    } else {
+      res.autostart = ens.action;        // failed | unavailable（原样保留，不压扁语义）
+      if (ens.detail) res.error = `${res.error}；${ens.detail}`;
+    }
+  }
+  delete res.cdpDown;
+  if (tmpFile) { try { fs.rmSync(tmpFile, { force: true }); } catch { /* 清理失败不影响主流程 */ } }
+  return res;
 }
 
 // ---------- 统一 job 模型（ask/fanout 都落盘，可回放） ----------
@@ -1604,12 +1826,22 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
   const job = await createJob('ask', { promptPreview: brief(prompt, 120), as: as || 'auto', model: resolveModel(model), effort, timeoutS: effTimeoutS, caps: capsLevel }, { lanes: chain, tasksInput: [{ id: 'ask', prompt, ...(capsLevel !== 'L0' ? { caps: capsLevel } : {}), ...(mt != null ? { maxTurns: mt } : {}) }], jobId });
   const l1Scratch = capsLevel === 'L1' ? ensureScratch('job-' + job.id) : null;
 
-  let usedLane = null, res = null, attempts = 0;
+  let usedLane = null, res = null, attempts = 0, clineHeal = null;
   for (const lane of chain) {
     attempts++;
     res = await askOnce({ lane, prompt, model, effort, timeoutMs: effTimeoutS * 1000, caps: capsLevel, scratchDir: l1Scratch, maxTurns: mt });
     if (res.ok) { usedLane = lane; break; }
     await dumpFailedAttempt(job.dir, 'ask', attempts, res);   // 失败 attempt 全量落盘+指针
+    // cline auto-heal：配置修复（写回 config）后链内重投一次；重投仍失败照旧走后续回退
+    if (lane === 'cline') {
+      clineHeal = await healClineModelIfNeeded(res, { log: console.error, usedModel: model });
+      if (clineHeal) {
+        attempts++;
+        res = await askOnce({ lane, prompt, model: null, effort, timeoutMs: effTimeoutS * 1000, caps: capsLevel, scratchDir: l1Scratch, maxTurns: mt });   // model:null -> 用已 heal 的 config 值
+        if (res.ok) { usedLane = lane; break; }
+        await dumpFailedAttempt(job.dir, 'ask', attempts, res);
+      }
+    }
     if (lane !== primary) break;
     if (fb) console.error(`[WARN] lane ${lane} 失败（kind=${res.kind}），自动改投 lane ${fb}…`);
   }
@@ -1624,6 +1856,8 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
     caps: capsLevel,
     usage: res?.usage || null,
   };
+  if (clineHeal && usedLane === 'cline') rec['cline-model-healed'] = `${clineHeal.from}→${clineHeal.to}`;   // 结果 meta：旧→新（仅 heal 重投真正产出结果时标注）
+  if (res?.autostart) rec['doubao-autostart'] = res.autostart;                     // 结果 meta：launched|restarted|online|failed
   if (res?.ok) rec.result = res.text; else { rec.error = `${res?.kind}: ${res?.error || ''}`; if (res?.hint) rec.hint = res.hint; if (res?.resetIn) rec.resetIn = res.resetIn; }
   if (res?.ok && res.toolTrace) rec.toolTrace = res.toolTrace;   // L1 工具轨迹摘要（工具名+次数+参数截断）
   if (res?.rawStream) {
@@ -1639,7 +1873,7 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
   await fsp.writeFile(path.join(job.dir, 'summary.md'), md, 'utf8');
 
   if (res?.ok) {
-    return { ok: true, jobId: job.id, jobDir: job.dir, lane: usedLane, fallbackFrom: usedLane !== primary ? primary : null, model: res.model, usage: res.usage, durationMs: res.durationMs, text: res.text, caps: capsLevel, ...(res.toolTrace ? { toolTrace: res.toolTrace } : {}) };
+    return { ok: true, jobId: job.id, jobDir: job.dir, lane: usedLane, fallbackFrom: usedLane !== primary ? primary : null, model: res.model, usage: res.usage, durationMs: res.durationMs, text: res.text, caps: capsLevel, ...(res.toolTrace ? { toolTrace: res.toolTrace } : {}), ...((clineHeal && usedLane === 'cline') ? { clineModelHealed: clineHeal } : {}) };
   }
   return { ok: false, jobId: job.id, jobDir: job.dir, lane: primary, kind: res?.kind, error: res?.error, hint: res?.hint, caps: capsLevel, ...(res?.resetIn ? { resetIn: res.resetIn } : {}) };
 }
@@ -1702,7 +1936,20 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
         lane = (dl === 'ai' || dl === 'cn') ? dl : 'ai';
       }
     }
-    tasks.push({ id, prompt: String(t.prompt), lane, model: t.model || null, effort: t.effort || null, caps: taskCaps || null, effCaps, ...(taskMaxTurns != null ? { maxTurns: taskMaxTurns } : {}) });
+    // filesMode 任务契约：reference=材料播种（L1 worker 自读），缺省 inline=既有拼装（字节兼容）。
+    // reference 强制任务级 caps:"L1" 显式声明（L0 无工具无法自读——缺省/继承/L0 均显式报错，绝不静默降档）。
+    let filesMode = null;
+    if (t.filesMode != null && t.filesMode !== 'inline') {
+      if (t.filesMode !== 'reference') throw new Error(`任务 ${t.id ?? id} 的 filesMode 只支持 "inline" | "reference"（收到 ${JSON.stringify(t.filesMode)}）`);
+      if (t.caps !== 'L1') throw new Error(`任务 ${t.id ?? id}：filesMode:"reference" 需要任务级 "caps":"L1" 显式声明（L0 无工具无法自读，绝不静默降档；缺省或继承 config 均不接受）`);
+      if (!Array.isArray(t.files) || !t.files.length) throw new Error(`任务 ${t.id ?? id}：filesMode:"reference" 需要非空 files 数组`);
+      for (const f of t.files) {
+        if (!f || typeof f.rel !== 'string' || typeof f.abs !== 'string') throw new Error(`任务 ${t.id ?? id}：reference files 元素需为 {rel, abs}（CLI 侧已解析；收到 ${JSON.stringify(f).slice(0, 80)}）`);
+        if (path.isAbsolute(f.rel) || String(f.rel).split(/[\\/]+/).includes('..')) throw new Error(`任务 ${t.id ?? id}：reference rel 路径必须相对且不得越界（收到 ${f.rel}）`);
+      }
+      filesMode = 'reference';
+    }
+    tasks.push({ id, prompt: String(t.prompt), lane, model: t.model || null, effort: t.effort || null, caps: taskCaps || null, effCaps, ...(filesMode ? { filesMode, files: t.files } : {}), ...(taskMaxTurns != null ? { maxTurns: taskMaxTurns } : {}) });
   }
 
   const laneParallel = Math.max(1, parallel ?? cfg['parallel-per-lane'] ?? 2);
@@ -1744,7 +1991,43 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     // L1：任务级超时上浮 + 每 job 每 task 独立 scratch（读边界）
     const taskTimeoutMs = capsLevel === 'L1' ? Math.max(timeoutMs, 600000) : timeoutMs;
     const l1Scratch = capsLevel === 'L1' ? ensureScratch(`job-${job.id}-${task.id}`) : null;
-    let res = null, attempts = 0;
+    // 材料播种：reference 任务把 files 复制进 scratch（保持相对路径结构，rel 已在任务校验防越界），
+    // 提示词材料区只有清单+路径——worker 用 Read 工具自行读取（重试复用同一 scratch，不重复播种判断）
+    let seededFiles = null;
+    let seedError = null;
+    if (task.filesMode === 'reference' && l1Scratch && !task._seeded) {
+      seededFiles = [];
+      try {
+        for (const f of task.files) {
+          const dest = path.join(l1Scratch, f.rel);
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          fs.copyFileSync(f.abs, dest);
+          seededFiles.push(f.rel);
+        }
+      } catch (e) {
+        seedError = `材料播种失败：${e?.message || e}`;
+        seededFiles = null;
+      }
+      if (!seedError) {
+        task._seeded = true;   // 全部成功才置位（半份材料绝不静默复用）
+        say(`${task.id} 材料播种 -> scratch（${seededFiles.length} 个文件）`);
+      }
+    }
+    if (seedError) {
+      // 播种失败=任务级失败：无材料投递无意义，不重试不回退，如实落盘
+      const rec = {
+        id: task.id, lane, status: 'failed', attempts: 0,
+        durationMs: Date.now() - started,
+        model: resolveModel(task.model), effort: task.effort || null,
+        caps: capsLevel, usage: null, error: seedError,
+        ...(task.filesMode === 'reference' ? { filesMode: 'reference' } : {}),
+      };
+      results[task.index] = rec;
+      await writeTaskRecord(job.dir, rec);
+      say(`${task.id}@${lane} -> failed（${seedError}）`);
+      return;
+    }
+    let res = null, attempts = 0, clineHeal = null;
     for (let a = 0; a <= retryN; a++) {
       attempts = a + 1;
       res = await askOnce({ lane, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs: taskTimeoutMs, caps: capsLevel, scratchDir: l1Scratch, maxTurns: task.maxTurns ?? null });
@@ -1754,6 +2037,16 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       if (a < retryN) {
         say(`${task.id}@${lane} 失败（${res.kind}），${rl ? '5s' : '2s'} 后重试 ${a + 1}/${retryN}`);
         await sleep(rl ? 5000 : 2000);
+      }
+    }
+    // cline auto-heal：配置修复（写回 config）后重投一次；仍失败照旧走跨 lane 回退
+    if (!res.ok && lane === 'cline') {
+      clineHeal = await healClineModelIfNeeded(res, { log: say, usedModel: mdl });
+      if (clineHeal) {
+        attempts++;
+        say(`${task.id}@cline auto-heal -> ${clineHeal.to}，重投一次`);
+        res = await askOnce({ lane, prompt: task.prompt, model: null, effort: task.effort, timeoutMs: taskTimeoutMs, caps: capsLevel, scratchDir: l1Scratch, maxTurns: task.maxTurns ?? null });   // model:null -> 用已 heal 的 config 值
+        if (!res.ok) await dumpFailedAttempt(job.dir, task.id, attempts, res);
       }
     }
     let usedLane = lane, fallbackFrom = null;
@@ -1781,6 +2074,9 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       caps: capsLevel,
       usage: res.usage || null,
     };
+    if (clineHeal && usedLane === 'cline') rec['cline-model-healed'] = `${clineHeal.from}→${clineHeal.to}`;   // 结果 meta：旧→新（仅 heal 重投真正产出结果时标注）
+    if (res.autostart) rec['doubao-autostart'] = res.autostart;                      // 结果 meta：launched|restarted|online|failed
+    if (task.filesMode === 'reference') { rec.filesMode = 'reference'; rec.seededFiles = seededFiles; }   // scratch 播种快照记入 job
     if (res.ok) rec.result = res.text;
     else rec.error = `${res.kind}: ${res.error || ''}`;
     if (res.ok && res.toolTrace) rec.toolTrace = res.toolTrace;   // L1 工具轨迹摘要
@@ -2058,7 +2354,10 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
           steps.push({ name: 'cline-free', good: true, detail: fd });
           say(`[OK]   免费模型 ${fd}`);
         } else {
-          const fd = `cline-model=${curModel} 不在当前免费组（可能已被轮换下线，或为计费 id）。当前免费：${fm.models.map((m) => m.id).join('、')}${srcNote}。换用：wbx config set cline-model "<免费 id>"（清单：wbx models --as cline --free）`;
+          const healNote = cfgC['cline-auto-heal'] === false
+            ? '换用：wbx config set cline-model "<免费 id>"（清单：wbx models --as cline --free）'
+            : 'cline-auto-heal 已开启：下次派发到达 cline lane 失败时将自动切换免费组可用 id 并写回 config（也可手动：wbx config set cline-model "<免费 id>"，清单：wbx models --as cline --free）';
+          const fd = `cline-model=${curModel} 不在当前免费组（可能已被轮换下线，或为计费 id）。当前免费：${fm.models.map((m) => m.id).join('、')}${srcNote}。${healNote}`;
           steps.push({ name: 'cline-free', good: null, detail: fd });
           say(`[WARN] 免费模型 ${fd}`);
         }
@@ -2120,9 +2419,12 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
         steps.push({ name: 'lane-doubao', good: true, detail: probeDetail });
         say(`[OK]   桌面端   ${probeDetail}`);
       } else {
-        // WARN 而非 FAIL：拉起豆包属用户侧动作（launch.ps1），不影响 ai/cn/cline 主通道
+        // WARN 而非 FAIL：拉起属用户侧动作，不影响 ai/cn/cline 主通道（doctor 保持只读、绝不带 ensure 副作用）
         steps.push({ name: 'lane-doubao', good: null, detail: probeDetail });
-        say(`[WARN] 桌面端   ${probeDetail}。拉起：powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"（详情：wbx doubao status）`);
+        const autoNote = loadConfig()['doubao-autostart'] === false
+          ? `拉起：powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"（详情：wbx doubao status）`
+          : `派发到达豆包 lane 时将自动拉起/重启（doubao-autostart=true；现在手动拉起：powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"，详情：wbx doubao status）`;
+        say(`[WARN] 桌面端   ${probeDetail}。${autoNote}`);
       }
       laneRows.push({ ...dinfo, probe: { good: online, detail: probeDetail } });
     }

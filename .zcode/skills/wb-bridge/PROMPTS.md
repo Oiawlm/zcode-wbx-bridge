@@ -370,7 +370,8 @@ CodeBuddy CLI 是腾讯推出的 Agent 命令行工具，桌面版 WorkBuddy 通
 ### T4-L1 联网调研变体（L1）
 
 > v3 新增（初稿由 wbx fanout 外包产出，job 20260925-195611-afc A/B 双份择优取 A 并经 ZCode 修订）。
-> **调用形态**：`--caps L1`（仅 ai/cn lane；桥自动落 `--tools "WebSearch,WebFetch,Read,Glob,Grep" --permission-mode default --max-turns 8`，cwd=空 scratch；缺省超时上浮 600s）。
+> **调用形态**：`--caps L1`（仅 ai/cn lane；桥自动落 `--tools "WebSearch,WebFetch,Read,Glob,Grep" --permission-mode default --max-turns 24`（缺省=config caps-l1-max-turns），cwd=空 scratch；缺省超时上浮 600s）。
+> **材料播种（filesMode）**：大材料任务在 tasks.json 加 `"filesMode":"reference"` + 任务级 `"caps":"L1"`（缺省/L0 显式报错）——桥把 files 复制进该任务 scratch（保持相对路径），提示词材料区只有清单+相对路径，worker 用 Read 工具自读；仅 ai/cn（L1 既有边界）。
 > 实测注记（E-012）：default 档下 WebSearch 是主力；WebFetch 可能被权限询问拒绝（模型自行退回
 > 搜索结果摘要，产出不受阻）。bridge L1 端到端先例：job 20260925-201509-h7t（来源清单 9 条）。
 
@@ -981,7 +982,7 @@ E2（parse-duration.js:17）→ parseInt(match[1], 10) 截断小数，即便正�
 | 翻译 | T2 | L0 | medium | 原文 | 信达雅 + 文化内涵调整 |
 | 摘要 | T3 | L0 | medium | 原文 | 一句话/N 条要点，不加材料外信息 |
 | 调研整理（无时效依赖） | T4 | L0 | medium | 模型已有知识 | 时效声明 + 未证实处标（待核实） |
-| 时效性调研/大上下文联网 | T4-L1 | **L1**（--caps L1，仅 ai/cn） | medium | worker 自检索 + 来源清单 | 注入防御句 + 来源清单（URL｜访问时间）+ UNKNOWN 不编造 |
+| 时效性调研/大上下文联网 | T4-L1 | **L1**（--caps L1，仅 ai/cn） | medium | worker 自检索 + 来源清单；大材料任务加 filesMode:"reference"（桥把 files 播种进 scratch，worker Read 自读，须显式 caps:"L1"） | 注入防御句 + 来源清单（URL｜访问时间）+ UNKNOWN 不编造 |
 | 代码自测回路（写→跑→修） | T10 | **L2 未交付**（声明即报错） | high | 契约+材料+验收命令 | 轨迹报告 + 自测结论；自述不构成证据 |
 | 文案变体/打标 | T6 | L0 | medium | 原文案 | 不承诺材料外功能，不编数据 |
 | 简单单任务 | 直派（T1–T6 单用） | L0 | medium | 内联 | 产物形态与边界一句话说清 |

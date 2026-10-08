@@ -97,6 +97,8 @@ v3 的 `self-uninstall` 会顺带做同一件事，无需重复执行。
 | npm 全局包 `cline` | Cline CLI 本体（平台二进制，约 140MB） | `npm uninstall -g cline` |
 | `~/.wbx/cline-home/` | 桥的 cline 隔离主目录：`.cline/data/settings/providers.json`（OAuth 凭证）、db、日志、会话 + `work/`（空工作目录）。桥通过 HOME/USERPROFILE 覆盖把 cline 状态全部约束在此（实测 3.0.65 的 `--data-dir` 不可用，详见 WBX.md v5 章） | `Remove-Item -Recurse -Force "$env:USERPROFILE\.wbx\cline-home"` |
 | config 的 `cline-*` 键 | cline-path / cline-data-dir / cline-provider / cline-model / cline-thinking / cline-compaction / cline-parallel | 随 `--purge` 连 config.json 一起删；或逐键 `wbx config set <key> ""` 清空 |
+| config 的桥自治双键 | doubao-autostart / cline-auto-heal（默认 true；off 即关闭对应自动化） | 随 `--purge` 连 config.json 一起删；或 `wbx config set <key> false` 关闭 |
+| v16 说明 | 余额查询/双主题/PWA manifest 与图标均为运行时自产自绘（零落盘、零外部资源、零新安装物）——卸载面无变化 | 控制台关闭即全部消失 |
 
 - 只停用不删除：`wbx config set disabled-lanes '["cline"]'`（路由/回退/fanout 全链路跳过，
   doctor 标注「已禁用」），或 `npm uninstall -g cline`（doctor 显示「未安装（可选）」，不影响

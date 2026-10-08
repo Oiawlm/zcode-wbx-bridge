@@ -75,8 +75,9 @@ node .zcode/skills/wb-bridge/scripts/wbx.mjs doctor
 - **L0 纯文本**（默认，config `default-caps`）：四 lane 全部（ai/cn/cline/doubao），零回退——翻译/文案/摘要/
   抽取/评审/代码编写（T1–T9）全在 L0。
 - **L1 只读+联网**（`--caps L1` / 任务 `"caps":"L1"`，**仅 ai/cn**）：WebSearch/WebFetch/Read/
-  Glob/Grep 白名单 + 空 scratch 读边界 + 轨迹落盘（工具名+次数+参数截断）+ transcript 留档；
-  缺省超时上浮 600s。适用：时效性调研（T4-L1，带来源清单）、大上下文联网任务。
+  Glob/Grep 白名单 + scratch 读边界（空目录或 filesMode:"reference" 播种的材料）+ 轨迹落盘
+  （工具名+次数+参数截断）+ transcript 留档；缺省超时上浮 600s。适用：时效性调研（T4-L1，带来源
+  清单）、大上下文联网任务、按路径自读大材料（filesMode:"reference"）。
 - **L2 受控全能**（仅 cline，**本版未交付**）：`--caps L2` 报「未交付：cline 3.0.65 无命令级
   deny，六层防护栈缺层不交付」（用户 2026-09-25 裁决缓期）；总闸 `caps-l2-enabled` 默认 false。
 
@@ -111,7 +112,9 @@ node .zcode/skills/wb-bridge/scripts/wbx.mjs ask --file <prompt.txt> [--as ai|cn
 
 先写 tasks.json（格式见 `examples/tasks.example.json`；任务可用 `"as":"ai"|"cn"|"cline"|"doubao"` 绑定
 lane，缺省动态均衡；可用 `"files": ["路径"]` 让桥读取材料文件按段落拼进提示词；任务可用
-`"caps":"L1"` 声明联网档——仅 ai/cn，语义同 ask --caps）：
+`"caps":"L1"` 声明联网档——仅 ai/cn，语义同 ask --caps；大材料任务可加 `"filesMode":"reference"`
+（须显式 `"caps":"L1"`）：桥把 files 复制进该任务 L1 scratch 保持相对路径，提示词只给清单+路径，
+worker 用 Read 工具自读——材料播种，不再整篇塞提示词）：
 
 ```json
 [
@@ -178,8 +181,9 @@ node .zcode/skills/wb-bridge/scripts/wbx.mjs fanout --file tasks.json [--lanes a
 | `wbx ask --file p.txt [--as ai\|cn\|cline\|doubao] [--caps L0\|L1\|L2] [--max-turns 1-64]` | 单次调用，stdout 出结果，失败自动跨 lane 回退，落盘 job（L1 附轨迹与 transcript；--max-turns 为任务级 L1 回合上限，仅 L1 生效；--as doubao 走桌面端工作任务模式） |
 | `wbx fanout --file t.json [--lanes ai,cn,cline,doubao]` | 多 lane 并发池批量，结果落 `.wbx/jobs/<jobId>/`（任务支持 `"as":"doubao"`、`"caps":"L1"` 与 `"maxTurns":1-64`） |
 | `wbx history [--last 10]` / `wbx history <jobId>` | 历史列表 / 完整回放双向对话（含旧 tasks/ 兼容；历史页含全量 token 用量合计；豆包调度任务无 API 计量，计入「无用量记录」） |
-| `wbx config list\|get\|set` | 配置：default-lane（auto/ai/cn/cline/doubao）、disabled-lanes、parallel-per-lane、model、cli-path、cline-*（path/data-dir/provider/model/thinking/compaction/parallel）、doubao-parallel（默认 1 上限 2）、default-caps（L0/L1/L2）、caps-l1-max-turns（默认 24）、caps-l2-enabled（默认 false） |
+| `wbx config list\|get\|set` | 配置：default-lane（auto/ai/cn/cline/doubao）、disabled-lanes、parallel-per-lane、model、cli-path、cline-*（path/data-dir/provider/model/thinking/compaction/parallel）、doubao-parallel（默认 1 上限 2）、doubao-autostart（默认 true：派发到达豆包且 9225 不可达时经 launch.ps1 自动拉起/-Force 重启）、cline-auto-heal（默认 true：配置模型被免费组轮换下线时自动切换可用 id 并写回）、default-caps（L0/L1/L2）、caps-l1-max-turns（默认 24）、caps-l2-enabled（默认 false） |
 | `wbx models [--as cn\|ai\|cline]` | 探测模型可用性 + 列出产品配置模型；`--as cline --free` 列当前免费模型组（端点实时；doubao 无模型清单概念，报错指路） |
+| `wbx usage [--json] [--force]` | 各 lane 余额（WorkBuddy 双 lane 走社区 billing 端点，输出显式标「非官方」；cline/doubao 如实标注无端点；TTL 缓存，--force 跳过） |
 | `wbx ui [--port 7788]` | 本地 Web UI（127.0.0.1）：四 lane 状态/路由开关/免费模型选择/ask/fanout/历史/登录引导 |
 | `wbx ui --detach / --stop / --status` | 控制台后台守护（幂等复用绝不新起）/ 停止（HTTP 优雅优先）/ 三态查看；日志 `~/.wbx/logs/ui.log` |
 | `wbx ui --install-autostart / --remove-autostart` | 装/摘 ZCode SessionStart 自启钩子（新开会话自动拉起控制台；config.json 只做读-改-写合并，摘除逐键还原） |
@@ -218,6 +222,8 @@ ask/fanout 分派 → 校验 → 汇总。命令文件在 `~/.zcode/commands/wbx
   `--yolo`/`--zen` 继续禁用（既有定案）。L2 总闸 `caps-l2-enabled` 默认 false；上游 cline
   支持命令级 deny、L2 按完整六层防护栈交付后，日常开闸仍须用户显式授权。
 - 桌面版与桥共用账号额度，高峰期注意节流（cline 免费孪生有每日配额，超额会报
-  `Daily free model limit reached`——此时自动跨 lane 回退 ai/cn 仍是 DeepSeek；被轮换下线报
-  `model not found`，用 `wbx models --as cline --free` 查当前清单换 id）。
+  `Daily free model limit reached`——此时自动跨 lane 回退 ai/cn 仍是 DeepSeek，配额耗尽不触发换
+  模型；被轮换下线报 `model not found` 时 cline-auto-heal（默认开）会自动切换免费组首个可用 id、
+  写回 config 并重投一次，结果带 `cline-model-healed: 旧→新` 标注——手动换 id 用 `wbx models --as
+  cline --free` 查当前清单）。
 - 本桥为临时工具：免费期/低价期结束即废弃（见项目根 WBX.md）。

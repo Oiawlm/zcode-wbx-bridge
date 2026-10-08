@@ -9,6 +9,10 @@
  *   GET  /api/status                 概览（lane 状态/到期倒计时/配置/形态 + 累计 token 用量）——不含任何凭证
  *   GET  /api/doctor?probe=1         体检（probe=1 含模型探测，较慢）
  *   GET  /api/doubao                 豆包桥工具状态（Doubao.exe 进程态 + 9225 CDP 探测；v12.1）
+ *   GET  /api/balance                各 lane 余额（v6.8：WorkBuddy 双 lane 社区 billing 端点，显式标非官方；
+ *                                    cline/doubao 返回 na；失败优雅降级，绝不包含凭证）
+ *   POST /api/doubao/ensure          幂等确保豆包以调试口运行（v6.8 桥自治：CDP 在线零触碰；不可达经
+ *                                    launch.ps1 拉起/-Force 重启）-> {ok, action: online|launched|restarted|failed|unavailable}
  *   GET  /api/history                job 列表（含旧 .wbx/tasks/ 兼容条目 + 全量 token 用量汇总）
  *   GET  /api/job/:id[?brief=1]      job 详情（brief 不含 prompt/回复正文，用于轮询）
  *   POST /api/ask                    {prompt, lane, model, effort, timeout, caps} -> {jobId}（caps=L0|L1|L2，v6）
@@ -17,6 +21,8 @@
  *   POST /api/login/start            {lane} -> {authUrl, tips}（登录流在 server 侧跑）
  *   GET  /api/login/poll             登录轮询状态
  *   GET  /__health                   健康检查 -> {app:'wbx-ui', pid, port, version}（前台/守护都有）
+ *   GET  /manifest.webmanifest       PWA manifest（v6.8；零外链——图标由本文件纯函数自产）
+ *   GET  /icons/icon-{192,512}.png   PWA 图标（手写最小 PNG：zlib + CRC32，确定性输出零落盘）
  *   POST /__shutdown                 {token} 优雅关闭（仅守护模式；token 存 run/ui.json，绝不外泄）
  *
  * 安全校验（前台/守护一律生效）：
@@ -32,12 +38,14 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import {
   WBX_VERSION, RUNTIME_ROOT, JOBS_DIR,
   LANE_ORDER, CONFIG_DEFS, bridgeForm,
   redact, loadConfig, setConfig, parseLane, parseCaps,
   laneStatusInfo, resolveDefaultLane, newJobId, getJob, listJobs, tokenTotals,
   runAskJob, runFanoutJob, doctorStatus, fetchClineFreeModels,
+  laneBalance, ensureDoubao,
   startLogin, pollLoginToken, fetchAccountInfo, persistLogin,
   openBrowser, ensureDirs,
 } from './wbx-core.mjs';
@@ -55,10 +63,37 @@ const HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>wbx 桥控制台</title>
+<meta name="theme-color" content="#f4f6fb">
+<link rel="manifest" href="/manifest.webmanifest">
+<script>try{var t=localStorage.getItem('wbx-theme');document.documentElement.dataset.theme=(t==='dark')?'dark':'light'}catch(e){document.documentElement.dataset.theme='light'}</script>
 <style>
-/* ===== 设计 token（间距/圆角/字阶/状态色全变量化；基线 internal/v8-dark-theme-tokens.md） ===== */
-/* @tokens:begin 唯一真源——token 键集与语义值以本块为准；改动必须同步 UI-SPEC.md（仓库根）并过 internal/ui-contract.mjs（UI 契约冻结，见 internal/FROZEN.md） */
+/* ===== 设计 token（浅/深双主题唯一真源；基线 internal/v8-dark-theme-tokens.md + contract v2.0.0 双调色板） ===== */
+/* @tokens:begin 双主题唯一真源——:root=浅色（默认），[data-theme="dark"]=深色（原深色值原样迁移）。键集与语义以本块为准（浅色键集 66 键；深色仅覆盖随主题变化的 42 色彩键，结构刻度继承 :root）；改动必须同步 UI-SPEC.md（仓库根）并过 internal/ui-contract.mjs（UI 契约冻结，见 internal/FROZEN.md） */
 :root{
+  --bg:#f4f6fb;--panel:#ffffff;--panel-inset:#f0f3f9;--hover:#e9edf5;
+  --line:#e5e9f0;--line-strong:#ccd3df;--line-ctrl:#6f7a8c;
+  --fg:#171b24;--fg-hi:#0d1420;--dim:#5f6776;--dim-hi:#4c5462;
+  --acc:#2563eb;--acc-text:#1d4ed8;--acc-hover:#1d4ed8;
+  --ok:#0b7c46;--warn:#926a00;--warn2:#b55400;--err:#cf2e2e;--neutral:#5f6776;
+  --acc-soft:rgba(37,99,235,.16);--ok-soft:rgba(11,124,70,.16);--warn-soft:rgba(146,106,0,.16);
+  --warn2-soft:rgba(181,84,0,.16);--err-soft:rgba(207,46,46,.16);--neutral-soft:rgba(95,103,118,.16);
+  --acc-line:rgba(37,99,235,.45);--ok-line:rgba(11,124,70,.45);--warn-line:rgba(146,106,0,.45);
+  --warn2-line:rgba(181,84,0,.45);--err-line:rgba(207,46,46,.45);--neutral-line:rgba(95,103,118,.45);
+  --acc-ink:#ffffff;--err-ink:#a61b1b;--err-ctrl:#cf2e2e;
+  --hover-ring:rgba(23,26,35,.12);--hover-soft:rgba(23,26,35,.05);
+  --scrollbar:rgba(23,26,35,.28);--scrollbar-hover:rgba(23,26,35,.45);--panel-fade:rgba(255,255,255,0);
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;
+  --r-sm:4px;--r-md:8px;--r-lg:12px;--r-pill:999px;
+  --fs-xs:12px;--fs-sm:13px;--fs-md:14px;--fs-lg:17px;--fs-xl:20px;
+  --lh-tight:1.3;--lh-base:1.65;--lh-loose:1.75;
+  --shadow-1:0 1px 2px rgba(17,24,39,.06),0 1px 1px rgba(17,24,39,.04);
+  --shadow-2:0 4px 16px rgba(17,24,39,.10),0 2px 6px rgba(17,24,39,.06),0 0 0 1px rgba(23,26,35,.06);
+  --shadow-focus:0 0 0 3px rgba(37,99,235,.30);
+  --t-fast:120ms;--t-base:180ms;--t-slow:280ms;--ease:cubic-bezier(.2,.8,.2,1);
+  --font:system-ui,"Segoe UI","Microsoft YaHei UI","PingFang SC",sans-serif;
+  --mono:ui-monospace,"Cascadia Mono",Consolas,"Courier New",monospace;
+}
+[data-theme="dark"]{
   --bg:#0f1117;--panel:#171a23;--panel-inset:#1e2230;--hover:#232838;
   --line:#2a2f40;--line-strong:#3a4160;--line-ctrl:#5c6684;
   --fg:#e6e9f2;--fg-hi:#ffffff;--dim:#9aa3b8;--dim-hi:#aab2c6;
@@ -68,24 +103,20 @@ const HTML = `<!doctype html>
   --warn2-soft:rgba(255,169,77,.14);--err-soft:rgba(255,107,107,.14);--neutral-soft:rgba(154,163,184,.12);
   --acc-line:rgba(91,140,255,.35);--ok-line:rgba(62,207,142,.35);--warn-line:rgba(240,180,41,.35);
   --warn2-line:rgba(255,169,77,.35);--err-line:rgba(255,107,107,.35);--neutral-line:rgba(154,163,184,.35);
-  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;
-  --r-sm:4px;--r-md:8px;--r-lg:12px;--r-pill:999px;
-  --fs-xs:12px;--fs-sm:13px;--fs-md:14px;--fs-lg:17px;--fs-xl:20px;
-  --lh-tight:1.3;--lh-base:1.65;--lh-loose:1.75;
+  --acc-ink:#0b1020;--err-ink:#ffb3b3;--err-ctrl:rgba(255,107,107,.45);
+  --hover-ring:rgba(255,255,255,.08);--hover-soft:rgba(255,255,255,.05);
+  --scrollbar:rgba(255,255,255,.14);--scrollbar-hover:rgba(255,255,255,.26);--panel-fade:rgba(23,26,35,0);
   --shadow-1:0 1px 2px rgba(0,0,0,.35);
   --shadow-2:0 4px 16px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.04);
   --shadow-focus:0 0 0 3px rgba(91,140,255,.28);
-  --t-fast:120ms;--t-base:180ms;--t-slow:280ms;--ease:cubic-bezier(.2,.8,.2,1);
-  --font:system-ui,"Segoe UI","Microsoft YaHei UI","PingFang SC",sans-serif;
-  --mono:ui-monospace,"Cascadia Mono",Consolas,"Courier New",monospace;
 }
 /* @tokens:end */
 *{box-sizing:border-box}
 html{scrollbar-gutter:stable}
-*{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.16) transparent}
+*{scrollbar-width:thin;scrollbar-color:var(--scrollbar) transparent}
 ::-webkit-scrollbar{width:10px;height:10px}
-::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:999px;border:3px solid transparent;background-clip:padding-box}
-::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.26);background-clip:padding-box}
+::-webkit-scrollbar-thumb{background:var(--scrollbar);border-radius:999px;border:3px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-hover);background-clip:padding-box}
 ::-webkit-scrollbar-track{background:transparent}
 ::-webkit-scrollbar-corner{background:transparent}
 body{margin:0;background:var(--bg);color:var(--fg);font:var(--fs-md)/var(--lh-base) var(--font)}
@@ -106,6 +137,14 @@ nav button.active{color:var(--fg)}
 nav button.active::after{transform:scaleX(1)}
 nav button:focus-visible{outline:none;box-shadow:var(--shadow-focus);border-radius:var(--r-sm)}
 
+/* ===== 主题切换（v2.0.0 双主题；按钮=扩展点组件，浅色显示月图标=点击换深色，深色反之） ===== */
+.theme-toggle{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;flex:none;padding:0;background:transparent;border:1px solid var(--line);border-radius:var(--r-sm);cursor:pointer;color:var(--dim);transition:color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease),background var(--t-fast) var(--ease)}
+.theme-toggle:hover{color:var(--fg);background:var(--hover-soft);border-color:var(--line-ctrl)}
+.theme-toggle:focus-visible{outline:none;box-shadow:var(--shadow-focus)}
+.theme-toggle .ico-sun{display:none}
+[data-theme="dark"] .theme-toggle .ico-moon{display:none}
+[data-theme="dark"] .theme-toggle .ico-sun{display:block}
+
 main{padding:var(--s5) var(--s5) var(--s6);max-width:1100px;margin:0 auto}
 section{display:none}
 section.on{display:block}
@@ -114,7 +153,7 @@ section.on{display:block}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);box-shadow:var(--shadow-1);margin-bottom:var(--s4);scroll-margin-top:var(--s4)}
 @media (hover:hover){
   .card{transition:transform var(--t-base) var(--ease),box-shadow var(--t-base) var(--ease),border-color var(--t-base) var(--ease)}
-  .card:hover{transform:translateY(-1px);box-shadow:var(--shadow-2);border-color:rgba(255,255,255,.08)}
+  .card:hover{transform:translateY(-1px);box-shadow:var(--shadow-2);border-color:var(--hover-ring)}
 }
 .card__hd{display:flex;align-items:center;gap:var(--s3);min-height:44px;padding:0 var(--s4);border-bottom:1px solid var(--line);flex-wrap:wrap}
 .card__title{font-size:var(--fs-md);font-weight:600;color:var(--fg);letter-spacing:.01em}
@@ -221,11 +260,11 @@ label{color:var(--dim);font-size:var(--fs-sm)}
 
 /* ===== 按钮三档 ===== */
 .btn-primary,.btn-ghost,.btn-danger{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 14px;border-radius:var(--r-sm);font-family:inherit;font-size:var(--fs-sm);font-weight:500;border:1px solid transparent;cursor:pointer;white-space:nowrap;transition:background var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease),color var(--t-fast) var(--ease)}
-.btn-primary{background:var(--acc);color:#0b1020}
+.btn-primary{background:var(--acc);color:var(--acc-ink)}
 .btn-primary:hover{background:var(--acc-hover)}
 .btn-ghost{background:transparent;color:var(--fg);border-color:var(--line-strong)}
-.btn-ghost:hover{background:rgba(255,255,255,.05);border-color:var(--dim)}
-.btn-danger{background:transparent;color:var(--err);border-color:rgba(255,107,107,.45)}
+.btn-ghost:hover{background:var(--hover-soft);border-color:var(--dim)}
+.btn-danger{background:transparent;color:var(--err);border-color:var(--err-ctrl)}
 .btn-danger:hover{background:var(--err-soft)}
 .btn-primary:focus-visible,.btn-ghost:focus-visible,.btn-danger:focus-visible{outline:none;box-shadow:var(--shadow-focus)}
 .btn-primary:disabled,.btn-ghost:disabled,.btn-danger:disabled{opacity:.5;cursor:not-allowed}
@@ -235,7 +274,7 @@ label{color:var(--dim);font-size:var(--fs-sm)}
 .power{appearance:none;-webkit-appearance:none;position:relative;width:36px;height:20px;flex:0 0 auto;margin:0;background:var(--panel-inset);border:1px solid var(--line-ctrl);border-radius:var(--r-pill);cursor:pointer;transition:background var(--t-base) var(--ease),border-color var(--t-base) var(--ease)}
 .power::after{content:"";position:absolute;top:50%;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dim);transform:translateY(-50%);transition:transform var(--t-base) var(--ease),background var(--t-fast)}
 .power:checked{background:var(--acc);border-color:var(--acc)}
-.power:checked::after{transform:translate(16px,-50%);background:#0b1020}
+.power:checked::after{transform:translate(16px,-50%);background:var(--acc-ink)}
 .power:focus-visible{outline:none;box-shadow:var(--shadow-focus)}
 .power:disabled{opacity:.5;cursor:not-allowed}
 
@@ -243,7 +282,7 @@ label{color:var(--dim);font-size:var(--fs-sm)}
 .seg{display:inline-flex;align-items:center;gap:2px;padding:2px;background:var(--panel-inset);border:1px solid var(--line);border-radius:var(--r-pill);flex-wrap:wrap}
 .seg button{appearance:none;height:26px;padding:0 12px;border:1px solid transparent;border-radius:var(--r-pill);background:transparent;font-family:inherit;font-size:var(--fs-xs);font-weight:500;color:var(--dim);cursor:pointer;white-space:nowrap;transition:background var(--t-base) var(--ease),color var(--t-base) var(--ease)}
 .seg button:hover{color:var(--fg);background:var(--hover)}
-.seg button.active{background:var(--acc);color:#0b1020}
+.seg button.active{background:var(--acc);color:var(--acc-ink)}
 .seg button:focus-visible{outline:none;box-shadow:var(--shadow-focus)}
 
 /* ===== details / 折叠 ===== */
@@ -259,7 +298,7 @@ summary .adv-sum{margin-left:auto;color:var(--dim-hi);white-space:nowrap;overflo
 /* ===== 提示/错误/警示框 ===== */
 .hint{color:var(--dim);font-size:var(--fs-xs)}
 .mini{color:var(--acc-text);font-size:var(--fs-xs);cursor:pointer;background:none;border:none;padding:0;font-family:inherit;text-decoration:underline dotted;white-space:nowrap;flex:none}
-.err-box{background:var(--err-soft);border:1px solid var(--err-line);border-radius:var(--r-sm);padding:10px var(--s3);color:#ffb3b3;font-size:var(--fs-sm);white-space:pre-wrap;display:flex;gap:var(--s2);align-items:flex-start;margin:var(--s2) 0}
+.err-box{background:var(--err-soft);border:1px solid var(--err-line);border-radius:var(--r-sm);padding:10px var(--s3);color:var(--err-ink);font-size:var(--fs-sm);white-space:pre-wrap;display:flex;gap:var(--s2);align-items:flex-start;margin:var(--s2) 0}
 .err-box .etx{flex:1;min-width:0;word-break:break-word}
 .warn-box{background:var(--warn-soft);border:1px solid var(--warn-line);border-radius:var(--r-sm);padding:8px var(--s3);color:var(--warn);font-size:var(--fs-sm);margin-top:var(--s2)}
 .copyline{font-family:var(--mono);font-size:var(--fs-xs);word-break:break-all;background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 10px;margin:var(--s2) 0;display:flex;align-items:center;gap:var(--s2)}
@@ -282,14 +321,14 @@ summary .adv-sum{margin-left:auto;color:var(--dim-hi);white-space:nowrap;overflo
 pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;overflow:auto;font-size:var(--fs-xs);font-family:var(--mono);margin:var(--s2) 0}
 .mdwrap{position:relative;margin-top:var(--s2)}
 .mdwrap.clamp{max-height:12.5em;overflow:hidden}
-.mdwrap.clamp::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3em;background:linear-gradient(rgba(23,26,35,0),var(--panel))}
+.mdwrap.clamp::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3em;background:linear-gradient(var(--panel-fade),var(--panel))}
 .expand{margin-top:4px}
 
 /* ===== 批量任务行 ===== */
 .fan-row{display:grid;grid-template-columns:140px 110px 86px minmax(0,1fr) 34px;gap:var(--s2);margin-bottom:var(--s2)}
 .fan-row textarea{min-height:44px}
 .fan-row .fan-del{height:32px;padding:0;border:1px solid var(--line-strong);background:transparent;color:var(--dim);border-radius:var(--r-sm);cursor:pointer;font-size:var(--fs-sm)}
-.fan-row .fan-del:hover{color:var(--err);border-color:rgba(255,107,107,.45)}
+.fan-row .fan-del:hover{color:var(--err);border-color:var(--err-ctrl)}
 
 /* ===== v6：历史行内详情 + L1 工具轨迹 ===== */
 tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var(--panel-inset);border-top:1px dashed var(--line-strong)}
@@ -318,7 +357,7 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
 .toast.success{border-left-color:var(--ok)}
 .toast.error{border-left-color:var(--err)}
 .toast__close{margin-left:auto;padding:0 4px;background:transparent;border:0;color:var(--dim);font-family:inherit;font-size:var(--fs-md);line-height:1;cursor:pointer;border-radius:var(--r-sm)}
-.toast__close:hover{color:var(--fg);background:rgba(255,255,255,.06)}
+.toast__close:hover{color:var(--fg);background:var(--hover-soft)}
 .toast.leaving{animation:toast-out var(--t-base) var(--ease) both}
 @keyframes toast-in{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
 @keyframes toast-out{from{opacity:1;transform:none}to{opacity:0;transform:translateY(6px) scale(.98)}}
@@ -344,6 +383,7 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
     <button data-tab="history">历史</button>
     <button data-tab="login">登录</button>
   </nav>
+  <button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换浅色/深色主题" title="切换浅色/深色主题（记忆在本浏览器）"><svg class="ico-moon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" fill="currentColor"/></svg><svg class="ico-sun" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="4.4" fill="currentColor"/><g stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 2.6v2.4"/><path d="M12 19v2.4"/><path d="M2.6 12h2.4"/><path d="M19 12h2.4"/><path d="M5.3 5.3l1.7 1.7"/><path d="M17 17l1.7 1.7"/><path d="M18.7 5.3L17 7"/><path d="M7 17l-1.7 1.7"/></g></svg></button>
 </header>
 <main>
 
@@ -352,6 +392,7 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
   <div class="card" id="status-error" style="display:none"><div class="card__bd" id="status-error-bd"></div></div>
   <!-- 豆包为第四 lane：卡由 doubaoCardHtml() 渲染进 #lane-cards grid（无静态 #doubao-card） -->
   <div class="grid3" id="lane-cards"></div>
+  <p class="hint" style="margin:0 0 var(--s4)">可安装为桌面应用：浏览器菜单 → 安装应用 / 创建快捷方式，即可像软件一样在独立窗口使用（数据仍只在本机 127.0.0.1）。</p>
   <div class="card">
     <div class="card__hd"><span class="card__title">路由</span></div>
     <div class="card__bd">
@@ -613,11 +654,29 @@ document.addEventListener('toggle',function(e){
 function initAria(){
   document.querySelectorAll('details').forEach(function(d){d.setAttribute('aria-expanded',d.open?'true':'false')});
 }
+// 主题切换（v2.0.0）：FOUC 脚本已在首帧前设好 dataset.theme（localStorage wbx-theme，缺省 light）；
+// 这里只负责按钮反转 + 持久化（存储不可用时本次会话内仍生效，无 JS 时默认浅色即正确渲染）
+function initTheme(){
+  const b=$('theme-toggle');
+  const syncMeta=function(){
+    // theme-color 跟随当前主题 --bg（PWA/浏览器 chrome 用；值取自 token，哨兵块外零硬编码色）
+    const m=document.querySelector('meta[name="theme-color"]');
+    if(m){const bg=getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();if(bg)m.setAttribute('content',bg);}
+  };
+  syncMeta();
+  if(!b)return;
+  b.onclick=function(){
+    const next=document.documentElement.dataset.theme==='dark'?'light':'dark';
+    document.documentElement.dataset.theme=next;
+    try{localStorage.setItem('wbx-theme',next)}catch(e){/* 隐私模式等存储不可用：不阻塞切换 */}
+    syncMeta();
+  };
+}
 function activateTab(name){
   document.querySelectorAll('nav button').forEach(function(b){b.classList.toggle('active',b.dataset.tab===name)});
   document.querySelectorAll('main section').forEach(function(s){s.classList.toggle('on',s.id==='tab-'+name)});
   if(name==='history')loadHistory();
-  if(name==='status'){loadStatus();loadDoubao();}
+  if(name==='status'){loadStatus();loadDoubao();loadBalance();}
 }
 document.querySelector('nav').addEventListener('click',function(e){
   const b=e.target.closest('button');if(b&&b.dataset.tab)activateTab(b.dataset.tab);
@@ -682,6 +741,7 @@ async function loadStatus(){
     $('lane-cards').innerHTML=laneCardsHtml(s);
     renderRoute(s);
     paintDoubaoCard();   // lane-cards 渲染完回填豆包徽标（loadDoubao 先返回的竞态补画）
+    paintBalance();      // 同款竞态补画：loadBalance 先返回时余额行随卡渲染回填
   }catch(e){
     $('ovw').style.display='none';
     $('lane-cards').innerHTML='';
@@ -751,6 +811,39 @@ function renderDoubao(d){
   paintDoubaoCard();   // 徽标与 proc/cdp 随卡动态渲染，先画一次（卡未渲染时 paint 内部空转，loadStatus 渲染完补画）
   if(CUR)renderOvw(CUR);   // 探测结果回填总览豆包 chip
 }
+// ---------- 余额行（v6.8；WorkBuddy 双 lane，/api/balance 失败降级不 toast） ----------
+// 与豆包卡同款竞态双向回填：paintBalance() 从 BAL_LAST 填 #lane-balance-<k>，
+// loadBalance（数据到达）与 loadStatus（lane-cards 渲染完）双向调用，未就绪保留「检测中…」。
+let BAL_LAST=null;
+function balanceCellHtml(b){
+  if(b&&b.state==='ok'){
+    const vtxt='<span class="num" title="剩余/总量（'+(b.packages||'?')+' 个套餐包）">'+esc(String(b.remain))+' / '+esc(String(b.total))+'</span> '+esc(b.unit||'credits');
+    return vtxt+' <span class="hint" title="数据源：社区 billing 端点（非官方，可能随上游改版失效）；截至 '+esc(String(b.asOf||'').replace('T',' ').slice(0,19))+'">非官方端点</span>';
+  }
+  if(b&&b.state==='na')return '<span class="hint">'+esc(b.hint||'无余额端点')+'</span>';
+  return '<span class="hint">暂无稳定查询端点（官方未提供）'+(b&&b.hint?'：'+esc(b.hint):'')+'</span>';
+}
+function paintBalance(){
+  if(!BAL_LAST)return;
+  for(const k of ['ai','cn']){
+    const el=$('lane-balance-'+k);
+    if(el)el.innerHTML=balanceCellHtml(BAL_LAST[k]);
+  }
+}
+async function loadBalance(){
+  try{
+    const b=await api('GET','/api/balance');
+    BAL_LAST=b.lanes||{};
+    paintBalance();
+  }catch(why){
+    if(window.console&&console.warn)console.warn('balance: GET /api/balance 失败 — '+why);
+    BAL_LAST=null;
+    for(const k of ['ai','cn']){
+      const el=$('lane-balance-'+k);
+      if(el)el.innerHTML='<span class="hint">查询失败（/api/balance 不可用）</span>';
+    }
+  }
+}
 function renderOvw(s){
   const tiers=s.lanes.map(laneTier);
   const worst=tiers.reduce(function(m,t){return t.rank<m.rank?t:m},tiers[0]);
@@ -808,6 +901,10 @@ function wbCardHtml(l){
     exp='<span class="'+(EXP_COLOR[e.t]||'c-ok')+'">'+(d<=0?'已过期':'约 '+d+' 天后过期')+'（'+date+'）</span>'+act;
   }
   const acct=(l.nickname||'')+(l.uinMasked?(' · uin '+l.uinMasked):'');
+  // 余额行（仅 WorkBuddy 双 lane 有余额数据源；值由 paintBalance() 从 /api/balance 双向回填）
+  const balRow=(l.key==='ai'||l.key==='cn')
+    ?'<span class="k">余额</span><span class="v" id="lane-balance-'+l.key+'"><span class="hint">检测中…</span></span>'
+    :'';
   return '<div class="card'+(l.disabled?' off':'')+'" id="lane-card-'+l.key+'">'
     +'<div class="card__hd"><span class="card__title">'+esc(laneTitle(l.key))+'</span>'+badge
     +'<span class="card__sub" title="'+esc(acct)+'">'+esc(acct||'—')+'</span>'
@@ -816,6 +913,7 @@ function wbCardHtml(l){
     +'<span class="k">成本</span><span class="v"><span class="cost '+costCls+'" title="'+esc(l.cost)+'">'+costTxt+'</span></span>'
     +'<span class="k">模型</span><span class="v"><span class="vtxt">DeepSeek V4.1 Flash</span></span>'
     +'<span class="k">能力档</span><span class="v"><span class="vtxt">L0 纯文本 · L1 联网+只读（caps L1）</span></span>'
+    + balRow
     +'<span class="k">凭证到期</span><span class="v">'+exp+'</span>'
     +'</div>'
     +'<details aria-expanded="false"><summary>详情与排障</summary><div class="dbd"><div class="kv">'
@@ -847,6 +945,7 @@ function doubaoCardHtml(l){
     +'<span class="k">能力档</span><span class="v"><span class="vtxt">L0 纯文本（不承载 L1/L2：桌面 agent 不受桥控）</span></span>'
     +'<span class="k">客户端进程</span><span class="v" id="doubao-proc">检测中…</span>'
     +'<span class="k">调试口 9225</span><span class="v" id="doubao-cdp">检测中…</span>'
+    +'<span class="k">客户端拉起</span><span class="v"><button class="mini" id="doubao-ensure-btn" title="幂等确保豆包以调试口 9225 运行：已在线零触碰；未运行自动拉起；已运行无调试口则 -Force 重启（未发送草稿会丢失）">启动</button> <span class="hint">自动模式（doubao-autostart）下派发到达豆包 lane 时同样会自动确保</span></span>'
     +'</div>'
     +'<div class="copyline"><span class="t">'+esc(askCmd)+'</span>'+copyBtn(askCmd)+'</div>'
     +'<p class="hint">调度入口（第四 lane，进历史记录；免费 lane 优先，豆包排回退链最末）'+hint2+'。</p>'
@@ -970,6 +1069,17 @@ $('lane-cards').addEventListener('click',function(e){
     const card=m.closest('.card');
     const det=card&&card.querySelector('details');
     if(det){det.open=true;const sel=det.querySelector('#cline-free-select');if(sel)setTimeout(function(){sel.focus()},60)}
+  }
+  const ens=e.target.closest('#doubao-ensure-btn');
+  if(ens){
+    ens.disabled=true;ens.textContent='启动中…';
+    api('POST','/api/doubao/ensure').then(function(r){
+      const msg={online:'豆包调试口已在线（零触碰）',launched:'豆包已自动拉起（调试口就绪）',restarted:'豆包已重启（-Force；调试口就绪）',unavailable:'豆包桥不可用：'+(r.detail||'未找到 doubao.mjs'),failed:'自动拉起失败：'+(r.detail||'未知原因')}[r.action]||('完成：'+(r.action||'?'));
+      toast(msg,r.ok?'success':'error');
+    }).catch(function(err){toast('启动失败：'+err.message,'error')}).finally(function(){
+      ens.disabled=false;ens.textContent='启动';
+      loadDoubao();loadStatus();
+    });
   }
 });
 $('route-pill').addEventListener('click',function(ev){
@@ -1279,8 +1389,10 @@ $('login-ai').onclick=function(){startLoginUi('ai')};
 $('login-cn').onclick=function(){startLoginUi('cn')};
 // ---------- 启动 ----------
 initAria();
+initTheme();
 loadStatus();
 loadDoubao();
+loadBalance();
 renderDoctorEmpty();
 addFanRow('task-1','');
 addFanRow('task-2','');
@@ -1293,6 +1405,149 @@ updFanSum();
 
 // ---------- 登录服务端状态（内存，单登录流） ----------
 const loginState = { status: 'idle', lane: null, startedAt: null, error: null, nickname: null };
+
+// ---------- PWA（manifest + 自产图标；零外链红线——图标纯函数生成，零落盘，确定性输出） ----------
+const PWA_MANIFEST = JSON.stringify({
+  name: 'wbx 桥控制台',
+  short_name: 'wbx',
+  start_url: '/',
+  display: 'standalone',
+  background_color: '#f4f6fb',   // 浅色 --bg（默认主题）
+  theme_color: '#f4f6fb',
+  icons: [
+    { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+  ],
+});
+const ICON_CACHE = new Map();   // 确定性输出：同 size 首次生成后复用同 Buffer
+function iconPng(size) {
+  let buf = ICON_CACHE.get(size);
+  if (!buf) { buf = renderIconPng(size); ICON_CACHE.set(size, buf); }
+  return buf;
+}
+
+const SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const EMPTY = Buffer.alloc(0);
+
+// CRC32：固定多项式 0xEDB88320，查表由固定循环生成（无随机源，确定）
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+// PNG chunk 不变量：length(4 BE, 仅 data) + type(4) + data + crc(4 BE, 覆盖 type+data)
+function chunk(type, data) {
+  const out = Buffer.alloc(12 + data.length);
+  out.writeUInt32BE(data.length, 0);
+  out.write(type, 4, 'latin1');
+  data.copy(out, 8);
+  out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)), 8 + data.length);
+  return out;
+}
+
+// 点到线段距离平方（round cap/join 由 sw/2 半径统一表达）
+function dist2Seg(px, py, ax, ay, bx, by) {
+  const vx = bx - ax, vy = by - ay, wx = px - ax, wy = py - ay;
+  const L2 = vx * vx + vy * vy;
+  let t = L2 > 0 ? (wx * vx + wy * vy) / L2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const dx = wx - t * vx, dy = wy - t * vy;
+  return dx * dx + dy * dy;
+}
+
+// 圆角方形覆盖判定：到内缩矩形 [r,size-r]^2 的欧氏距离 <= r
+function inRoundRect(x, y, size, r) {
+  const dx = x < r ? r - x : x > size - r ? x - (size - r) : 0;
+  const dy = y < r ? r - y : y > size - r ? y - (size - r) : 0;
+  return dx * dx + dy * dy <= r * r;
+}
+
+const SS = 4;                        // 4x4 超采样：每像素固定 16 个样本，样本坐标 (i+0.5)/SS
+const BG = [0x25, 0x63, 0xeb];       // 底色 #2563eb（浅色主题 --acc 同族，品牌连续）
+const FG = [0xff, 0xff, 0xff];       // 白字
+
+function renderIconPng(size) {
+  if (size !== 192 && size !== 512) throw new Error('size must be 192 or 512');
+
+  const r = size * 0.18;
+  const sw = size * 0.11, half2 = (sw / 2) * (sw / 2);
+  const cx = size / 2, cy = size / 2;
+  const gw = size * 0.64, gh = size * 0.30;
+  const left = cx - gw / 2, right = cx + gw / 2;
+  const top = cy - gh / 2, bot = cy + gh / 2;
+  const m1 = left + gw * 0.25, m2 = left + gw * 0.75;
+  // w 形态：四条线段构成两个 V，下-上-下-上
+  const seg = [
+    [left, top, m1, bot],
+    [m1, bot, cx, top],
+    [cx, top, m2, bot],
+    [m2, bot, right, top],
+  ];
+  const inW = (x, y) => {
+    for (let i = 0; i < seg.length; i++) {
+      const s = seg[i];
+      if (dist2Seg(x, y, s[0], s[1], s[2], s[3]) <= half2) return true;
+    }
+    return false;
+  };
+
+  // 原始像素流不变量：每 scanline = 1 字节 filter(0) + size*4 字节 RGBA
+  const stride = 1 + size * 4;
+  const raw = Buffer.alloc(size * stride);
+  const inv = 1 / (SS * SS);
+
+  for (let py = 0; py < size; py++) {
+    let p = py * stride;
+    raw[p++] = 0;
+    for (let px = 0; px < size; px++) {
+      let ar = 0, ag = 0, ab = 0, aa = 0;   // 覆盖度混合：样本内为不透明，按覆盖样本数取均值
+      for (let sy = 0; sy < SS; sy++) {
+        const y = py + (sy + 0.5) / SS;
+        for (let sx = 0; sx < SS; sx++) {
+          const x = px + (sx + 0.5) / SS;
+          if (!inRoundRect(x, y, size, r)) continue;
+          const w = inW(x, y);
+          ar += w ? FG[0] : BG[0];
+          ag += w ? FG[1] : BG[1];
+          ab += w ? FG[2] : BG[2];
+          aa++;
+        }
+      }
+      if (aa === 0) { p += 4; continue; }   // 全覆盖外样本：RGBA 保持 0
+      raw[p++] = Math.round(ar / aa);
+      raw[p++] = Math.round(ag / aa);
+      raw[p++] = Math.round(ab / aa);
+      raw[p++] = Math.round(aa * inv * 255);
+    }
+  }
+
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0);
+  ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8;    // bit depth
+  ihdr[9] = 6;    // color type 6 = RGBA
+  ihdr[10] = 0;   // compression
+  ihdr[11] = 0;   // filter
+  ihdr[12] = 0;   // interlace
+
+  return Buffer.concat([
+    SIG,
+    chunk('IHDR', ihdr),
+    chunk('IDAT', zlib.deflateSync(raw)),
+    chunk('IEND', EMPTY),
+  ]);
+}
 
 // ---------- HTTP 服务 ----------
 function sendJson(res, code, obj) {
@@ -1422,6 +1677,19 @@ async function handler(req, res) {
       res.end(HTML);
       return;
     }
+    if (req.method === 'GET' && p === '/manifest.webmanifest') {
+      res.writeHead(200, { 'content-type': 'application/manifest+json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(PWA_MANIFEST);
+      return;
+    }
+    if (req.method === 'GET') {
+      const im = /^\/icons\/icon-(192|512)\.png$/.exec(p);
+      if (im) {
+        res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' });
+        res.end(iconPng(Number(im[1])));
+        return;
+      }
+    }
     if (req.method === 'GET' && p === '/api/status') {
       ensureDirs();
       const cfg = loadConfig();
@@ -1457,6 +1725,19 @@ async function handler(req, res) {
     if (req.method === 'GET' && p === '/api/doubao') {
       const d = await doubaoStatus();
       sendJson(res, 200, d);
+      return;
+    }
+    if (req.method === 'GET' && p === '/api/balance') {
+      // 余额可见：per-lane 探测（core TTL 缓存共享；失败优雅降级为 unavailable/na，绝不阻塞）
+      const lanes = {};
+      for (const k of LANE_ORDER) lanes[k] = await laneBalance(k);
+      sendJson(res, 200, { lanes, fetchedAt: new Date().toISOString() });
+      return;
+    }
+    if (req.method === 'POST' && p === '/api/doubao/ensure') {
+      // 桥自治手动入口：幂等（core 单飞锁），CDP 在线零触碰豆包；按钮回执 toast + 刷新探测
+      const r = await ensureDoubao();
+      sendJson(res, 200, r);
       return;
     }
     if (req.method === 'GET' && p === '/api/history') {

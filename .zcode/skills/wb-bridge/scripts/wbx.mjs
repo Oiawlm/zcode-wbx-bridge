@@ -36,7 +36,7 @@ import {
   ensureDirs, readStdin, migrateIfNeeded,
   loadConfig, setConfig,
   resolveDefaultLane, parseLane, laneReady,
-  askOnce, resolveModel, fetchClineFreeModels,
+  askOnce, resolveModel, fetchClineFreeModels, laneBalance,
   runAskJob, runFanoutJob,
   listJobs, getJob,
   startLogin, pollLoginToken, fetchAccountInfo, persistLogin,
@@ -185,6 +185,7 @@ async function cmdAsk(opts) {
     if (r.ok) {
       console.error(`[OK] lane=${r.lane} model=${r.model} 耗时=${fmtMs(r.durationMs)} tokens(in/out)=${r.usage ? `${r.usage.in ?? '?'}/${r.usage.out ?? '?'}` : '—（无用量计量）'}${r.caps && r.caps !== 'L0' ? ` caps=${r.caps}` : ''}`);
       if (r.fallbackFrom) console.error(`[FALLBACK] 主 lane ${r.fallbackFrom} 失败，已改投 lane ${r.lane}`);
+      if (r.clineModelHealed) console.error(`[HEAL] cline 模型自愈：${r.clineModelHealed.from} -> ${r.clineModelHealed.to}（已写回 config，链内重投成功）`);
       if (r.toolTrace && Object.keys(r.toolTrace.counts).length) console.error(`[TRACE] 工具轨迹：${Object.entries(r.toolTrace.counts).map(([k, v]) => `${k}×${v}`).join('、')}`);
       console.error(`[job] 记录 -> ${r.jobDir}`);
       if (opts.json) console.log(JSON.stringify({ jobId: r.jobId, lane: r.lane, model: r.model, caps: r.caps || 'L0', usage: r.usage, durationMs: r.durationMs, result: r.text }, null, 2));
@@ -216,19 +217,46 @@ async function cmdFanout(opts) {
       try { prompt = await fsp.readFile(path.resolve(path.dirname(tasksPath), t.file), 'utf8'); }
       catch (e) { die(`任务 ${i}（${t.id ?? '?'}）读取 file 失败：${e.message}`); }
     }
+    // files 字段（v4）：默认 inline 材料拼进提示词（字节兼容）；filesMode:"reference"（v6.8）时只
+    // 验证存在并把 {rel,abs} 交 core 播种进 L1 scratch——提示词只给清单+相对路径，worker Read 自读
+    if (t.filesMode != null && t.filesMode !== 'inline' && t.filesMode !== 'reference') {
+      die(`任务 ${i}（${t.id ?? '?'}）的 filesMode 只支持 "inline" | "reference"（收到 ${JSON.stringify(t.filesMode)}）`);
+    }
+    let refFiles = null;
+    if (t.filesMode === 'reference' && (!Array.isArray(t.files) || !t.files.length)) {
+      die(`任务 ${i}（${t.id ?? '?'}）的 filesMode:"reference" 需要非空 files 数组（材料先行；无材料请去掉 filesMode）`);
+    }
     if (Array.isArray(t.files) && t.files.length) {
       if (!prompt) die(`任务 ${i}（${t.id ?? '?'}）的 files 必须与 prompt 或 file 搭配（files 只追加材料）`);
-      const parts = [];
-      for (const f of t.files) {
-        if (typeof f !== 'string') die(`任务 ${i}（${t.id ?? '?'}）的 files 数组元素必须是字符串`);
-        try {
-          const c = await fsp.readFile(path.resolve(path.dirname(tasksPath), f), 'utf8');
-          parts.push(`----- 文件 ${f} 开始 -----\n${c}\n----- 文件 ${f} 结束 -----`);
-        } catch (e) { die(`任务 ${i}（${t.id ?? '?'}）读取 files[${f}] 失败：${e.message}`); }
+      if (t.filesMode === 'reference') {
+        refFiles = [];
+        for (const f of t.files) {
+          if (typeof f !== 'string') die(`任务 ${i}（${t.id ?? '?'}）的 files 数组元素必须是字符串`);
+          const abs = path.resolve(path.dirname(tasksPath), f);
+          if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) die(`任务 ${i}（${t.id ?? '?'}）的 files[${f}] 不存在或不是文件（reference 模式要求材料先行就位）`);
+          refFiles.push({ rel: f, abs });
+        }
+      } else {
+        const parts = [];
+        for (const f of t.files) {
+          if (typeof f !== 'string') die(`任务 ${i}（${t.id ?? '?'}）的 files 数组元素必须是字符串`);
+          try {
+            const c = await fsp.readFile(path.resolve(path.dirname(tasksPath), f), 'utf8');
+            parts.push(`----- 文件 ${f} 开始 -----\n${c}\n----- 文件 ${f} 结束 -----`);
+          } catch (e) { die(`任务 ${i}（${t.id ?? '?'}）读取 files[${f}] 失败：${e.message}`); }
+        }
+        prompt = `${prompt}\n\n【输入材料·文件】\n${parts.join('\n\n')}`;
       }
-      prompt = `${prompt}\n\n【输入材料·文件】\n${parts.join('\n\n')}`;
     }
-    tasksIn.push({ id: t.id, prompt, as: t.as ?? null, model: t.model ?? null, effort: t.effort ?? null, caps: t.caps ?? null, maxTurns: t.maxTurns ?? null });
+    const taskOut = { id: t.id, prompt, as: t.as ?? null, model: t.model ?? null, effort: t.effort ?? null, caps: t.caps ?? null, maxTurns: t.maxTurns ?? null };
+    if (refFiles) {
+      // reference 材料区：只给清单+相对路径+读取指引（worker 在 L1 scratch 工作目录内自读）
+      const listing = refFiles.map((f) => `- ${String(f.rel).replace(/\\/g, '/')}`).join('\n');
+      taskOut.prompt = `${prompt}\n\n【输入材料·文件清单】\n以下材料文件已放置在你的工作目录中（相对路径，保持目录结构），请用 Read 工具按路径自行读取后再作答：\n${listing}\n`;
+      taskOut.filesMode = 'reference';
+      taskOut.files = refFiles;
+    }
+    tasksIn.push(taskOut);
   }
 
   let lanes = null;
@@ -255,6 +283,41 @@ async function cmdFanout(opts) {
   } catch (e) {
     die(e.message);
   }
+}
+
+// ---------- 子命令：usage（余额可见：lane×余额表 + 数据源档位注记） ----------
+// 数据源级联门（RESEARCH-V16 §二定案）：ai/cn 走社区 billing 端点（stability=community，非官方）；
+// cline（免费孪生官方无端点）/doubao（会员额度无 API）如实显示 na；unavailable 诚实兜底+官方指路。
+// 退出方式：自然排空（process.exitCode + return，不走 exitWith）——本命令是唯一的
+// 「fetch 可能 abort 后立即 process.exit」路径，那会在 Windows 上触发 libuv 断言崩溃
+// （aborted undici 请求销毁中撞上 exit；实测复现，internal/archive/v16/v16-exec-log.md）。
+async function cmdUsage(opts) {
+  ensureDirs();
+  const rows = [];
+  for (const k of LANE_ORDER) rows.push({ lane: k, bal: await laneBalance(k, { force: !!opts.force }) });
+  if (opts.json) {
+    console.log(JSON.stringify(Object.fromEntries(rows.map((r) => [r.lane, r.bal])), null, 2));
+    process.exitCode = 0;
+    return;
+  }
+  const w = { lane: 10, bal: 40 };
+  console.log('lane'.padEnd(w.lane) + '余额'.padEnd(w.bal) + '数据源');
+  for (const { lane, bal } of rows) {
+    let balTxt, srcTxt;
+    if (bal.state === 'ok') {
+      balTxt = `${bal.remain} / ${bal.total} ${bal.unit || 'credits'}（剩余/总量，${bal.packages ?? '?'} 个套餐）`;
+      srcTxt = `非官方端点 · ${bal.asOf ? String(bal.asOf).replace('T', ' ').slice(0, 19) : '?'}`;
+    } else if (bal.state === 'na') {
+      balTxt = '—';
+      srcTxt = bal.hint || '无余额端点';
+    } else {
+      balTxt = `—（${bal.hint || '不可用'}）`;
+      srcTxt = '暂无稳定查询端点（官方未提供）；请到官方控制台查看';
+    }
+    console.log(lane.padEnd(w.lane) + balTxt.padEnd(w.bal) + srcTxt);
+  }
+  console.error('\n说明：WorkBuddy 双 lane 余额取自社区 billing 端点（非官方，可能随上游改版失效）；结果带 TTL 缓存（--force 跳过）。cline 免费额度与豆包会员额度均无查询 API。');
+  process.exitCode = 0;
 }
 
 // ---------- 子命令：models ----------
@@ -652,10 +715,15 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                                                       缺省 config caps-l1-max-turns=24；耗尽报 l1-turns-exhausted）
   node wbx.mjs fanout  --file tasks.json            并发池批量执行；任务可用 files:[路径] 拼材料；结果写 <运行时根>/jobs/<jobId>/
                      [--lanes ai,cn,cline,doubao] [--parallel 2] [--timeout 300] [--retry 1]
-                                                      任务对象支持 "caps":"L1"（任务级能力档，语义同 ask --caps）
-                                                      与 "maxTurns":N（任务级 L1 回合上限，语义同 ask --max-turns）
+                                                      任务对象支持 "caps":"L1"（任务级能力档，语义同 ask --caps）、
+                                                      "maxTurns":N（任务级 L1 回合上限，语义同 ask --max-turns）、
+                                                      "filesMode":"reference"（v6.8 L1 材料播种：files 复制进
+                                                      worker scratch 按相对路径自读；需任务级 caps:"L1"+ai/cn）
   node wbx.mjs models  [--as cn|ai|cline] [--probe "m1,m2"]   探测模型可用性并列出产品配置中的模型
                      [--free]     （--as cline --free：列当前免费模型组，recommended-models 端点实时）
+  node wbx.mjs usage  [--json] [--force]             各 lane 余额（v6.8：WorkBuddy 双 lane 走社区 billing
+                                                    端点并显式标注「非官方」；cline/doubao 如实标注无端点；
+                                                    unavailable 诚实兜底+官方控制台指路；TTL 缓存）
   node wbx.mjs config  list | get <key> | set <key> <value>
                                                    配置：default-lane=auto|ai|cn|cline|doubao、disabled-lanes=["cn"]、
                                                    parallel-per-lane、model、cli-path、cline-path/data-dir/provider/
@@ -687,7 +755,7 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                                                    目录解析：全局 ~/.zcode/wbx-bridge/doubao/（self-install 复制）
                                                    -> 仓库 tools/doubao-bridge/（v12 源；未装则明确报错，不影响其余 lane）
 
-tasks.json 格式：[{"id":"t1","prompt":"...","as?":"ai|cn|cline|doubao","model?":"...","effort?":"low","file?":"p.txt","files?":["a.js"]}]
+tasks.json 格式：[{"id":"t1","prompt":"...","as?":"ai|cn|cline|doubao","model?":"...","effort?":"low","file?":"p.txt","files?":["a.js"],"filesMode?":"reference（需 caps:L1）","caps?":"L1","maxTurns?":24}]
 
 环境变量（均可选）：WBX_HOME（运行时根）、WBX_CLI、WBX_CLINE（cline 二进制）、WBX_MODEL、
 WBX_PROJECT_ROOT、WBX_PRODUCT_CONFIG（login 模板）`;
@@ -707,6 +775,7 @@ async function main() {
     case 'ask': return cmdAsk(opts);
     case 'fanout': return cmdFanout(opts);
     case 'models': return cmdModels(opts);
+    case 'usage': return cmdUsage(opts);
     case 'config': return cmdConfig(opts);
     case 'history': return cmdHistory(opts);
     case 'install-user': return cmdInstallUser();

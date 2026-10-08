@@ -1466,3 +1466,40 @@ pm）不覆盖此形态，`cline-path` 是官方支持的第二优先级解析�
   短=job 181835 原样拷贝；参考提取器独立复核），v6 套件 24→33。
 - 发布：随 CHANGELOG 6.7.1 同轮 commit+push；操作终态（hash/远端校验）记录在
   `internal/archive/v14.1/v14.1-exec-log.md`。
+
+## v6.8 章：v16 控制台体验与桥自治——余额可见 / 浅深双主题 / PWA / 全自动连接 / 文件自读
+
+五诉求授权原话、逐项改动面与 T7 评审记录见 **CHANGELOG 6.8.0**；定案见 RESEARCH-V16。本章只记
+CHANGELOG 之外的独有内容（实测/契约细节/不变量）。
+
+- **余额数据源级联门（b 档实测）**：官方无个人积分端点（R2），第一方 product/session payload 无
+  余额字段（a 档排除，键名排查在案）；b 档打通=社区 billing 端点在 lane 自有宿主直接可用——
+  `POST {endpoint}/billing/meter/get-user-resource` + 存量会话 Bearer，**无需** prprDog/codebuddy-viewer
+  的 web Cookie 通道与账号特定 ProductCode/PackageCodes（同一计费后端的行为级证实）。排错记录：
+  /v2{prefix} 前缀拼法 404（不存在）；body 双重序列化 400（Go 网关报错反证端点在）。字段族与 viewer
+  文档同源（Capacity/CycleCapacity*，本环境非 Precise 变体，取值做回退兼容）。响应含 Uin/AppId 等
+  账号字段——聚合后只输出 remain/total/unit/packages，账号字段零回显（红线）。
+- **usage 退出方式不变量**：cmdUsage 用自然排空（process.exitCode + return，不走 exitWith）——
+  fetch abort 销毁中的 undici 请求撞上立即 process.exit 会触发 Windows libuv 断言崩溃
+  （"Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)"，实测复现；setImmediate tick 不解）。
+  全桥唯一「fetch 可能 abort 后立即退出」的路径；后续新增 fetch 类命令须沿用自然排空。
+- **双主题契约细节**：浅色=T8-b 提案（冷蓝灰系；A 纯中性灰系落选理由=warn/acc 色相漂移），
+  集成层修正一处提案缺陷（浅色 --fg-hi #ffffff→#0d1420——按钮白字职责已由 --acc-ink 承担，
+  fg-hi 唯一消费方是 header h1，白色在浅底不可见实渲染发现）；深色 --err-ctrl 2.21:1 迁移债
+  如实注记（原硬编码即 T4 盲区）。tokens-sha 双主题口径=light:/dark: 前缀 108 声明。
+- **PWA 图标不变量**：renderIconPng 纯函数（zlib+CRC32 查表+4x4 超采样），同 size 字节级确定性
+  （实测两次生成 cmp 一致），ICON_CACHE 复用；192/512 结构经 CRC 全查+IHDR+像素抽样校验。
+- **桥自治触发语义**：ensureDoubao 只在「派发链真正到达 doubao 且 CDP 不可达」时启动（成功路径
+  零触碰豆包）；launch.ps1 保持唯一启动器（桥只决策带不带 -Force）；单飞锁防并发双拉。
+  heal 只做「配置修复」（model-not-found 且实时清单确认不在免费组 + 失败模型为 config 值），
+  Daily limit/清单不可用/任务级显式模型均不改写 config；单飞锁共享一次修复。
+- **真机 e2e（2026-10-08）**：①wbx usage：ai 520/520、cn 2303/2319 credits（实时，非官方标注）；
+  ②浅色默认+双向切换+localStorage 记忆+刷新无闪烁（1280 实渲染截图，深色零回归对比）；
+  ③manifest/图标可达且字节级确定性；④filesMode 自读全链路（job 20261008-154639-z02：播种→
+  Read×1→正确答案「芝麻关门」→seededFiles 快照→transcript 落盘）；⑤heal 演练 4 job（
+  cline-model-healed meta 全在案；heal off 时回退 cn 语义不变）；⑥豆包 autostart（job
+  20261008-155141-56v：9225 离线→autostart=restarted→入史；模型回复为会员额度耗尽通知——
+  链路全通，额度事实如实记录）。T7 评审：2 阻断+9 建议，接受 10 驳回 1（v16-t7-record.md）。
+- 门禁终态（T7 修复后全量复跑）：v6 35 + v7 50 + v8 22 + v11.3 38 + v13 52 + contract 24 +
+  红测 25 变异+4 对照全绿 + tokens-sha 108=6e0415da13 + v14-consistency 20——九套件全绿。
+- 发布：self-install 同步全局副本 + 控制台重启（/__health=6.8.0）；commit/push 按 FROZEN 二.2 全流程。

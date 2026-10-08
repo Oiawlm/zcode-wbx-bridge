@@ -1,4 +1,4 @@
-# UI-SPEC — wbx 桥控制台 UI 风格契约（contract v1.4.0）
+# UI-SPEC — wbx 桥控制台 UI 风格契约（contract v2.0.0）
 
 > 授权来源：用户 2026-09-25「风格和方向可以基本锁定」「该固定的部分先固定下来，之后基本就是
 > 新增或者删减一些内容」。冻结登记见 `internal/FROZEN.md`「UI 契约冻结」项；变更须用户显式授权
@@ -10,12 +10,14 @@
 - **权威源声明**：代码是唯一真源。`wbx-ui.mjs` 的 `:root` 哨兵块（`/* @tokens:begin */` …
   `/* @tokens:end */`）是 token 键集与语义值的权威；本文档 §1 的 token 表是**派生快照**，不一致
   时以代码为准（并意味着本文档过期，须同步）。
-- **tokens-sha**：`efeee49b0e`（58 个 token）。算法：取哨兵块内全部 `--name: value;` 声明 →
-  每条规范化为 `name=value`（value 转小写、删全部空白）→ 按 name 排序 → `\n` 连接 → sha256 前
-  10 位。重算脚本：`node internal/v9-tokens-sha.mjs`。
-- **机器验证**：`node internal/ui-contract.mjs`（23 条断言，编号枚举 T1-T5 / C1-C6 / S1-S4 / D1-D4 +
-  H1-H4（v6 行内详情族，2026-09-25）——worker B 报告标题称 18 条但其枚举即 19，以枚举为准；T2 为全 58
-  token 值逐值快照）；与 v6/v7/v8 回归串行构成发布门禁。断言脚本位于 `internal/`（本仓库 gitignore 的工程内部件，不入发布 bundle）；
+- **tokens-sha**：`6e0415da13`（v2.0.0 双主题口径，108 条声明=浅色 66+深色 42）。算法：取哨兵块内全部
+  `--name: value;` 声明 → 按 CSS 块归属主题前缀（:root=`light:`，[data-theme="dark"]=`dark:`）→ 每条规范化
+  为 `前缀:name=value`（value 转小写、删全部空白）→ 按字典序排序 → 换行符连接 → sha256 前 10 位。
+  重算脚本：`node internal/v9-tokens-sha.mjs`。
+- **机器验证**：`node internal/ui-contract.mjs`（24 条断言，编号枚举 T1-T6 / C1-C6 / S1-S4 / D1-D4 +
+  H1-H4（v6 行内详情族）——v2.0.0 新增 T6「主题切换管道」；T1=双主题键集断言（:root 66 键 + dark 42 键）、
+  T2=双值快照（浅 66+深 42 逐值）；T4 allowlist 仅剩 theme-color meta 派生色，等值由 T6 断言守护）；
+  与 v6/v7/v8 回归串行构成发布门禁。
   远端仓库以本文档为人读契约。
 - **怎么读**：只有 §5（不变量与扩展点）需要反复读——它是契约主体；§1-§4 是可跳读的参照手册；
   §2 组件的实例清单以浏览器实机核对为准（http://127.0.0.1:7788/）。
@@ -26,99 +28,113 @@
 
 （派生自 `:root` 哨兵块；表内顺序=源码顺序。「用途」列才是契约主体，值只是快照。）
 
-| 变量 | 值 | 用途 |
-|---|---|---|
-| --bg | #0f1117 | 画布底 |
-| --panel | #171a23 | 卡片/面板 |
-| --panel-inset | #1e2230 | 嵌在面板内的次级面（chip/表头/行 hover/禁用控件/option/分段器/折叠容器/任务卡/行内代码） |
-| --hover | #232838 | 悬浮/抬升层 |
-| --line | #2a2f40 | 装饰性分隔线（1.31:1，只作分隔不作控件边界） |
-| --line-strong | #3a4160 | 弱控件边界/强调分隔（ghost 按钮边框、表头下边） |
-| --line-ctrl | #5c6684 | 控件边界 WCAG 版（3.05:1，输入框/开关/复制钮边框） |
-| --fg | #e6e9f2 | 主文本 |
-| --fg-hi | #ffffff | 标题/强调 |
-| --dim | #9aa3b8 | 次级文本（≥13px 场景） |
-| --dim-hi | #aab2c6 | 12px 微文本/键值行标签（8.19:1） |
-| --acc | #5b8cff | 主色（按钮底/下划线/聚焦环/进行中环） |
-| --acc-text | #7fa5ff | 主色文字版：淡底/soft 底上的主色文字（链接、badge.acc、cost.acc、mini） |
-| --acc-hover | #4a7aeb | 主色 hover（btn-primary:hover 底色） |
-| --ok | #3ecf8e | 成功态 |
-| --warn | #f0b429 | 警告态（将到期 8-30 天/近免费） |
-| --warn2 | #ffa94d | 高警告态（将过期 1-7 天） |
-| --err | #ff6b6b | 失败态 |
-| --neutral | #9aa3b8 | 中性态（=--dim 值，语义独立） |
-| --acc-soft | rgba(91,140,255,.14) | 主色淡底 |
-| --ok-soft | rgba(62,207,142,.14) | 成功淡底 |
-| --warn-soft | rgba(240,180,41,.14) | 警告淡底 |
-| --warn2-soft | rgba(255,169,77,.14) | 高警告淡底 |
-| --err-soft | rgba(255,107,107,.14) | 失败淡底 |
-| --neutral-soft | rgba(154,163,184,.12) | 中性淡底 |
-| --acc-line | rgba(91,140,255,.35) | 主色徽标描边 |
-| --ok-line | rgba(62,207,142,.35) | 成功描边 |
-| --warn-line | rgba(240,180,41,.35) | 警告描边 |
-| --warn2-line | rgba(255,169,77,.35) | 高警告描边 |
-| --err-line | rgba(255,107,107,.35) | 失败描边 |
-| --neutral-line | rgba(154,163,184,.35) | 中性描边 |
-| --s1 | 4px | 间距 1：徽标内距、图标与文字 |
-| --s2 | 8px | 间距 2：键值行上下、按钮内距 |
-| --s3 | 12px | 间距 3：卡头内距、行间距 |
-| --s4 | 16px | 间距 4：卡片 padding、组间距 |
-| --s5 | 24px | 间距 5：分区段之间 |
-| --s6 | 32px | 间距 6：页面级留白 |
-| --r-sm | 4px | 圆角小：徽标、小控件 |
-| --r-md | 8px | 圆角中：卡片、按钮、输入框 |
-| --r-lg | 12px | 圆角大：弹层、大容器 |
-| --r-pill | 999px | 胶囊：状态点、chip、开关 |
-| --fs-xs | 12px | 微标签、表头、键值标签 |
-| --fs-sm | 13px | 次级信息、表格、按钮 |
-| --fs-md | 14px | 正文（默认） |
-| --fs-lg | 17px | 面板标题 |
-| --fs-xl | 20px | 页面标题 |
-| --lh-tight | 1.3 | 标题行高 |
-| --lh-base | 1.65 | 中文正文行高 |
-| --lh-loose | 1.75 | 长段落行高 |
-| --shadow-1 | 0 1px 2px rgba(0,0,0,.35) | 静置卡片 |
-| --shadow-2 | 0 4px 16px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.04) | 悬浮卡片/toast |
-| --shadow-focus | 0 0 0 3px rgba(91,140,255,.28) | 聚焦环（唯一焦点指示） |
-| --t-fast | 120ms | 颜色/边框过渡 |
-| --t-base | 180ms | 抬升/下划线过渡 |
-| --t-slow | 280ms | 弹层（toast）过渡 |
-| --ease | cubic-bezier(.2,.8,.2,1) | 统一缓动 |
-| --font | system-ui,"Segoe UI","Microsoft YaHei UI","PingFang SC",sans-serif | 字体栈（全本地） |
-| --mono | ui-monospace,"Cascadia Mono",Consolas,"Courier New",monospace | 等宽栈（命令/ID/代码） |
+| 变量 | 浅色值（:root，默认） | 深色值（[data-theme="dark"]） | 用途 |
+|---|---|---|---|
+| --bg | #f4f6fb | #0f1117 | 画布底 |
+| --panel | #ffffff | #171a23 | 卡片/面板 |
+| --panel-inset | #f0f3f9 | #1e2230 | 嵌在面板内的次级面（chip/表头/行 hover/禁用控件/option/分段器/折叠容器/任务卡/行内代码） |
+| --hover | #e9edf5 | #232838 | 悬浮/抬升层 |
+| --line | #e5e9f0 | #2a2f40 | 装饰性分隔线（1.31:1，只作分隔不作控件边界） |
+| --line-strong | #ccd3df | #3a4160 | 弱控件边界/强调分隔（ghost 按钮边框、表头下边） |
+| --line-ctrl | #6f7a8c | #5c6684 | 控件边界 WCAG 版（3.05:1，输入框/开关/复制钮边框） |
+| --fg | #171b24 | #e6e9f2 | 主文本 |
+| --fg-hi | #0d1420 | #ffffff | 标题/强调（header 标题；浅色档为深色强调，按钮文字由 --acc-ink 承担） |
+| --dim | #5f6776 | #9aa3b8 | 次级文本（≥13px 场景） |
+| --dim-hi | #4c5462 | #aab2c6 | 12px 微文本/键值行标签（8.19:1） |
+| --acc | #2563eb | #5b8cff | 主色（按钮底/下划线/聚焦环/进行中环） |
+| --acc-text | #1d4ed8 | #7fa5ff | 主色文字版：淡底/soft 底上的主色文字（链接、badge.acc、cost.acc、mini） |
+| --acc-hover | #1d4ed8 | #4a7aeb | 主色 hover（btn-primary:hover 底色） |
+| --ok | #0b7c46 | #3ecf8e | 成功态 |
+| --warn | #926a00 | #f0b429 | 警告态（将到期 8-30 天/近免费） |
+| --warn2 | #b55400 | #ffa94d | 高警告态（将过期 1-7 天） |
+| --err | #cf2e2e | #ff6b6b | 失败态 |
+| --neutral | #5f6776 | #9aa3b8 | 中性态（=--dim 值，语义独立） |
+| --acc-soft | rgba(37,99,235,.16) | rgba(91,140,255,.14) | 主色淡底 |
+| --ok-soft | rgba(11,124,70,.16) | rgba(62,207,142,.14) | 成功淡底 |
+| --warn-soft | rgba(146,106,0,.16) | rgba(240,180,41,.14) | 警告淡底 |
+| --warn2-soft | rgba(181,84,0,.16) | rgba(255,169,77,.14) | 高警告淡底 |
+| --err-soft | rgba(207,46,46,.16) | rgba(255,107,107,.14) | 失败淡底 |
+| --neutral-soft | rgba(95,103,118,.16) | rgba(154,163,184,.12) | 中性淡底 |
+| --acc-line | rgba(37,99,235,.45) | rgba(91,140,255,.35) | 主色徽标描边 |
+| --ok-line | rgba(11,124,70,.45) | rgba(62,207,142,.35) | 成功描边 |
+| --warn-line | rgba(146,106,0,.45) | rgba(240,180,41,.35) | 警告描边 |
+| --warn2-line | rgba(181,84,0,.45) | rgba(255,169,77,.35) | 高警告描边 |
+| --err-line | rgba(207,46,46,.45) | rgba(255,107,107,.35) | 失败描边 |
+| --neutral-line | rgba(95,103,118,.45) | rgba(154,163,184,.35) | 中性描边 |
+| --acc-ink | #ffffff | #0b1020 | 主色底上的文字（btn-primary/seg active/power 滑块；v2.0.0 收编 #0b1020） |
+| --err-ink | #a61b1b | #ffb3b3 | err-box 正文色（err-soft 底上可读；v2.0.0 收编 #ffb3b3） |
+| --err-ctrl | #cf2e2e | rgba(255,107,107,.45) | 危险控件边界（btn-danger/fan-del hover；v2.0.0 收编 rgba(255,107,107,.45)） |
+| --hover-ring | rgba(23,26,35,.12) | rgba(255,255,255,.08) | 卡片悬浮描边环（card:hover border；v2.0.0 收编 rgba(255,255,255,.08)） |
+| --hover-soft | rgba(23,26,35,.05) | rgba(255,255,255,.05) | 幽灵按钮/toast 关闭钮 hover 淡底（v2.0.0 收编 rgba(255,255,255,.05)） |
+| --scrollbar | rgba(23,26,35,.28) | rgba(255,255,255,.14) | 滚动条拇指（scrollbar-color+webkit；v2.0.0 收编 rgba(255,255,255,.14/.16)） |
+| --scrollbar-hover | rgba(23,26,35,.45) | rgba(255,255,255,.26) | 滚动条拇指 hover（v2.0.0 收编 rgba(255,255,255,.26)） |
+| --panel-fade | rgba(255,255,255,0) | rgba(23,26,35,0) | 面板同色透明端（mdwrap clamp 渐变；v2.0.0 收编 rgba(23,26,35,0)） |
+| --s1 | 4px | （继承 :root） | 间距 1：徽标内距、图标与文字 |
+| --s2 | 8px | （继承 :root） | 间距 2：键值行上下、按钮内距 |
+| --s3 | 12px | （继承 :root） | 间距 3：卡头内距、行间距 |
+| --s4 | 16px | （继承 :root） | 间距 4：卡片 padding、组间距 |
+| --s5 | 24px | （继承 :root） | 间距 5：分区段之间 |
+| --s6 | 32px | （继承 :root） | 间距 6：页面级留白 |
+| --r-sm | 4px | （继承 :root） | 圆角小：徽标、小控件 |
+| --r-md | 8px | （继承 :root） | 圆角中：卡片、按钮、输入框 |
+| --r-lg | 12px | （继承 :root） | 圆角大：弹层、大容器 |
+| --r-pill | 999px | （继承 :root） | 胶囊：状态点、chip、开关 |
+| --fs-xs | 12px | （继承 :root） | 微标签、表头、键值标签 |
+| --fs-sm | 13px | （继承 :root） | 次级信息、表格、按钮 |
+| --fs-md | 14px | （继承 :root） | 正文（默认） |
+| --fs-lg | 17px | （继承 :root） | 面板标题 |
+| --fs-xl | 20px | （继承 :root） | 页面标题 |
+| --lh-tight | 1.3 | （继承 :root） | 标题行高 |
+| --lh-base | 1.65 | （继承 :root） | 中文正文行高 |
+| --lh-loose | 1.75 | （继承 :root） | 长段落行高 |
+| --shadow-1 | 0 1px 2px rgba(17,24,39,.06),0 1px 1px rgba(17,24,39,.04) | 0 1px 2px rgba(0,0,0,.35) | 静置卡片 |
+| --shadow-2 | 0 4px 16px rgba(17,24,39,.10),0 2px 6px rgba(17,24,39,.06),0 0 0 1px rgba(23,26,35,.06) | 0 4px 16px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.04) | 悬浮卡片/toast |
+| --shadow-focus | 0 0 0 3px rgba(37,99,235,.30) | 0 0 0 3px rgba(91,140,255,.28) | 聚焦环（唯一焦点指示） |
+| --t-fast | 120ms | （继承 :root） | 颜色/边框过渡 |
+| --t-base | 180ms | （继承 :root） | 抬升/下划线过渡 |
+| --t-slow | 280ms | （继承 :root） | 弹层（toast）过渡 |
+| --ease | cubic-bezier(.2,.8,.2,1) | （继承 :root） | 统一缓动 |
+| --font | system-ui,"Segoe UI","Microsoft YaHei UI","PingFang SC",sans-serif | （继承 :root） | 字体栈（全本地） |
+| --mono | ui-monospace,"Cascadia Mono",Consolas,"Courier New",monospace | （继承 :root） | 等宽栈（命令/ID/代码） |
 
 ### 1.2 对比度清单（视为不变量）
 
-正文级（≥4.5:1）：
+正文级（≥4.5:1；深=深色档，浅=v2.0.0 浅色档实测，测量脚本 internal/archive/v16/v16-palette-measure.mjs）：
 
-| 组合 | 实测值 | 结论 |
-|---|---|---|
-| --fg / --panel | 14.3 | ✅ |
-| --fg / --bg | 15.6 | ✅ |
-| --dim / --panel | 6.87 | ✅ |
-| --dim / --panel-inset | 6.26 | ✅ |
-| --dim / --bg | 7.46 | ✅ |
-| --acc / --panel | 5.49 | ✅ |
-| --ok / --panel | 8.71 | ✅ |
-| --warn / --panel | 9.32 | ✅ |
-| --err / --panel | 6.26 | ✅ |
-| --acc-text / --acc-soft | 5.92 | ✅ |
-| --dim-hi（12px 微文本） | 8.19 | ✅ |
+| 组合 | 深 | 浅 | 结论 |
+|---|---|---|---|
+| --fg / --panel | 14.32 | 17.23 | ✅ |
+| --fg / --bg | 15.55 | 15.94 | ✅ |
+| --dim / --panel | 6.87 | 5.69 | ✅ |
+| --dim / --panel-inset | 6.26 | 5.12 | ✅ |
+| --dim / --bg | 7.46 | 5.27 | ✅ |
+| --acc / --panel | 5.49 | 5.17 | ✅ |
+| --ok / --panel | 8.71 | 5.27 | ✅ |
+| --warn / --panel | 9.32 | 4.90 | ✅ |
+| --err / --panel | 6.26 | 5.14 | ✅ |
+| --acc-text / --acc-soft | 5.92 | 5.35 | ✅ |
+| --dim-hi（12px 微文本） | 8.19 | 7.63 | ✅ |
 
 非文本（≥3:1）：
 
-| 组合 | 实测值 | 结论 |
-|---|---|---|
-| 聚焦环 --acc / --panel | 5.49 | ✅ |
-| 控件边界 --line-ctrl | 3.05 | ✅ 唯一合规的控件边界 |
-| 控件边界 --line | 1.31 | ❌ 只作装饰分隔 |
-| 控件边界 --line-strong | 1.74 | ❌ 只作弱边界/ghost 边框 |
-| 状态点/soft 底 ok | 6.71 | ✅ |
-| 状态点/soft 底 warn | 7.04 | ✅ |
-| 状态点/soft 底 err | 5.17 | ✅ |
-| 状态点/soft 底 acc（--acc-text） | 5.92 | ✅ |
+| 组合 | 深 | 浅 | 结论 |
+|---|---|---|---|
+| 聚焦环 --acc / --panel | 5.49 | 5.17 | ✅ |
+| 控件边界 --line-ctrl | 3.05 | 4.34 | ✅ 唯一合规的控件边界 |
+| 控件边界 --line | 1.31 | 1.22 | ❌ 只作装饰分隔 |
+| 控件边界 --line-strong | 1.74 | 1.51 | ❌ 只作弱边界/ghost 边框 |
+| 状态点/soft 底 ok | 6.71 | 4.21 | ✅ |
+| 状态点/soft 底 warn | 7.04 | 3.98 | ✅ |
+| 状态点/soft 底 err | 5.17 | 4.03 | ✅ |
+| 状态点/soft 底 acc（--acc-text） | 5.92 | 5.35 | ✅ |
+| 主色底文字 --acc-ink / --acc | 5.99 | 5.17 | ✅ |
+| err-box 正文 --err-ink / --err-soft | 8.43 | 5.89 | ✅ |
+| 危险控件边界 --err-ctrl / --panel | 2.21〔迁移债〕 | 5.14 | ✅（深档见下注） |
 
-**规则一：主色淡底文字必须用 `--acc-text`，不得用 `--acc`（`--acc`/`--acc-soft` 仅 4.50 临界）。**
+**规则一：主色淡底文字必须用 `--acc-text`，不得用 `--acc`（深色档 4.50 临界；浅色档 5.35 已离开临界）。**
+**迁移债注记（v2.0.0 原样迁移承诺）**：深色档 `--err-ctrl`=rgba(255,107,107,.45) 实测 2.21:1——该值原为
+哨兵块外硬编码（T4 已声明盲区从未被断言），token 化后测量首次暴露；按「深色值原样迁移、视觉零回归」保留，
+记录在案，待后续契约小版本校正（浅色档 5.14 达标）。
 **规则二：控件边界必须用 `--line-ctrl`（3.05:1）；`--line`/`--line-strong` 不得作为可交互边界。**
 禁用态文字豁免至 3:1，但必须同时降不透明度 + 保留 `cursor:not-allowed`，不能只靠颜色变淡。
 
@@ -415,7 +431,7 @@ mdwrap clamp（markdown 渲染默认 12.5em 截断+底部渐变遮罩；enhanceC
 
 | 主题 | Do | Don't |
 |---|---|---|
-| Token 使用 | 颜色/间距/圆角/字号/时长一律取 58 token，`:root` 哨兵块为唯一真源 | 硬编码 #hex 或裸 px 绕过 token（机器断言 T4） |
+| Token 使用 | 颜色/间距/圆角/字号/时长一律取 66 token（浅/深双主题取值），哨兵块为唯一真源 | 硬编码 #hex 或裸 px 绕过 token（机器断言 T4） |
 | 控件边界色 | 用 `--line-ctrl`（3.05:1） | 用 `--line`/`--line-strong` 当控件边界 |
 | 淡底主色文字 | 用 `--acc-text`（5.92:1） | 在 `--acc-soft` 上用 `--acc`（4.50 临界） |
 | 状态编码 | 形状+颜色双编码 | 仅靠颜色区分状态 |
@@ -446,7 +462,7 @@ mdwrap clamp（markdown 渲染默认 12.5em 截断+底部渐变遮罩；enhanceC
 
 ### 4.4 程序断言的天花板（诚实声明）
 
-程序断言（curl 页面+源码切片正则）能防：token 键集与**全部 58 值**漂移（T1/T2）、刻度单调（T3）、
+程序断言（curl 页面+源码切片正则）能防：双主题键集与**浅 66+深 42 全部值**漂移（T1/T2）、主题切换管道断裂（T6）、刻度单调（T3）、
 绕过 token 直写 **hex** 颜色（T4；rgb()/hsl()/具名色直写为已声明盲区，靠走查清单兜底）、关键类失联
 （C1，选择器匹配空白容差）、横向滚动结构（C2/C3/C4）、外链破坏离线（C5）、切片失效静默全绿（C6 +
 T4/C3/C5/D4 的保活前置）、形状双编码（S1）、阈值乱序（S2）、状态无标签（S3）、aria 回归（S4）、
@@ -460,7 +476,8 @@ T4/C3/C5/D4 的保活前置）、形状双编码（S1）、阈值乱序（S2）�
 
 ### 5.1 冻结范围（改动=契约变更，须用户显式授权）
 
-- **Token 层**：58 个 token 的键集与语义值（改名/改值/删除均属变更）；`:root` 哨兵块为唯一真源。
+- **Token 层**：66 个 token 的键集与语义（改名/删除均属变更；值随 v2.0.0 起双主题分层——`:root`=浅色默认、
+  `[data-theme="dark"]`=深色，改任一档取值均属变更）；哨兵块为双主题唯一真源。
 - **组件层**：§2 各 [frozen] 组件的类名契约与结构（badge 八变体、toast 三型、table 容器、button
   三档、form-control、tabs 四页签、details aria 机制、kv 网格、chip 三重编码、power、copybtn）。
 - **IA 层**：四页签（状态/调用/历史/登录）与三层信息分层尺子（扫读→详情→排障）。
@@ -511,4 +528,5 @@ T4/C3/C5/D4 的保活前置）、形状双编码（S1）、阈值乱序（S2）�
 | v1.1.0 | 2026-09-25 | efeee49b0e（token 零改动） | 语义升级（授权=用户原话「我点击一个条目，希望它的详细内容直接出现在条目下方」）：历史页详情从页底 #job-detail 卡改为**点击行正下方行内展开**（tr.job-inline + .job-inline-card，手风琴单开沿用，页底卡退役）；新增内容级元素：调用页 caps 选择器（L2 disabled 标未交付）、taskHead caps 徽标、概览/通道卡「能力档」行、L1 工具轨迹 trace-box 折叠件；ui-contract 新增 H1–H4 断言（19→23）；token 键集与值零改动 |
 | v1.2.0 | 2026-10-03 | efeee49b0e（token 零改动） | D2 契约变更（授权=用户 2026-10-03「历史记录里面怎么没有豆包的桥接」）：TYPE_LABEL/type 枚举扩展 `doubao`（豆包桥直通 ask/send/read 落 job 记录进历史，ui-contract FROZEN_TYPE_KEYS 同步）。内容级新增（§5.2/§5.4 放行）：①豆包桥工具卡从状态页底部上移至通道卡之后（用户同日反馈「豆包的桥接怎么放在最下面了」）；②总览条新增豆包状态 chip 与「累计 tokens」chip（v6.4 tokenTotals，历史页右上角同步展示合计）；③历史表改 table-layout:fixed（修复点击行内展开后整表横向胀开，用户同日反馈）。token 键集与值零改动 |
 | v1.3.0 | 2026-10-03 | efeee49b0e（token 零改动） | D2 契约回退（授权=用户 2026-10-03 翻案原话「怎么把我和豆包的聊天记录放进去了？上面还写着"豆包桥接"，这是错误的」）：TYPE_LABEL/type 枚举收回 `doubao`（v1.2.0 的 D2 扩展整体回退），LANE_LABEL/LANE_TITLE 同步回 v6.3 形态；ui-contract FROZEN_TYPE_KEYS 与 v7 ⑤c/v8 ④a 断言同步回退；tokenTotals 去 doubaoTasks、历史页豆包表述清理（豆包直通恢复零落盘，历史页语义=外部算力调度记录）。内容级新增（§5.2/§5.4 放行）：登录页新增豆包（桌面端）说明卡（无需在此登录+launch.ps1 指引，不造假登录按钮）。内容级修复：Cline 卡免费模型下拉 `#cline-free-select` 内联 min-width:220px → min-width:0;width:100%（宽屏撑破卡片）。v1.2.0 其余内容级变更（豆包卡位置/总览 chip/历史表 fixed/累计 tokens chip）全部保留。token 键集与值零改动 |
+| v2.0.0 | 2026-10-08 | 6e0415da13（双主题口径：浅 66+深 42） | 双主题契约变更（授权=用户 2026-10-08 原话「我希望咱们的前端能够做成浅色模式。最好是浅色和深色模式可以相互切换，不过我个人更喜欢浅色模式」+ GOAL-V16 §4 FROZEN 7 变更授权；桥 v6.8.0；T8 双提案实测择优+全表机器实测）：①token 值分层双调色板——`:root`=浅色（默认，T8-b 提案：冷蓝灰系延续深色版色相家族，§1.2 浅色档全表实测达标）、`[data-theme="dark"]`=原深色值原样迁移（视觉零回归）；键集语义不动；②哨兵块外硬编码色收编 8 个新 token（--acc-ink/--err-ink/--err-ctrl/--hover-ring/--hover-soft/--scrollbar/--scrollbar-hover/--panel-fade），T4 allowlist 清空（theme-color meta 派生色唯一例外，等值由 T6 断言）；③主题切换管道：head 首个内联脚本读 localStorage（key wbx-theme，缺省 light）先设 dataset.theme 防 FOUC + header 两态切换按钮（新组件=扩展点，内联 SVG 图标）+ 无 JS 兜底=浅色默认正确渲染；④ui-contract 重构：T1 双主题键集、T2 双值快照、T5 双调色板塌缩断言、新增 T6 主题管道（23→24 断言）；红测 25 变异全红+4 对照全绿+恢复自证；⑤PWA 派生色（theme-color/manifest bg）=浅色 --bg 由 T6 等值断言守护。深色 --err-ctrl 2.21:1 迁移债见 §1.2 注记 |
 | v1.4.0 | 2026-10-03 | efeee49b0e（token 零改动） | 内容级 lane 化升格（授权=用户 2026-10-03 原话「完全lan化」——豆包升格第四 lane，路由/回退/fanout 全进调度体系；桥 v6.6.0）：①静态豆包桥工具卡退役，新增 `doubaoCardHtml()` 渲染的豆包 lane 卡进 `#lane-cards` grid（通道卡×3→×4；4 态探针徽标/电源开关/成本行「会员额度」/调试口 9225 行/launch.ps1 详情与三处诚实声明全文保留）；②成本徽标 `.cost` 新增第四档「会员额度」（doubao，复用 `.neutral` 视觉档，title 兜底原始口径——§2 条目与 §5.1 编码层同步三改四）；③LANE_LABEL +`doubao:'豆包'`、LANE_TITLE +`doubao:'豆包（桌面端）'`、LANE_ORDER_UI +doubao（内容级：三 lane 冻结术语不减，纯新增）；④路由卡 +「固定 豆包」按钮、调用页 ask 分段器与 fanout 行下拉 +豆包；⑤总览豆包 chip 锚点 `#doubao-card`→`#lane-card-doubao`、title 去「非三 lane」；⑥登录页豆包说明卡文案改「豆包已是第四 lane，登录仍在客户端自理」（消除失实）；⑦tokens chip/hist-count 的 unknownUsage hint 扩「含豆包 lane——桌面端不走 API 计量」。D2 TYPE_LABEL 键集不动（豆包调度任务 type=ask/fanout）；token 键集与值零改动 |

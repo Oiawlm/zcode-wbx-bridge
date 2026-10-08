@@ -229,10 +229,11 @@ node .zcode\skills\wb-bridge\scripts\wbx.mjs config set cline-model "<免费模�
 | `wbx doctor` | 自检：node/CLI 路径/模板/各 lane 凭证与模型探测（含 cline 可选段与豆包 status 探测段） |
 | `wbx login [--identity cn\|ai\|cline]` | 登录（cn 微信扫码；ai 邮箱/OneID；cline 浏览器 OAuth；豆包无登录流程——登录态在客户端内自理） |
 | `wbx ask --file p.txt` 或 `--text "…"` | 单条任务；stdout 出结果，失败自动换 lane（`--as ai\|cn\|cline\|doubao` 指定通道；可加 `--caps L1` 联网档、`--max-turns` 回合上限） |
-| `wbx fanout --file tasks.json` | 批量并行（任务文件格式见 [examples](.zcode/skills/wb-bridge/examples/tasks.example.json)；任务可绑 lane（含 `"as":"doubao"`）、可挂材料文件、可写 caps/maxTurns） |
+| `wbx fanout --file tasks.json` | 批量并行（任务文件格式见 [examples](.zcode/skills/wb-bridge/examples/tasks.example.json)；任务可绑 lane（含 `"as":"doubao"`）、可挂材料文件（`"filesMode":"reference"` 播种进 worker 工作目录自读，需 `"caps":"L1"`）、可写 caps/maxTurns） |
 | `wbx history --last 10` / `wbx history <jobId>` | 历史列表 / 回放某次任务的完整双向对话（v6.4 起历史页含全量 token 用量合计；豆包调度任务 usage 无计量，计入「无用量记录」） |
-| `wbx config list` / `set <key> <value>` | 路由与并发配置（default-lane（含 doubao）、disabled-lanes、parallel-per-lane、doubao-parallel、default-caps、caps-l1-max-turns、cline-* 等） |
+| `wbx config list` / `set <key> <value>` | 路由与并发配置（default-lane（含 doubao）、disabled-lanes、parallel-per-lane、doubao-parallel、doubao-autostart（默认 true：派发到达豆包且调试口不可达时自动拉起/重启）、cline-auto-heal（默认 true：配置模型被免费组轮换下线时自动切换可用 id 并写回）、default-caps、caps-l1-max-turns、cline-* 等） |
 | `wbx models` | 探测模型可用性、列出账号下全部模型（`--as cline --free` 列当前免费模型组；doubao 无模型清单概念） |
+| `wbx usage` | 各 lane 余额（WorkBuddy 双 lane 走社区 billing 端点，输出显式标「非官方」；cline/doubao 如实标注无端点；TTL 缓存，`--force` 跳过） |
 | `wbx ui --detach` / `--stop` / `--status` | 常开可视化控制台（幂等后台守护，浏览器开 127.0.0.1:7788）/ 停止 / 查看三态 |
 | `wbx ui --install-autostart` | 装 ZCode 会话自启钩子（新开会话自动拉起控制台；`--remove-autostart` 摘除） |
 | `wbx doubao <doubao.mjs 子命令…>` | 豆包桌面桥手工直通（Windows-only·零落盘旁路，与第四 lane 调度并存）：status/new-task/configure/send/read/ask；需豆包以调试口运行（先跑 `%USERPROFILE%\.zcode\wbx-bridge\doubao\launch.ps1`，装过 self-install 后任何目录可用；直通不经调度、不进桥历史——调度请用 `ask --as doubao`） |
@@ -240,7 +241,7 @@ node .zcode\skills\wb-bridge\scripts\wbx.mjs config set cline-model "<免费模�
 | `wbx self-uninstall [--purge]` | 全局卸载一键还原（`--purge` 连凭证一起删） |
 | `wbx export-bundle` | 生成零凭证分发包 zip，可发给同事在其他机器安装 |
 
-另外两个入口：ZCode 会话里输入 `/wbx <任务描述>`（全局安装后可用）= 一键分派流程；`wbx ui` = 网页控制台，可视化看四 lane 状态、发起任务、翻历史记录（历史页含全量 token 用量合计）。另有 `wbx doubao …` 直通本机豆包桌面端（手工直通零落盘旁路，见上表与 `tools/doubao-bridge/README.md`）。
+另外两个入口：ZCode 会话里输入 `/wbx <任务描述>`（全局安装后可用）= 一键分派流程；`wbx ui` = 网页控制台，可视化看四 lane 状态与余额、发起任务、翻历史记录（历史页含全量 token 用量合计；界面支持浅色/深色主题切换，默认浅色；可从浏览器菜单「安装应用/创建快捷方式」像软件一样在独立窗口使用）。另有 `wbx doubao …` 直通本机豆包桌面端（手工直通零落盘旁路，见上表与 `tools/doubao-bridge/README.md`）。
 
 **质量与安全提示**：免费算力输出质量有方差，外包结果先校验再使用（代码产物必须审查/运行后才进交付物，集成前默认过一道评审批判）；worker 无联网能力，「调研」产出是模型已有知识、可能过时；涉密内容绝不外包。完整分派准则与 worker 提示词模板见 [SKILL.md](.zcode/skills/wb-bridge/SKILL.md) 与 [PROMPTS.md](.zcode/skills/wb-bridge/PROMPTS.md)（知识库：原则/模板/经验条目数见其 §速查表），技术细节见 [WBX.md](WBX.md)。
 
