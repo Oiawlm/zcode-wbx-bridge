@@ -66,7 +66,7 @@ Remove-Item -Force "AGENTS.md"
 
 # 4. 文档（可选：留着当参考也行）
 Remove-Item -Force "README.md","WBX.md","UI-SPEC.md","UNINSTALL.md","AGENTS.md","LICENSE","SECURITY.md","CONTRIBUTING.md","CHANGELOG.md"
-Remove-Item -Recurse -Force "knowledge","toolsdoubao-bridge"   # 文档与工具全清单以 CONTRIBUTING.md 白名单为准
+Remove-Item -Recurse -Force "tools\doubao-bridge"   # 文档与工具全清单以 CONTRIBUTING.md 白名单为准
 
 # 5. 根 .gitignore 里的 `.wbx/` 行（若不再用本目录做编排）
 notepad ".gitignore"
@@ -181,3 +181,14 @@ v12 交付的豆包桌面端驱动工具（`launch.ps1` / `doubao.mjs` / `anchor
   调试端口 9225 只在 `launch.ps1` 启动的豆包进程存活期间监听，正常重启豆包即消失。
 - 豆包桌面端本体（`D:\App\Doubao\`）未修改任何文件——只以 `--remote-debugging-port` 启动参数
   复用官方调试开关，正常重启（无参）即恢复出厂行为。
+
+## 九、glm-prompt-crafter skill 用户级部署物（v17 新增）
+
+ZCode 提示词工艺库的用户级部署副本：`~\.zcode\skills\glm-prompt-crafter\`（全项目可见、自动触发；
+仓库源 `.zcode/skills/glm-prompt-crafter/` 随本仓 git 版本化，为唯一事实源）。
+
+- 安装/校验：`node tools/install-glm-prompt-crafter.mjs`——复制仓库包到用户级目录，逐文件 SHA-256
+  对比打印，不一致 exit 1；幂等可重跑。
+- 移除：删除部署目录即完全卸载——`Remove-Item -Recurse -Force "$HOME\.zcode\skills\glm-prompt-crafter"`，零残留。
+- 自修复：部署副本损坏/漂移时重跑安装脚本即恢复一致（源头是 git 版本化的仓库包，无需额外备份机制）。
+- 本部署物为纯 Markdown 文件：不改注册表/系统环境变量、无进程、无网络行为。

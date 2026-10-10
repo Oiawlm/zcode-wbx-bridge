@@ -71,5 +71,5 @@ tasks.json → 跑 fanout → 逐份校验 → 只回传摘要 + 关键引用）
   caps 是任务契约：L1/L2 失败**绝不静默降档**，caps×lane 不匹配明确报错；`--yolo`/`--zen` 继续禁用
   （既有定案）。模型输出不可信——best-of-N 择优与集成必须经 ZCode 评审/运行验证；L1 联网产出
   另抽查来源清单（URL+访问时间）。
-- 所有产物限于本项目文件夹内（用户级 `~/.zcode/AGENTS.md` 的 wbx 标记块是唯一例外，
-  且只能通过 `wbx install-user` / `uninstall-user` 管理）。
+- 所有产物限于本项目文件夹内（例外仅二：用户级 `~/.zcode/AGENTS.md` 的 wbx 标记块，只能经
+  `wbx install-user` / `uninstall-user` 管理；用户级 glm-prompt-crafter skill 部署物，只能经 `tools/install-glm-prompt-crafter.mjs` 安装/校验/移除）。

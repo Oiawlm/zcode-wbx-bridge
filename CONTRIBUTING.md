@@ -9,7 +9,8 @@
 - 现有白名单：
   - 根目录：`LICENSE`、`.gitignore`、`README.md`、`WBX.md`、`UI-SPEC.md`、`UNINSTALL.md`、`AGENTS.md`、`SECURITY.md`、`CONTRIBUTING.md`、`CHANGELOG.md`
   - 技能目录：`.zcode/skills/wb-bridge/{SKILL.md, PROMPTS.md, examples/tasks.example.json, scripts/wbx.mjs, scripts/wbx-core.mjs, scripts/wbx-setup.mjs, scripts/wbx-daemon.mjs, scripts/wbx-ui.mjs}`
-  - 知识库：`knowledge/PROMPT-GUIDE.md`（v11 起）
+  - 提示词工艺库（v17 起，取代原 v11 知识库指南）：`.zcode/skills/glm-prompt-crafter/{SKILL.md, references/glm-model-profiles.md, references/goal-mode-writing.md, references/official-sources.md}`
+  - 提示词工艺库部署脚本（v17 起）：`tools/install-glm-prompt-crafter.mjs`（仓库包 → `~/.zcode/skills/` 用户级部署，SHA-256 校验，登记于 UNINSTALL §九）
   - 豆包桥（v12 起，可选工具）：`tools/doubao-bridge/{README.md, anchors.json, doubao.mjs, launch.ps1, package.json, package-lock.json}`（`node_modules/` 不入库）
 - `internal/` 已在 `.gitignore`（策划材料不入库）；`.wbx/`、`~/.wbx/` **绝不入库**。
 
