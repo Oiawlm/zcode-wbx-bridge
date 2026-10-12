@@ -2,6 +2,34 @@
 
 本文件记录 zcode-wbx-bridge 的版本变更，格式参考 Keep a Changelog。
 
+## 6.9.0 - 2026-10-12
+
+重构+新增（v19 caps 能力矩阵轮：caps 从三档枚举还原为**能力集合**（L0/L1 降格为别名）+ write/readDirs 探针 STOP 缓期 + 超时根因修复。授权=用户 2026-10-12 立项原话（「每一个项目窗口在调用 WBX 桥的时候，能不能让这个窗口自行选择这些功能？……是否可以联网、是否可以读取本地文件、是否可以写入等等」）+ 四项对齐裁决（沙箱写+主力集成 / 本轮不交付命令执行 / 播种制+按任务附加只读目录 / 授权解冻 FROZEN 二.8 升级能力矩阵治理）+ 三原则重申。**探针终局（STOP 分支）**：P1 写工具实名 `Write` 确认；P2 acceptEdits 档 headless 可自动放行写；P3 越界写**逃逸**（acceptEdits 放行范围为全局 edit 类而非 cwd 限定——沙箱写安全前提破裂）；P4 `--add-dir` 在 headless 不授权读+disallowedTools 路径围栏对 Write 双形态写穿（信任边界不可证）→ **write 与 readDirs 本轮不交付**（总闸未设未置、冒烟未跑、沙箱写管道/artifacts 无死代码），能力集契约/超时根因修复/观测面按计划交付。执行提示词 GOAL-V19-PROMPT，调研底稿 RESEARCH-V19（探针裁决与勘误已回填），探针脚本与输出 `internal/archive/v19/v19p0-p1~p5` 可复跑）
+
+### Added
+- **caps 能力矩阵契约（wbx-core）**：`parseCapsSet()`——token ∈ {net,read,write}，逗号分隔、序无关、去重、大小写不敏感；别名 L0≡∅（缺省）、L1≡net,read；`L2` 保留 → caps-l2-not-delivered（行为不变）；非法 → caps-invalid（文案能力集口径）。`capsToArgs(capsSet)` 唯一旗标组合函数：∅ 逐字 v5 L0 序列；非∅ 白名单固定序拼接（net→WebSearch,WebFetch / read→Read,Glob,Grep / write→Write,Edit）+ permission-mode（write∉set=default；write∈set=acceptEdits，仅契约完整性本轮不可达）+ 回合上限三层取值。`--caps "net,read"` 与 `--caps L1` 旗标逐字一致（特征断言锁定）。lane 矩阵泛化：cline/doubao 拒绝一切非∅能力集（caps-lane-mismatch，文案延续现行风格）。**write 门（STOP 形态）**：含 write 能力集在 askOnce（spawn 前）/runAskJob/runFanoutJob 三层显式报 `caps-write-disabled`（文案含探针 P3 证据指针；本轮不设总闸键——无行为效果的死配置不设）。**readDirs 未交付**：fanout 任务字段声明即显式报错（探针 P4：add-dir 边界不可证；绝不静默忽略）。结果对象/记录 caps 字段=规范化集合串（固定序 net,read,write；∅ 沿 v6.8 字节兼容）。
+- **超时单点 resolveCapsTimeoutS(explicit|null, capsSet)**（根因修复）：显式最高优先（原值返回）；缺省 ∅=300s / 非∅=600s；ask（runAskJob）与 fanout（runTask）同源一处决策。修掉 v6.8 三重缺陷：两处独立 Math.max 决策、fanout manifest/summary 记录未上浮值（「展示 300 实跑 600」观测说谎——一号调研 job 实证误读）、显式小值被静默覆盖。CLI/UI 缺省传 null；fanout manifest 增 timeoutPolicy（explicit|auto）、summary 如实展示两态。
+- **maxTurns 泛化**：三层取值（任务级 > config caps-l1-max-turns > 24）语义扩展到任何非∅能力集（∅ 仍明确报错）；config 键名与 resolveL1MaxTurns 导出名不变（v11.3 门禁直呼；命名债注记于 help/config list）。
+- **filesMode:"reference" 泛化（D-009 演进）**：前置从「任务级 caps:"L1"」改为「任务级显式声明且 read∈集合」（L1 别名天然含 read，行为兼容；缺省/继承/不含 read 显式报错文案同步）。
+- **v19-regression（新增第十套件，67 断言）**：capsToArgs 序列逐字锁（∅≡v5、{net,read}≡现行 L1，JSON.stringify 比对）/能力集解析（别名/序无关/去重/大小写/非法/L2 保留）/P5 矩阵拒绝契约（cline/doubao × 一切非∅ + L2 + 非法 + L0 正常路径）/write 三层门+缺省继承路径/readDirs 报错/filesMode 泛化四态/config caps 类型 roundtrip+loadConfig 容错/超时单点（显式优先/∅300/非∅600/非法值兜底）/三层取值回归/黑盒 CLI（fanout manifest timeoutPolicy 如实、任务记录集合串、--caps net,read 端到端 argv、write/L2 退出码）。首批特征断言重构前先绿（32 锁+12 目标态重构后转绿）。
+- **观测面**：doctor caps 步=能力矩阵+交付面一行（∅/net,read/write 未交付/readDirs 缓期/L2 保留）；wbx --help（--caps/--max-turns/fanout 任务字段/config list）能力集口径；UI ask 表单 caps 下拉=能力集选项（net/read/net,read 可选，net,read+write 与 L2 灰显未交付）+提示语、历史行内徽标渲染集合串、fanout 任务行内联能力集 select、job 详情「能力集」行、状态页能力行（内容级，UI-SPEC §5.2 放行，契约版本不动）；config `default-caps` 类型 enum→caps（别名原样存/集合串规范化存/L2 保留）。
+- **PROMPTS.md v4 → v4.1**：原则 2 能力边界声明改「按能力集」句式（∅/net,read/含 write 留位/L2 四句式）；新增 T1-W 代码模块·写盘变体（**留位未启用**——探针 P3 依据，与 T10「模板先行」同例；含写边界句与编排侧配套）；T4-L1/豆包 lane 行/派发流程 1b/决策速查表/派发前 checklist 能力集口径；T10 注记同步（write 亦未交付）。SKILL.md caps 能力矩阵节/命令速查/fanout 段/骨架句式同步。
+
+### Fixed
+- **T7 评审批判（job `20261012-180400-r7z`）3 阻断全修**：B1 UI ask 超时输入预填 300（经 UI 的能力任务恒 300s、违背缺省 600s 契约——改留空+placeholder=「缺省」，显式值才最高优先；汇总行同步 auto 显示）；B2 runFanoutJob 缺省继承路径无 write/L2 门（config default-caps 含 write 或 =L2 时继承任务在校验层显式报错，对齐 v6.8 job 级快速失败语义）；B3 doctor caps 步对 default-caps='L2' 渲染「非法」假状态（loadConfig 已合法保留 L2——改专项渲染「保留未交付」）。建议 S3（capsToArgs「纯函数」措辞）/S4（豆包卡误标 cline）/S5（重复注释）/S8（summary 超时 null 显示）/S10（config 报错文案漏 L2）采纳修复；S1（记录层 caps:'L0' 省略）/S2（config 可存含 write 集合）/S9（UI 400 短文案）驳回有因（v6.8 字节兼容+UI 过滤兼容；L2 可设先例；既有校验分层）。
+- **T8 双份择优（job `20261012-172757-9sn`）**：两份实现草稿设计互证（超时如实展示与 readDirs 带 kind 吸收）；两份 write 文案均误引 v10 cline/L2 证据（探针 P3 事实错置）未采纳——write 文案由主力按探针终局亲写。
+
+### Changed
+- **门禁同步（最小干预，留痕 exec-log）**：v13 ③b 与 v11.3 ③a/③b/③f 报错**文案正则**随「文案能力集口径泛化」同步（仅 regex 子串，行为断言一字未动）——GOAL「文案泛化」与「消息子串钉死」两授权条款互斥的裁决：文案诚实优先，偏差记录 internal/archive/v19/v19-exec-log.md。
+- 旧三档枚举解析器（parseCaps/CAPS_LEVELS/L1_TOOLS_WHITELIST）随根因化移除（零调用后删除，非保留死代码）。
+
+### 验证
+- 探针五连（脚本+输出 internal/archive/v19/，可复跑）：P1 Write 实名+function_call 形态确认；P2 acceptEdits 档 headless 自动放行写（default 对照被拒 16.5s/23.9s）；P3 越界写逃逸（82.4s，文件实存界外、内容吻合、唯一 function_call 即 Write）；P4 add-dir 读不授权（双形态+复测）、写穿围栏（正斜杠直接写穿；反斜杠首测挂起偶发、复测写穿）；P5 以 v19-regression ③ 断言族承载。
+- 门禁终态：**v19 67 + v6 35 + v7 50 + v8 22 + v11.3 38 + v13 52 + ui-contract 24 + 红测全部通过 + tokens-sha 108=6e0415da13 + v14-consistency 27——九套件+第十套件全绿**。
+- 黑盒零回归：v6 35（L0 全链路）/v7 50（真机端口）/v11.3 38（L1 三层取值+L0 零影响 argv）/v13 52（doubao/cline caps 矩阵+NDJSON）全绿即行为等价实证。
+- STOP 分支留痕：write 总闸未设未置（无 caps-write-enabled 键）；置闸与真机写冒烟未执行；沙箱写管道/artifacts/readDirs 实现不存在（无死代码）；T1-W 留位未启用。
+- 发布：self-install 同步全局副本+用户级 AGENTS 块能力矩阵口径（grep 实证）；commit/push 按 FROZEN 二.2 全流程；tag v6.9.0。
+
 ## 6.8.0 - 2026-10-08
 
 新增（v16 控制台体验与桥自治轮：余额可见 / 浅深双主题 / PWA 可安装 / 全自动连接 / worker 文件自读。授权=用户 2026-10-08 立项五诉求原话——①前端直接看余额 ②浅色模式（可切换、偏好浅色，FROZEN 7 UI 契约变更显式授权）③worker 按文件路径自读 ⑤四桥自动开启自动连接（「最好就是它们能够自动开启、自动连接，不需要我额外干预」）；自动化边界定案=豆包允许按需自动拉起/重启、cline 配置模型被免费组轮换下线时允许自动切换组内可用模型并显式报告（「失败回退只投 ai/cn 不换模型」定案继续有效——约束失败回退，不约束配置修复）。UI 契约 v1.4.0 → **v2.0.0**（token 值分层双调色板 + 8 个收编新 token + 主题切换管道；键集语义不动，浅色=T8 双提案机器实测择优，深色=原值原样迁移视觉零回归）。执行提示词 GOAL-V16-PROMPT，调研底稿 RESEARCH-V16）

@@ -64,12 +64,12 @@ tasks.json → 跑 fanout → 逐份校验 → 只回传摘要 + 关键引用）
 - 凭证（`.wbx/sessions/`、`.wbx/product/`、`~/.wbx/cline-home/`）绝不展示给用户或写进日志、文档、对话输出。
 - `.wbx/` 保持 gitignore，绝不提交。
 - 不写 `~/.workbuddy`、`~/.workbuddy-ai`、**不读写用户 `~/.cline`**，不改桌面版任何文件，不动系统环境变量。
-- **caps 分级授权（v6，授权来源=用户 2026-09-25 原话「我们要尽可能最大限度地发挥它们的性能，
-  只要有需要，就可以让它们使用工具、联网」与拍板「三级分级」；L2 缓期为当日实测后用户裁决）**：
-  L0 纯文本默认零回退；L1 只读+联网 opt-in（仅 ai/cn，白名单+scratch 读边界+轨迹落盘）；
-  L2 本版未交付（`--caps L2` 声明即报错；总闸 `caps-l2-enabled` 默认 false，日常开闸须用户显式授权）。
-  caps 是任务契约：L1/L2 失败**绝不静默降档**，caps×lane 不匹配明确报错；`--yolo`/`--zen` 继续禁用
-  （既有定案）。模型输出不可信——best-of-N 择优与集成必须经 ZCode 评审/运行验证；L1 联网产出
-  另抽查来源清单（URL+访问时间）。
+- **caps 能力矩阵授权（v19；授权=用户 2026-09-25 原话「我们要尽可能最大限度地发挥它们的性能，
+  只要有需要，就可以让它们使用工具、联网」+ 2026-10-12 四项裁决：解冻 FROZEN 二.8 升级能力矩阵
+  治理、沙箱写+主力集成、本轮不交付命令执行）**：caps=能力集合（net/read/write），L0≡∅（默认零回退）、
+  L1≡net,read 为别名；net,read 联网+只读 opt-in（仅 ai/cn，白名单+scratch 读边界+轨迹落盘）；含 write
+  本轮未交付（探针 P3 实证 headless 写无进程级边界，声明即报 caps-write-disabled，未设总闸）；L2
+  未交付（`--caps L2` 报错；总闸默认 false）。caps 是任务契约：能力任务失败**绝不静默降档**，caps×lane
+  不匹配明确报错；`--yolo`/`--zen` 继续禁用；模型输出不可信——集成前必经 ZCode 评审/验证，联网产出另抽查来源清单。
 - 所有产物限于本项目文件夹内（例外仅二：用户级 `~/.zcode/AGENTS.md` 的 wbx 标记块，只能经
   `wbx install-user` / `uninstall-user` 管理；用户级 glm-prompt-crafter skill 部署物，只能经 `tools/install-glm-prompt-crafter.mjs` 安装/校验/移除）。

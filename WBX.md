@@ -1503,3 +1503,49 @@ CHANGELOG 之外的独有内容（实测/契约细节/不变量）。
 - 门禁终态（T7 修复后全量复跑）：v6 35 + v7 50 + v8 22 + v11.3 38 + v13 52 + contract 24 +
   红测 25 变异+4 对照全绿 + tokens-sha 108=6e0415da13 + v14-consistency 20——九套件全绿。
 - 发布：self-install 同步全局副本 + 控制台重启（/__health=6.8.0）；commit/push 按 FROZEN 二.2 全流程。
+
+## v6.9 章：caps 能力矩阵（按调用自选联网/读/写契约）· write/readDirs 探针 STOP 缓期
+
+立项原话与四项用户裁决（2026-10-12：沙箱写+主力集成 / 本轮不交付命令执行 / 播种制+按任务附加
+只读目录 / 授权解冻 FROZEN 二.8 升级能力矩阵治理）、根因分析与契约设计见 **RESEARCH-V19**；
+逐项改动面与 T7/T8 评审记录见 **CHANGELOG 6.9.0**。本章只记 CHANGELOG 之外的独有内容。
+
+- **探针终局（五连，脚本+输出 internal/archive/v19/v19p0-p1~p5，可复跑）**：P1 写工具实名
+  `Write`（function_call 事件 `{file_path, content}`）✔；P2 acceptEdits 档 headless 自动放行写
+  （default 对照被拒）✔；**P3 越界写逃逸**——acceptEdits 档下 scratch 外绝对路径写成功（唯一
+  function_call 即 Write、文件实存、无拒绝信号）→ 沙箱写安全前提破裂，**write 本轮 STOP 不交付**；
+  **P4 add-dir 边界不可证**——`--add-dir` 在 headless `-p` 下对 Read/Grep 均不授权（正反斜杠两形态
+  +复测一致，拒绝层级=审批层），`--disallowedTools` 路径围栏对 Write 两形态均写穿（正斜杠直接写穿；
+  反斜杠首测 240s 挂起系偶发、复测写穿）→ **readDirs 整体缓期**。write 档位结论：acceptEdits 的
+  放行范围是**全局 edit 类而非 cwd 限定**——cwd 读边界（审批层）与写无边界并存，是该 CLI 权限
+  拓扑的实测事实。
+- **能力矩阵契约（交付面）**：caps=能力集合（token ∈ net|read|write，逗号分隔、序无关、去重、
+  大小写不敏感；别名 L0≡∅、L1≡net,read；`--caps "net,read"` 与 `--caps L1` 旗标逐字一致）；
+  `capsToArgs` 为旗标唯一组合函数（∅ 序列逐字 v5、{net,read} 逐字 v6.8 L1，特征断言锁定）；cline/
+  doubao 拒绝一切非 ∅ 能力集（现行 L1 拒绝泛化，文案能力集口径）；含 write 声明即
+  caps-write-disabled（**无总闸键**——无行为效果的死配置不设，交付轮随进程级边界修复一并引入）；
+  readDirs 任务字段声明即显式报错。结果对象/记录 caps 字段=规范化集合串（固定序 net,read,write）。
+- **超时单点（根因修复）**：`resolveCapsTimeoutS(explicit|null, capsSet)` 唯一决策点（显式最高
+  优先；缺省 ∅=300s / 非∅=600s），ask 与 fanout 同源。修掉 v6.8 三重缺陷：①两处独立 Math.max
+  决策；②fanout manifest/summary 记录未上浮值（「展示 300 实跑 600」观测说谎——一号调研 job
+  20261012-154306-3zo 误读实证，RESEARCH 勘误）；③显式小值被 Math.max 静默覆盖。
+- **maxTurns 泛化**：三层取值（任务级 > config `caps-l1-max-turns` > 24）语义扩展到任何非∅集合
+  （config 键名与导出名 `resolveL1MaxTurns` 不变——命名债注记于 config list/help，v11.3 门禁直呼）。
+- **filesMode 泛化（D-009 演进）**：reference 前置从「任务级 caps:"L1"」泛化为「任务级显式声明且
+  read∈集合」（L1 别名天然含 read，行为兼容）。
+- **观测面**：doctor caps 步=能力矩阵+交付面一行；UI ask 表单 caps 下拉=能力集选项（write/L2 灰显
+  未交付）、历史徽标/详情渲染集合串、状态页能力行（内容级，UI-SPEC §5.2，契约版本不动）；help/
+  config list 能力集口径。
+- **门禁**：新增第十套件 `internal/v19-regression.mjs` 67 断言（序列逐字锁/解析/P5 矩阵/write 三层
+  门/readDirs/filesMode/config roundtrip/超时单点/黑盒观测面——首批特征断言在重构前先绿 32/44，
+  目标态断言重构后转绿）。v13 ③b 与 v11.3 ③a/③b/③f 报错**文案正则同步**（仅 regex，行为断言
+  不动——GOAL「文案泛化」与「消息子串钉死」互斥的最小干预解，偏差留痕 exec-log）。
+- **T7 评审**：job `20261012-180400-r7z`（net,read）——3 阻断+10 建议：B1 UI 超时预填 300（行为
+  回归）/B2 fanout 缺省继承路径无门/B3 doctor L2 假状态，全修；S3/S4/S5/S8/S10 修，S1/S2/S9
+  驳回有因（字节兼容/L2 先例/既有分层）。T8 双份择优：job `20261012-172757-9sn`（两份草稿
+  t8-drafts/，设计互证+超时如实展示与 readDirs kind 吸收；两份 write 文案均误引 v10 证据未采纳）。
+- **门禁终态**：v19 67 + v6 35 + v7 50 + v8 22 + v11.3 38 + v13 52 + contract 24 + 红测全绿 +
+  tokens-sha 108=6e0415da13 + v14-consistency 27——九套件+第十套件全绿。
+- **STOP 分支留痕**：置闸与真机冒烟**未执行**（探针 P3/P4 依据）；沙箱写管道/artifacts/readDirs
+  实现不存在于本版（最简：无死代码）；T1-W 模板先行入库（未启用）。桥版本 `WBX_VERSION` 6.9.0。
+- 发布：self-install 同步全局副本+用户级 AGENTS 块能力矩阵口径；commit/push 按 FROZEN 二.2 全流程。

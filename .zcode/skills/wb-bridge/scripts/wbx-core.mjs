@@ -21,7 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '6.8.0';
+export const WBX_VERSION = '6.9.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -363,19 +363,17 @@ export function extractFreeLimitResetIn(text) {
   return m ? m[1].trim() : null;
 }
 
-// ---------- worker 能力分级 caps（L0 纯文本默认 / L1 只读+联网 / L2 缓期未交付） ----------
-// 第一性：caps 是任务契约不是偏好——绝不静默降档、绝不自动改路；L0 出厂零回退。
-// 映射（Phase 0 探针定案，证据 internal/v10p0-*.mjs + WBX.md v6.0.0 章映射表）：
-//   L0 = 三 lane 现有链逐字不变；
-//   L1 = 仅 ai/cn（codebuddy --tools 白名单；四档 permission-mode 端到端可用，取最小权限 default；
-//         Read/Glob/Grep 越 cwd 绝对路径读取被进程级拒绝（P2c），故以空 scratch 为 cwd 获得读边界）；
-//   L2 = 仅 cline，本版未交付（2026-09-25 用户裁决「L2 缓期，本版留位」）：cline 3.0.65 无命令级
-//         权限管控——CLINE_COMMAND_PERMISSIONS 特性不存在于二进制（P3b2/P3b3/P4 三组 deny 实测
-//         全失效、del 实删），六层防护栈第②层缺层不交付（GOAL-V10 红线 2）。
-export const CAPS_LEVELS = ['L0', 'L1', 'L2'];
-export const L1_TOOLS_WHITELIST = 'WebSearch,WebFetch,Read,Glob,Grep';   // P1 自报+P2/P2b 行为证实实名
-// 契约 A：L1 回合上限缺省 24（8 回合不够典型联网调研，v11.2 P3 实证——叙事见 CHANGELOG 6.2.0）；
-// 三层取值：任务级 maxTurns > config caps-l1-max-turns > 此缺省。
+// ---------- worker 能力矩阵 caps（v19：能力原语 net/read/write，L0/L1 预设降格为别名） ----------
+// 第一性：caps 是任务契约不是偏好——绝不静默降档、绝不自动改路；∅ 出厂零回退。
+// 历史（探针定案，证据 internal/archive/v10/ + v19/ + WBX.md 各版本章）：
+//   ∅（L0 别名）= 四 lane 现有链逐字不变；
+//   net,read（L1 别名）= 仅 ai/cn（codebuddy --tools 白名单，最小权限 default 档；cwd 外绝对路径
+//         读取被审批拒绝（v10 P2c+v19 P4），空 scratch 为 cwd 获得读边界）；
+//   含 write = 本轮未交付（v19 探针 P3：acceptEdits 档越界写逃逸，沙箱前提破裂——声明即
+//         caps-write-disabled，不设总闸）；readDirs 本轮缓期（P4：add-dir 边界不可证，字段声明即报错）；
+//   L2 = 保留未交付（cline 3.0.65 无命令级 deny，六层防护栈第②层缺层，v10 探针）。
+// 契约 A：回合上限缺省 24（8 回合不够典型联网调研，v11.2 P3 实证——叙事见 CHANGELOG 6.2.0）；
+// 三层取值：任务级 maxTurns > config caps-l1-max-turns > 此缺省（v19 起语义=任何非 ∅ 能力集）。
 export const L1_MAX_TURNS_DEFAULT = 24;
 export const L2_NOT_DELIVERED_MSG = 'L2 本版未交付：cline 3.0.65 无命令级权限管控（CLINE_COMMAND_PERMISSIONS 特性不存在，Phase 0 实测 deny 三组全失效、del 实删文件），六层防护栈缺层不交付（用户 2026-09-25 裁决「L2 缓期，本版留位」）。上游发布该特性后将按完整六层防护栈交付，详见 WBX.md v6.0.0';
 
@@ -390,20 +388,94 @@ export function parseMaxTurns(v, ctx = '任务') {
 }
 
 // L1 实际回合上限（任务级 maxTurns 优先，缺省 config caps-l1-max-turns，再缺省 24）
+// 导出名沿用 resolveL1MaxTurns（v11.3 门禁直呼；v19 起语义=任何非 ∅ 能力集的回合上限，命名债同 config 键）
 export function resolveL1MaxTurns(maxTurns) {
   const mt = parseMaxTurns(maxTurns);
   if (mt != null) return String(mt);
   return String(loadConfig()['caps-l1-max-turns'] || L1_MAX_TURNS_DEFAULT);
 }
 
-export function parseCaps(v) {
-  const s = String(v || '').toUpperCase();
-  return CAPS_LEVELS.includes(s) ? s : null;
+// caps 拒绝对象（capsReject_ 分流消费，文案能力集口径）
+const capsInvalid_ = (caps) => ({ ok: false, kind: 'caps-invalid', error: `caps 只支持能力集（net/read/write 逗号组合）或别名 L0 | L1（收到 ${caps}）`, durationMs: 0, hint: 'caps-invalid' });
+const capsL2NotDelivered_ = () => ({ ok: false, kind: 'caps-l2-not-delivered', error: L2_NOT_DELIVERED_MSG, durationMs: 0, hint: 'caps-l2-not-delivered' });
+
+// ---------- caps v2 能力矩阵（v19）：能力原语为本体，L0/L1 预设降格为别名 ----------
+// 第一性：caps 的本源是能力集合（net/read/write），三档枚举只是历史预设包。契约：
+//   token ∈ {net,read,write}（逗号分隔、序无关、去重、大小写不敏感）；L0≡∅（缺省）、L1≡net,read；
+//   L2 保留 → caps-l2-not-delivered（行为不变）；非法 → caps-invalid。write 本轮未交付（探针 P3：
+//   acceptEdits 档越界写逃逸，沙箱前提破裂——RESEARCH-V19 §六勘误），声明即 caps-write-disabled。
+export const CAPS_TOKENS = ['net', 'read', 'write'];            // 固定序 = 规范化输出序
+export const CAPS_ALIASES = { L0: [], L1: ['net', 'read'] };    // 预设别名（行为与兼容不变）
+export const CAPS_TOOL_WHITELIST = { net: 'WebSearch,WebFetch', read: 'Read,Glob,Grep', write: 'Write,Edit' };
+export const CAPS_WRITE_MODE = 'acceptEdits';   // P2 裁决写档位（write 交付轮使用；本轮经 write 门不可达）
+export const CAPS_TIMEOUT_DEFAULT_S = 600;      // 非 ∅ 能力集缺省超时（超时政策单点，见 resolveCapsTimeoutS）
+export const CAPS_WRITE_DISABLED_MSG = 'write 能力本轮未交付：探针 P3 实证 acceptEdits 档越界写逃逸（scratch 外绝对路径写成功，沙箱前提破裂，RESEARCH-V19 §六勘误）。交付将随后续轮次（进程级边界修复+重探针）评估，本轮不设总闸、不置闸';
+
+/**
+ * 解析 caps 声明为规范化能力集合（v19 唯一入口；替代三档枚举 parseCaps）。
+ * 返回 { ok:true, set:['net','read'…固定序], normalized:'net,read' }
+ *     | { ok:false, kind:'caps-invalid' | 'caps-l2-not-delivered' }。
+ * 别名必须独立成值（'L1,net' → caps-invalid）；∅ 的 normalized 为 ''。
+ */
+export function parseCapsSet(v) {
+  const raw = String(v ?? '').trim();
+  if (!raw) return { ok: false, kind: 'caps-invalid' };
+  const up = raw.toUpperCase();
+  if (up === 'L2') return { ok: false, kind: 'caps-l2-not-delivered' };
+  if (up in CAPS_ALIASES) return { ok: true, set: [...CAPS_ALIASES[up]], normalized: CAPS_ALIASES[up].join(',') };
+  const seen = new Set();
+  for (const part of raw.split(',')) {
+    const tok = part.trim().toLowerCase();
+    if (!tok) continue;
+    if (!CAPS_TOKENS.includes(tok)) return { ok: false, kind: 'caps-invalid' };
+    seen.add(tok);
+  }
+  if (!seen.size) return { ok: false, kind: 'caps-invalid' };
+  const set = CAPS_TOKENS.filter((t) => seen.has(t));
+  return { ok: true, set, normalized: set.join(',') };
 }
 
-// caps 拒绝对象（askOnce/askOnceCline/askOnceDoubao 三处共用，文案逐字不变）
-const capsInvalid_ = (caps) => ({ ok: false, kind: 'caps-invalid', error: `caps 只支持 L0 | L1 | L2（收到 ${caps}）`, durationMs: 0, hint: 'caps-invalid' });
-const capsL2NotDelivered_ = () => ({ ok: false, kind: 'caps-l2-not-delivered', error: L2_NOT_DELIVERED_MSG, durationMs: 0, hint: 'caps-l2-not-delivered' });
+/** caps 解析失败 → askOnce 系返回对象（kind 二选一分流）。 */
+export function capsReject_(parsed, caps) {
+  return parsed.kind === 'caps-l2-not-delivered' ? capsL2NotDelivered_() : capsInvalid_(caps);
+}
+const capsWriteDisabled_ = () => ({ ok: false, kind: 'caps-write-disabled', error: CAPS_WRITE_DISABLED_MSG, durationMs: 0, hint: 'caps-write-disabled' });
+/** write 门（本轮 STOP：含 write 的能力集一律显式报错，绝不静默剥能力；交付轮在此接入总闸）。 */
+export function capsRejectWrite_(parsed) {
+  return parsed.set.includes('write') ? capsWriteDisabled_() : null;
+}
+
+/**
+ * capsToArgs(capsSet, { maxTurns })：能力集合 → codebuddy 旗标数组的唯一组合函数
+ *（v19 起替换 askOnce 内的三元；旗标组合点唯一=三原则自证锚点。同集合+同 config 下输出确定：
+ * 回合上限经 resolveL1MaxTurns 读 config，属环境注入而非纯函数）。
+ * ∅ → 逐字 v5 L0 序列；非 ∅ → 白名单（固定序拼接）+ permission-mode + max-turns + json 序列。
+ * {net,read} 输出与现行 L1 序列逐字一致（特征断言 internal/v19-regression.mjs 锁定）。
+ */
+export function capsToArgs(capsSet, { maxTurns = null } = {}) {
+  const set = Array.isArray(capsSet) ? capsSet : [...(capsSet || [])];
+  if (!set.length) {
+    // L0：纯 LLM 无工具模式（对标桌面版 Quick 模式）——逐字不变
+    return ['--tools', '', '--output-format', 'json', '--no-session-persistence', '--max-turns', '1'];
+  }
+  const whitelist = set.map((t) => CAPS_TOOL_WHITELIST[t]).filter(Boolean).join(',');
+  const mode = set.includes('write') ? CAPS_WRITE_MODE : 'default';
+  // 回合上限契约 A 三层取值：任务级 maxTurns > config caps-l1-max-turns > 缺省 24（键名不动，语义=任何非∅集合）
+  return ['--tools', whitelist, '--permission-mode', mode, '--max-turns', resolveL1MaxTurns(maxTurns), '--output-format', 'json', '--no-session-persistence'];
+}
+
+/**
+ * resolveCapsTimeoutS(explicitTimeoutS, capsSet)：超时政策唯一决策点（ask 与 fanout 同源）。
+ * 显式值最高优先（原值返回）；缺省时非 ∅ 能力集 600s（多轮+搜索延迟），∅ 300s（现行通用缺省）。
+ * 修掉 v6.8 现状：两处独立 Math.max 决策 + fanout 记录/汇总展示未上浮值（观测说谎）+
+ * 显式小值被 Math.max 静默覆盖（违背显式最高优先）。
+ */
+export function resolveCapsTimeoutS(explicitTimeoutS, capsSet) {
+  const set = Array.isArray(capsSet) ? capsSet : [...(capsSet || [])];
+  const n = Number(explicitTimeoutS);
+  if (explicitTimeoutS != null && Number.isFinite(n) && n > 0) return n;
+  return set.length ? CAPS_TIMEOUT_DEFAULT_S : 300;
+}
 
 // L1 的空 scratch 工作目录（读边界：白名单无写工具 + cwd 外绝对路径读取被进程级拒绝）
 export const SCRATCH_ROOT = path.join(RUNTIME_ROOT, 'scratch');
@@ -573,12 +645,12 @@ export const CONFIG_DEFS = {
     desc: 'cline 模型自愈（v6.8 桥自治，默认开）：配置 id 被免费组轮换下线（model-not-found 且实时清单确认不在组内）时，自动切换免费组首个可用 id、写回 config 并在派发链内重投一次；Daily limit（配额耗尽）不触发换模型，失败回退 ai/cn 语义不变',
   },
   'default-caps': {
-    type: 'enum', values: ['L0', 'L1', 'L2'], default: 'L0',
-    desc: 'ask/fanout 缺省能力档：L0 纯文本（出厂默认，零回退）| L1 只读+联网（仅 ai/cn）| L2（本版未交付，声明即报错）',
+    type: 'caps', default: 'L0',
+    desc: 'ask/fanout 缺省能力集（v19 能力矩阵）：∅（L0，纯文本零回退）| net,read（L1 别名，仅 ai/cn）| net/read/write 逗号集合串（含 write 本轮未交付，声明即报 caps-write-disabled）| L2（保留未交付，声明即报错）',
   },
   'caps-l1-max-turns': {
     type: 'int', min: 1, max: 64, default: L1_MAX_TURNS_DEFAULT,
-    desc: 'L1 缺省回合上限（v6.2 起 8→24；任务级 maxTurns 字段（1-64）可覆盖；仅 L1 生效，L0 无回合概念）',
+    desc: '能力任务缺省回合上限（v6.2 起 8→24；键名沿用 caps-l1-max-turns，v19 起语义=任何非 ∅ 能力集；任务级 maxTurns 字段（1-64）可覆盖，∅ 无回合概念）',
   },
   'caps-l2-enabled': {
     type: 'boolean', default: false,
@@ -628,8 +700,12 @@ export function loadConfig() {
   // 桥自治双键（v6.8）：非布尔回缺省 true（出厂开启；off 才是用户显式退出）
   if (typeof out['doubao-autostart'] !== 'boolean') out['doubao-autostart'] = true;
   if (typeof out['cline-auto-heal'] !== 'boolean') out['cline-auto-heal'] = true;
-  // caps 键：default-caps 非法回退 L0；caps-l2-enabled 非布尔回退 false（出厂缺省）
-  if (!CAPS_LEVELS.includes(out['default-caps'])) out['default-caps'] = 'L0';
+  // caps 键：default-caps 非法（非别名/集合串/L2）回退 L0；caps-l2-enabled 非布尔回退 false（出厂缺省）
+  {
+    const dcParsed = parseCapsSet(out['default-caps']);
+    const dcIsL2 = !dcParsed.ok && dcParsed.kind === 'caps-l2-not-delivered';
+    if (!dcParsed.ok && !dcIsL2) out['default-caps'] = 'L0';
+  }
   if (typeof out['caps-l2-enabled'] !== 'boolean') out['caps-l2-enabled'] = false;
   // caps-l1-max-turns 非法回退缺省 24（与 schema/resolve 同源常量 L1_MAX_TURNS_DEFAULT）
   if (!Number.isInteger(out['caps-l1-max-turns']) || out['caps-l1-max-turns'] < 1 || out['caps-l1-max-turns'] > 64) {
@@ -653,6 +729,15 @@ export function parseConfigValue(key, valueStr) {
     case 'enum':
       if (!def.values.includes(v)) throw new Error(`${key} 只支持 ${def.values.join(' | ')}（收到 ${JSON.stringify(v)}）`);
       return v;
+    case 'caps': {
+      // v19 能力矩阵：别名 L0/L1 原样存（显示友好），集合串存规范化形式，L2 保留（声明任务时才报未交付）
+      const s = typeof v === 'string' ? v.trim() : String(v ?? '');
+      const up = s.toUpperCase();
+      if (up === 'L0' || up === 'L1' || up === 'L2') return up;
+      const parsed = parseCapsSet(s);
+      if (!parsed.ok) throw new Error(`${key} 需为能力集（net/read/write 逗号组合）或别名 L0 | L1 | L2（收到 ${JSON.stringify(v)}）`);
+      return parsed.normalized;
+    }
     case 'lanes': {
       if (typeof v === 'string') v = v.split(',').map((s) => s.trim()).filter(Boolean);
       if (!Array.isArray(v)) throw new Error(`${key} 需为 lane 数组，如 ["cn"] 或 "cn"`);
@@ -1081,18 +1166,17 @@ function normalizeResult(j) {
 }
 
 /**
- * 单次无头调用，跑在指定 lane 上。caps（任务契约字段，默认 L0）：
- *   L0 = 纯 LLM 无工具（--tools '' --max-turns 1，逐字保持 v5 行为零回退）；
- *   L1  = 只读+联网（仅 ai/cn；--tools 白名单 + --permission-mode default + --max-turns
- *         24（契约 A：任务级 maxTurns > config caps-l1-max-turns > 缺省 24），
- *         cwd=空 scratch 读边界；P2/P2b/P2c 探针定案）；返回值附 toolTrace 轨迹摘要与原始 transcript；
- *   L2  = 本版未交付（上游 cline 3.0.65 无命令级 deny；明确报错，绝不静默降档）。
- * maxTurns（契约 A）：任务级 L1 回合上限（整数 1-64，仅 L1 生效；L0 无回合概念零影响）。
+ * 单次无头调用，跑在指定 lane 上。caps（任务契约字段，v19 能力矩阵，默认 ∅=别名 L0）：
+ *   ∅（L0） = 纯 LLM 无工具（capsToArgs 逐字 v5：--tools '' --max-turns 1，零回退）；
+ *   net,read（L1） = 联网+只读（仅 ai/cn；白名单 + default 档 + 回合上限（契约 A 三层取值），
+ *         cwd=空 scratch 读边界；v10/v19 探针定案）；返回值附规范化集合串、toolTrace 与原始 transcript；
+ *   含 write = 本轮未交付（探针 P3 沙箱前提破裂，spawn 前报 caps-write-disabled）。
+ * maxTurns（契约 A）：任务级回合上限（整数 1-64，任何非 ∅ 能力集生效；∅ 无回合概念零影响）。
  * 返回：
  *   成功 { ok:true, text, usage, durationMs, model, raw, caps?, toolTrace?, rawTranscript?, scratchDir? }
  *   失败 { ok:false, kind, error, durationMs, hint? }
  * kind: timeout | cli-error | unparseable | l1-turns-exhausted | result-error | auth |
- *       caps-l2-not-delivered | caps-invalid | caps-lane-mismatch
+ *       caps-l2-not-delivered | caps-invalid | caps-lane-mismatch | caps-write-disabled
  * v5：lane=cline 走 cline CLI（--json NDJSON）；任务级 effort 对 cline 不生效
  *（用户定案：cline 思考档一律取 config cline-thinking，不下调）。
  * v13：lane=doubao 走 askOnceDoubao（豆包桌面端工作任务模式）；任务级 effort/model 对 doubao
@@ -1101,24 +1185,20 @@ function normalizeResult(j) {
 export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000, caps = 'L0', scratchDir = null, maxTurns = null }) {
   if (lane === 'cline') return askOnceCline({ prompt, model, timeoutMs, caps });
   if (lane === 'doubao') return askOnceDoubao({ prompt, model, timeoutMs, caps });   // 分流在 caps 校验之前（对齐 cline 先例），caps 契约由 askOnceDoubao 内部执行
-  const capsLevel = parseCaps(caps);
-  if (!capsLevel) {
-    return capsInvalid_(caps);
+  const parsed = parseCapsSet(caps);
+  if (!parsed.ok) {
+    return capsReject_(parsed, caps);
   }
-  if (capsLevel === 'L2') {
-    return capsL2NotDelivered_();
-  }
+  const writeBlocked = capsRejectWrite_(parsed);
+  if (writeBlocked) return writeBlocked;   // write 门（本轮 STOP）：含 write 集合 spawn 前显式报错
+  const capsSet = parsed.set;
+  const hasCaps = capsSet.length > 0;
   const laneKey = IDENTITIES[lane] ? lane : 'cn';   // lane 已上游 parseLane 校验，兜底仅防御
   // 超长提示词（>STDIN_THRESHOLD）改走 stdin 通道（-p 不带位置参数），短提示词保持位置参数路径
   const useStdin = prompt.length > STDIN_THRESHOLD;
   const mdl = resolveModel(model);
-  // caps 分档 flags（L0 序列逐字保持 v5：--tools '' --output-format json --no-session-persistence --max-turns 1）
-  const capsArgs = capsLevel === 'L1'
-    // L1：白名单工具（P1/P2/P2b 实名）+ 最小权限 permission-mode（P2 四档实测均可用，取 default）
-    // + 回合上限（契约 A 三层取值：任务级 maxTurns > config caps-l1-max-turns > 缺省 24）
-    ? ['--tools', L1_TOOLS_WHITELIST, '--permission-mode', 'default', '--max-turns', resolveL1MaxTurns(maxTurns), '--output-format', 'json', '--no-session-persistence']
-    // L0：纯 LLM 无工具模式（对标桌面版 Quick 模式）——逐字不变
-    : ['--tools', '', '--output-format', 'json', '--no-session-persistence', '--max-turns', '1'];
+  // caps 旗标唯一组合点（capsToArgs）：∅ 逐字 v5 L0 序列；非 ∅ 白名单+档位+回合上限
+  const capsArgs = capsToArgs(capsSet, { maxTurns });
   const args = [
     resolveCliPath(), '-p',
     ...(useStdin ? [] : [prompt]),
@@ -1127,8 +1207,8 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000,
   ];
   if (effort) args.push('--effort', effort);
 
-  // L1 工作目录 = 空 scratch（白名单无写工具 + cwd 外绝对路径读取被进程级拒绝（P2c）→ 读边界）
-  const scratch = capsLevel === 'L1' ? (scratchDir || ensureScratch('l1-' + stamp())) : null;
+  // 非 ∅ 能力集工作目录 = 空 scratch（读边界：cwd 外绝对路径读取被审批拒绝（v10 P2c+P4））
+  const scratch = hasCaps ? (scratchDir || ensureScratch('l1-' + stamp())) : null;
 
   const t0 = Date.now();
   const r = await spawnNode(args, { env: baseEnv(laneKey), timeoutMs, stdin: useStdin ? prompt : null, cwd: scratch || undefined });
@@ -1151,13 +1231,13 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000,
   const parsedFull = extractJson(stdout);
   const j = normalizeResult(parsedFull);
   if (!j) {
-    // L1 回合上限耗尽的 CLI 形态（exit 0、stdout 无 JSON、stderr 尾部 "Max turns (N) exceeded"）
-    // 专类可读错误，不落入 unparseable 静默形态。仅 L1 分类（L0 无回合概念，不贴 L1 标签）。
-    const mtExhausted = capsLevel === 'L1' ? /Max turns \((\d+)\) exceeded/i.exec(stderr || '') : null;
+    // 非 ∅ 能力集回合上限耗尽的 CLI 形态（exit 0、stdout 无 JSON、stderr 尾部 "Max turns (N) exceeded"）
+    // 专类可读错误，不落入 unparseable 静默形态。仅非 ∅ 分类（∅ 无回合概念，不贴能力标签）。
+    const mtExhausted = hasCaps ? /Max turns \((\d+)\) exceeded/i.exec(stderr || '') : null;
     if (mtExhausted) {
       return {
         ok: false, kind: 'l1-turns-exhausted',
-        error: `L1 回合上限耗尽（Max turns (${mtExhausted[1]}) exceeded）：任务需要更多工具轮次。可在任务加 "maxTurns"（1-64）或调 config caps-l1-max-turns；${Math.round(timeoutMs / 1000)}s 超时仍为硬兜底（先到为准）`,
+        error: `能力任务回合上限耗尽（Max turns (${mtExhausted[1]}) exceeded）：任务需要更多工具轮次。可在任务加 "maxTurns"（1-64）或调 config caps-l1-max-turns；${Math.round(timeoutMs / 1000)}s 超时仍为硬兜底（先到为准）`,
         durationMs, hint: 'l1-turns-exhausted', combined,
       };
     }
@@ -1183,11 +1263,11 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000,
   let text = j.result ?? j.text ?? j.content ?? j.message;
   if (typeof text !== 'string') text = JSON.stringify(text, null, 2);
   if (text === undefined || text === null) text = JSON.stringify(j, null, 2);
-  // L1 附加：caps 档位 + 工具轨迹摘要（function_call 事件计数+参数截断）+ 原始 transcript（落盘回放）
-  if (capsLevel === 'L1') {
+  // 非 ∅ 能力集附加：规范化集合串 + 工具轨迹摘要（function_call 事件计数+参数截断）+ 原始 transcript（落盘回放）
+  if (hasCaps) {
     return {
       ok: true, text, usage: usageOf(j), durationMs, model: j.model || mdl, raw: j,
-      caps: capsLevel, toolTrace: extractToolTrace(parsedFull), rawTranscript: stdout, scratchDir: scratch,
+      caps: parsed.normalized, toolTrace: extractToolTrace(parsedFull), rawTranscript: stdout, scratchDir: scratch,
     };
   }
   return { ok: true, text, usage: usageOf(j), durationMs, model: j.model || mdl, raw: j };
@@ -1288,18 +1368,15 @@ export function parseClineNdjson(text) {
  * 注意：cline 参数解析要求提示词至少含一个 ASCII 空格（实测无空格的短中文会被当未知子命令拒绝）。
  */
 export async function askOnceCline({ prompt, model = null, timeoutMs = 300000, caps = 'L0' }) {
-  // caps 契约：cline 不承载 L1（--auto-approve 仅布尔两档，CLINE_COMMAND_PERMISSIONS 只覆盖
-  // run_commands 且 3.0.65 实测不存在该特性——无法承诺只读语义）；L2 本版未交付。两者均明确报错，
+  // caps 契约（v19 能力矩阵）：cline 不承载任何非 ∅ 能力集（--auto-approve 仅布尔两档，CLINE_COMMAND_PERMISSIONS
+  // 只覆盖 run_commands 且 3.0.65 实测不存在该特性——无法承诺只读语义）；L2 本版未交付。均明确报错，
   // 绝不静默降档 L0、绝不自动改路（是否降档重派由编排器显式决定）。
-  const capsLevel = parseCaps(caps);
-  if (!capsLevel) {
-    return capsInvalid_(caps);
+  const capsParsed = parseCapsSet(caps);
+  if (!capsParsed.ok) {
+    return capsReject_(capsParsed, caps);
   }
-  if (capsLevel === 'L1') {
-    return { ok: false, kind: 'caps-lane-mismatch', error: 'L1 仅支持 ai | cn lane（codebuddy --tools 白名单承载，--as ai / --as cn）；cline 不承载 L1：--auto-approve 仅布尔两档，无法承诺只读语义', durationMs: 0, hint: 'caps-lane-mismatch' };
-  }
-  if (capsLevel === 'L2') {
-    return capsL2NotDelivered_();
+  if (capsParsed.set.length) {
+    return { ok: false, kind: 'caps-lane-mismatch', error: `能力集 ${capsParsed.normalized} 仅支持 ai | cn lane（codebuddy --tools 白名单承载，--as ai / --as cn）；cline 不承载能力任务：--auto-approve 仅布尔两档，无法承诺只读语义`, durationMs: 0, hint: 'caps-lane-mismatch' };
   }
   const bin = resolveClinePath();
   if (!bin) {
@@ -1461,15 +1538,12 @@ export function parseDoubaoPayload(stdoutText) {
  */
 export async function askOnceDoubao({ prompt, model = null, timeoutMs = 300000, caps = 'L0' }) {
   void model; // 任务级 --model 对 doubao 不生效（工具自管理 2.1 Pro + 推理高；help/文档如实注明）
-  const capsLevel = parseCaps(caps);
-  if (!capsLevel) {
-    return capsInvalid_(caps);
+  const parsed = parseCapsSet(caps);
+  if (!parsed.ok) {
+    return capsReject_(parsed, caps);
   }
-  if (capsLevel === 'L1') {
-    return { ok: false, kind: 'caps-lane-mismatch', error: 'L1 仅支持 ai | cn lane（codebuddy --tools 白名单承载，--as ai / --as cn）；doubao 不承载 L1：豆包桌面 agent 不受桥控，无法承诺只读语义', durationMs: 0, hint: 'caps-lane-mismatch' };
-  }
-  if (capsLevel === 'L2') {
-    return capsL2NotDelivered_();
+  if (parsed.set.length) {
+    return { ok: false, kind: 'caps-lane-mismatch', error: `能力集 ${parsed.normalized} 仅支持 ai | cn lane（codebuddy --tools 白名单承载，--as ai / --as cn）；doubao 不承载能力任务：豆包桌面 agent 不受桥控，无法承诺只读语义`, durationMs: 0, hint: 'caps-lane-mismatch' };
   }
   const dir = resolveDoubaoDir();
   if (!dir) {
@@ -1769,7 +1843,7 @@ export function buildSummaryMd({ type, tasks, results, totalMs, laneKeys, lanePa
   lines.push(`- job：${jobId}`);
   lines.push(`- 时间：${new Date().toLocaleString('zh-CN')}`);
   if (type === 'fanout') {
-    lines.push(`- 任务数：${tasks.length}；lanes：${laneKeys.join(',')}；每 lane 并发：${laneParallel}（总并发 ${laneParallel * laneKeys.length}）；单任务超时：${timeoutS}s；重试：${retry}（+跨 lane 回退 1 次）`);
+    lines.push(`- 任务数：${tasks.length}；lanes：${laneKeys.join(',')}；每 lane 并发：${laneParallel}（总并发 ${laneParallel * laneKeys.length}）；单任务超时：${timeoutS != null ? `${timeoutS}s（显式）` : 'auto（∅=300s / 能力任务=600s）'}；重试：${retry}（+跨 lane 回退 1 次）`);
   }
   lines.push(`- 结果：成功 ${okCount} / 失败 ${tasks.length - okCount}（成功率 ${(okCount / tasks.length * 100).toFixed(0)}%）`);
   lines.push(`- 总耗时：${fmtMs(totalMs)}；tokens：in ${tin} / out ${tout}`, '');
@@ -1792,17 +1866,22 @@ export function buildSummaryMd({ type, tasks, results, totalMs, laneKeys, lanePa
  * runAskJob：单条 ask，含回退链与 job 落盘。返回：
  *   { ok, jobId, jobDir, lane, fallbackFrom, model, usage, durationMs, text|error, kind }
  */
-export async function runAskJob({ prompt, as = null, model = null, effort = null, timeoutS = 300, jobId = null, caps = null, maxTurns = null }) {
+export async function runAskJob({ prompt, as = null, model = null, effort = null, timeoutS = null, jobId = null, caps = null, maxTurns = null }) {
   ensureDirs();
   const cfg = loadConfig();
-  // caps 契约：不合法值 / L2 未交付 / caps×lane 不匹配 -> 明确报错，绝不静默降档或改路
-  const capsLevel = parseCaps(caps || cfg['default-caps'] || 'L0');
-  if (!capsLevel) throw new Error(`--caps 只支持 L0 | L1 | L2（收到 ${caps}）`);
-  if (capsLevel === 'L2') throw new Error(L2_NOT_DELIVERED_MSG);
-  // 契约 A：任务级 maxTurns（整数 1-64；仅 L1 生效——L0 无回合概念，同 caps 契约风格明确报错）
+  // caps 契约（v19 能力矩阵）：不合法 / L2 未交付 / 含 write 未交付 / 能力×lane 不匹配 -> 明确报错，
+  // 绝不静默降档或改路。∅（别名 L0）= 纯文本零回退；L1≡net,read 预设别名。
+  const parsed = parseCapsSet(caps || cfg['default-caps'] || 'L0');
+  if (!parsed.ok) {
+    throw new Error(parsed.kind === 'caps-l2-not-delivered' ? L2_NOT_DELIVERED_MSG : `caps 只支持能力集（net/read/write 逗号组合）或别名 L0 | L1（收到 ${caps}）`);
+  }
+  const capsSet = parsed.set;
+  const capsNorm = parsed.normalized;
+  if (capsSet.includes('write')) throw new Error(`caps：${CAPS_WRITE_DISABLED_MSG}`);
+  // 契约 A：任务级 maxTurns（整数 1-64；任何非 ∅ 能力集生效——∅ 无回合概念，同 caps 契约风格明确报错）
   const mt = parseMaxTurns(maxTurns, 'ask');
-  if (mt != null && capsLevel !== 'L1') {
-    throw new Error(`maxTurns 仅在 caps L1 生效（当前 caps=${capsLevel}；L0 无回合概念）`);
+  if (mt != null && !capsSet.length) {
+    throw new Error(`maxTurns 仅在含能力的 caps 生效（当前 caps=∅；L0 无回合概念）`);
   }
   let primary = as ? parseLane(as) : null;
   if (as && !primary) throw new Error(`--as 只支持 ${LANE_ORDER.join(' | ')}（收到 ${as}）`);
@@ -1810,26 +1889,26 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
   if (isLaneDisabled(primary)) {
     throw new Error(`lane ${primary} 已被 disabled-lanes 硬禁用。启用：wbx config set disabled-lanes []`);
   }
-  if (capsLevel === 'L1' && (primary === 'cline' || primary === 'doubao')) {
-    throw new Error(`caps L1 与 lane ${primary} 不匹配：L1 仅支持 ai | cn（codebuddy --tools 白名单承载）。请显式 --as ai 或 --as cn`);
+  if (capsSet.length && (primary === 'cline' || primary === 'doubao')) {
+    throw new Error(`caps ${capsNorm} 与 lane ${primary} 不匹配：能力任务仅支持 ai | cn（codebuddy --tools 白名单承载）。请显式 --as ai 或 --as cn`);
   }
   const fb = fallbackLane(primary);
   let chain = fb && fb !== primary ? [primary, fb] : [primary];
-  if (capsLevel === 'L1') {
-    // L1 回退链只在 ai/cn 之间（同能力档跨 lane 回退语义不变；cline/doubao 不承载 L1）
+  if (capsSet.length) {
+    // 能力任务回退链只在 ai/cn 之间（同能力跨 lane 回退语义不变；cline/doubao 不承载能力）
     chain = chain.filter((k) => k === 'ai' || k === 'cn');
-    if (!chain.length) throw new Error('caps L1 无可用 lane：需要 ai/cn 至少一个可用且未禁用');
+    if (!chain.length) throw new Error(`caps ${capsNorm} 无可用 lane：需要 ai/cn 至少一个可用且未禁用`);
   }
-  // L1 缺省超时上浮（多轮+搜索延迟显著高于 L0 单轮；任务级更大值可覆盖）
-  const effTimeoutS = capsLevel === 'L1' ? Math.max(timeoutS, 600) : timeoutS;
+  // 超时单点决策：显式 --timeout 最高优先；缺省非 ∅ 600s / ∅ 300s（ask 与 fanout 同源 resolveCapsTimeoutS）
+  const effTimeoutS = resolveCapsTimeoutS(timeoutS, capsSet);
 
-  const job = await createJob('ask', { promptPreview: brief(prompt, 120), as: as || 'auto', model: resolveModel(model), effort, timeoutS: effTimeoutS, caps: capsLevel }, { lanes: chain, tasksInput: [{ id: 'ask', prompt, ...(capsLevel !== 'L0' ? { caps: capsLevel } : {}), ...(mt != null ? { maxTurns: mt } : {}) }], jobId });
-  const l1Scratch = capsLevel === 'L1' ? ensureScratch('job-' + job.id) : null;
+  const job = await createJob('ask', { promptPreview: brief(prompt, 120), as: as || 'auto', model: resolveModel(model), effort, timeoutS: effTimeoutS, ...(capsSet.length ? { caps: capsNorm } : {}) }, { lanes: chain, tasksInput: [{ id: 'ask', prompt, ...(capsSet.length ? { caps: capsNorm } : {}), ...(mt != null ? { maxTurns: mt } : {}) }], jobId });
+  const capsScratch = capsSet.length ? ensureScratch('job-' + job.id) : null;
 
   let usedLane = null, res = null, attempts = 0, clineHeal = null;
   for (const lane of chain) {
     attempts++;
-    res = await askOnce({ lane, prompt, model, effort, timeoutMs: effTimeoutS * 1000, caps: capsLevel, scratchDir: l1Scratch, maxTurns: mt });
+    res = await askOnce({ lane, prompt, model, effort, timeoutMs: effTimeoutS * 1000, caps: capsNorm || 'L0', scratchDir: capsScratch, maxTurns: mt });
     if (res.ok) { usedLane = lane; break; }
     await dumpFailedAttempt(job.dir, 'ask', attempts, res);   // 失败 attempt 全量落盘+指针
     // cline auto-heal：配置修复（写回 config）后链内重投一次；重投仍失败照旧走后续回退
@@ -1837,7 +1916,7 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
       clineHeal = await healClineModelIfNeeded(res, { log: console.error, usedModel: model });
       if (clineHeal) {
         attempts++;
-        res = await askOnce({ lane, prompt, model: null, effort, timeoutMs: effTimeoutS * 1000, caps: capsLevel, scratchDir: l1Scratch, maxTurns: mt });   // model:null -> 用已 heal 的 config 值
+        res = await askOnce({ lane, prompt, model: null, effort, timeoutMs: effTimeoutS * 1000, caps: capsNorm || 'L0', scratchDir: capsScratch, maxTurns: mt });   // model:null -> 用已 heal 的 config 值
         if (res.ok) { usedLane = lane; break; }
         await dumpFailedAttempt(job.dir, 'ask', attempts, res);
       }
@@ -1853,7 +1932,7 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
     durationMs: res?.durationMs ?? 0,
     model: res?.ok ? res.model : resolveModel(model),
     effort: effort || null,
-    caps: capsLevel,
+    caps: capsNorm || 'L0',
     usage: res?.usage || null,
   };
   if (clineHeal && usedLane === 'cline') rec['cline-model-healed'] = `${clineHeal.from}→${clineHeal.to}`;   // 结果 meta：旧→新（仅 heal 重投真正产出结果时标注）
@@ -1873,9 +1952,9 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
   await fsp.writeFile(path.join(job.dir, 'summary.md'), md, 'utf8');
 
   if (res?.ok) {
-    return { ok: true, jobId: job.id, jobDir: job.dir, lane: usedLane, fallbackFrom: usedLane !== primary ? primary : null, model: res.model, usage: res.usage, durationMs: res.durationMs, text: res.text, caps: capsLevel, ...(res.toolTrace ? { toolTrace: res.toolTrace } : {}), ...((clineHeal && usedLane === 'cline') ? { clineModelHealed: clineHeal } : {}) };
+    return { ok: true, jobId: job.id, jobDir: job.dir, lane: usedLane, fallbackFrom: usedLane !== primary ? primary : null, model: res.model, usage: res.usage, durationMs: res.durationMs, text: res.text, caps: capsNorm || 'L0', ...(res.toolTrace ? { toolTrace: res.toolTrace } : {}), ...((clineHeal && usedLane === 'cline') ? { clineModelHealed: clineHeal } : {}) };
   }
-  return { ok: false, jobId: job.id, jobDir: job.dir, lane: primary, kind: res?.kind, error: res?.error, hint: res?.hint, caps: capsLevel, ...(res?.resetIn ? { resetIn: res.resetIn } : {}) };
+  return { ok: false, jobId: job.id, jobDir: job.dir, lane: primary, kind: res?.kind, error: res?.error, hint: res?.hint, caps: capsNorm || 'L0', ...(res?.resetIn ? { resetIn: res.resetIn } : {}) };
 }
 
 /**
@@ -1901,11 +1980,20 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
   if (disabledHit.length) throw new Error(`lane ${disabledHit.join(',')} 已被 disabled-lanes 硬禁用。启用：wbx config set disabled-lanes []`);
 
   const seen = new Set();
-  const defaultCaps = parseCaps(cfg['default-caps'] || 'L0') || 'L0';
+  // 缺省能力集：config default-caps（别名/集合串均合法；'L2' 值合法但语义=每任务声明即报未交付）
+  const defaultCapsRaw = String(cfg['default-caps'] || 'L0');
+  const defaultParsed = parseCapsSet(defaultCapsRaw);
+  const defaultCapsNorm = defaultParsed.ok ? (defaultParsed.normalized || 'L0') : (defaultParsed.kind === 'caps-l2-not-delivered' ? 'L2' : 'L0');
+  const defaultCapsSet = defaultParsed.ok ? defaultParsed.set : [];
   const tasks = [];
   for (let i = 0; i < tasksIn.length; i++) {
     const t = tasksIn[i] || {};
     if (!t.prompt || !String(t.prompt).trim()) throw new Error(`任务 ${i}（${t.id ?? '?'}）缺少 prompt`);
+    // readDirs 本轮未交付（STOP，探针 P4：--add-dir 在 headless 不授权读——信任边界不可证）：
+    // 任务字段声明即显式报错，绝不静默忽略
+    if (t.readDirs != null) {
+      throw new Error(`任务 ${i}（${t.id ?? '?'}）：readDirs 本轮未交付（探针 P4 证据与勘误见 RESEARCH-V19 §六/§4.5）。声明即报错、绝不静默忽略；受控目录读取随交付轮评估`);
+    }
     let id = sanitizeId(t.id ?? `task-${i + 1}`);
     while (seen.has(id)) id = id + '-2';
     seen.add(id);
@@ -1914,34 +2002,43 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       lane = parseLane(t.as);
       if (!lane) throw new Error(`任务 ${t.id} 的 as 只支持 ${LANE_ORDER.join('|')}`);
     }
-    // caps 契约：任务级 "caps" 字段；缺省继承 config default-caps；
-    // 不合法 / L2 未交付 / L1×cline 不匹配 -> 明确报错（绝不静默降档、绝不自动改路）
-    let taskCaps = null;
+    // caps 契约（v19 能力矩阵）：任务级 "caps" 字段（能力集或别名）；缺省继承 config default-caps；
+    // 不合法 / L2 未交付 / 含 write 未交付 / 能力×cline/doubao 不匹配 -> 明确报错（绝不静默降档、绝不自动改路）
+    let taskParsed = null;
     if (t.caps != null) {
-      taskCaps = parseCaps(t.caps);
-      if (!taskCaps) throw new Error(`任务 ${t.id ?? id} 的 caps 只支持 L0 | L1 | L2（收到 ${JSON.stringify(t.caps)}）`);
+      taskParsed = parseCapsSet(t.caps);
+      if (!taskParsed.ok) {
+        throw new Error(taskParsed.kind === 'caps-l2-not-delivered'
+          ? `任务 ${t.id ?? id}：${L2_NOT_DELIVERED_MSG}`
+          : `任务 ${t.id ?? id} 的 caps 只支持能力集（net/read/write 逗号组合）或别名 L0 | L1（收到 ${JSON.stringify(t.caps)}）`);
+      }
     }
-    const effCaps = taskCaps || defaultCaps;
-    if (effCaps === 'L2') throw new Error(`任务 ${t.id ?? id}：${L2_NOT_DELIVERED_MSG}`);
-    // 契约 A：任务级 maxTurns（整数 1-64；仅 caps L1 生效——L0 无回合概念，明确报错）
+    const effSet = taskParsed ? taskParsed.set : defaultCapsSet;
+    const effNorm = taskParsed ? (taskParsed.normalized || 'L0') : defaultCapsNorm;
+    // 缺省继承路径同门（T7 B2）：config default-caps='L2' 或含 write 时，继承任务在校验层显式报错
+    //（不退化到执行层兜底；报错层级与 v6.8 的 effCaps==='L2' job 级快速失败对齐）
+    if (effNorm === 'L2') throw new Error(`任务 ${t.id ?? id}：${L2_NOT_DELIVERED_MSG}`);
+    if (effSet.includes('write')) throw new Error(`任务 ${t.id ?? id} 的 caps：${CAPS_WRITE_DISABLED_MSG}`);
+    // 契约 A：任务级 maxTurns（整数 1-64；任何非 ∅ 能力集生效——∅ 无回合概念，明确报错）
     const taskMaxTurns = parseMaxTurns(t.maxTurns, `任务 ${t.id ?? id}`);
-    if (taskMaxTurns != null && effCaps !== 'L1') {
-      throw new Error(`任务 ${t.id ?? id} 的 maxTurns 仅在 caps L1 生效（当前 caps=${effCaps}；L0 无回合概念）`);
+    if (taskMaxTurns != null && !effSet.length) {
+      throw new Error(`任务 ${t.id ?? id} 的 maxTurns 仅在含能力的 caps 生效（当前 caps=∅；L0 无回合概念）`);
     }
-    if (effCaps === 'L1') {
-      if (lane === 'cline' || lane === 'doubao') throw new Error(`任务 ${t.id ?? id}：caps L1 与 lane ${lane} 不匹配——L1 仅支持 ai | cn（--as ai / --as cn）`);
+    if (effSet.length) {
+      if (lane === 'cline' || lane === 'doubao') throw new Error(`任务 ${t.id ?? id}：caps ${effNorm} 与 lane ${lane} 不匹配——能力任务仅支持 ai | cn（--as ai / --as cn）`);
       if (!lane) {
-        // L1 任务不进公共队列（可能落到 cline/doubao worker）：显式钉到可用的 ai/cn
+        // 能力任务不进公共队列（可能落到 cline/doubao worker）：显式钉到可用的 ai/cn
         const dl = resolveDefaultLane();
         lane = (dl === 'ai' || dl === 'cn') ? dl : 'ai';
       }
     }
-    // filesMode 任务契约：reference=材料播种（L1 worker 自读），缺省 inline=既有拼装（字节兼容）。
-    // reference 强制任务级 caps:"L1" 显式声明（L0 无工具无法自读——缺省/继承/L0 均显式报错，绝不静默降档）。
+    // filesMode 任务契约：reference=材料播种（含 read 的 worker 自读），缺省 inline=既有拼装（字节兼容）。
+    // reference 强制任务级 caps 显式声明且含 read（D-009 演进：L1 别名天然含 read；∅ 无工具无法自读——
+    // 缺省/继承/不含 read 均显式报错，绝不静默降档）。
     let filesMode = null;
     if (t.filesMode != null && t.filesMode !== 'inline') {
       if (t.filesMode !== 'reference') throw new Error(`任务 ${t.id ?? id} 的 filesMode 只支持 "inline" | "reference"（收到 ${JSON.stringify(t.filesMode)}）`);
-      if (t.caps !== 'L1') throw new Error(`任务 ${t.id ?? id}：filesMode:"reference" 需要任务级 "caps":"L1" 显式声明（L0 无工具无法自读，绝不静默降档；缺省或继承 config 均不接受）`);
+      if (!taskParsed || !taskParsed.set.includes('read')) throw new Error(`任务 ${t.id ?? id}：filesMode:"reference" 需要任务级显式声明含 read 的能力集（如 "caps":"net,read" 或 "L1"；∅ 无工具无法自读，绝不静默降档；缺省或继承 config 均不接受）`);
       if (!Array.isArray(t.files) || !t.files.length) throw new Error(`任务 ${t.id ?? id}：filesMode:"reference" 需要非空 files 数组`);
       for (const f of t.files) {
         if (!f || typeof f.rel !== 'string' || typeof f.abs !== 'string') throw new Error(`任务 ${t.id ?? id}：reference files 元素需为 {rel, abs}（CLI 侧已解析；收到 ${JSON.stringify(f).slice(0, 80)}）`);
@@ -1949,7 +2046,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       }
       filesMode = 'reference';
     }
-    tasks.push({ id, prompt: String(t.prompt), lane, model: t.model || null, effort: t.effort || null, caps: taskCaps || null, effCaps, ...(filesMode ? { filesMode, files: t.files } : {}), ...(taskMaxTurns != null ? { maxTurns: taskMaxTurns } : {}) });
+    tasks.push({ id, prompt: String(t.prompt), lane, model: t.model || null, effort: t.effort || null, caps: taskParsed ? (taskParsed.normalized || 'L0') : null, effCaps: effNorm, effSet, ...(filesMode ? { filesMode, files: t.files } : {}), ...(taskMaxTurns != null ? { maxTurns: taskMaxTurns } : {}) });
   }
 
   const laneParallel = Math.max(1, parallel ?? cfg['parallel-per-lane'] ?? 2);
@@ -1958,23 +2055,25 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
   const laneParallelOf = (lane) => (lane === 'cline'
     ? Math.max(1, cfg['cline-parallel'] || 1)
     : lane === 'doubao' ? Math.max(1, Math.min(2, cfg['doubao-parallel'] || 1)) : laneParallel);
-  const timeoutMs = timeoutS * 1000;
+  // 超时单点：显式 --timeout 最高优先；缺省由 runTask 按每任务能力集解析（∅=300s / 非 ∅=600s）。
+  // manifest/汇总如实展示两态（修掉 v6.8「展示 300 实跑 600」的观测说谎——一号调研 job 实证）。
+  const timeoutDisplay = timeoutS != null ? `${timeoutS}s（显式）` : 'auto（∅=300s / 能力任务=600s）';
   const retryN = Math.max(0, retry ?? 1);
 
   const job = await createJob('fanout',
-    { lanes: laneKeys, parallel: laneParallel, timeoutS, retry: retryN, count: tasks.length },
+    { lanes: laneKeys, parallel: laneParallel, timeoutS: timeoutS ?? null, timeoutPolicy: timeoutS != null ? 'explicit' : 'auto', retry: retryN, count: tasks.length },
     { lanes: laneKeys, tasksInput: tasks, jobId });
 
-  say(`开始：${tasks.length} 个任务，lanes ${laneKeys.join(',')}，每 lane 并发 ${laneKeys.map((k) => `${k}=${laneParallelOf(k)}`).join(' ')}，超时 ${timeoutS}s，重试 ${retryN}`);
+  say(`开始：${tasks.length} 个任务，lanes ${laneKeys.join(',')}，每 lane 并发 ${laneKeys.map((k) => `${k}=${laneParallelOf(k)}`).join(' ')}，超时 ${timeoutDisplay}，重试 ${retryN}`);
 
   const sharedQueue = [];
   const laneBuckets = new Map(laneKeys.map((k) => [k, []]));
   tasks.forEach((task, i) => {
     task.index = i;
     if (task.lane && laneKeys.includes(task.lane)) laneBuckets.get(task.lane).push(task);
-    else if (task.lane && task.effCaps === 'L1') {
-      // L1 任务钉死 lane 后该 lane 未启用：明确报错（进公共队列可能落到 cline worker = 静默改路）
-      throw new Error(`任务 ${task.id}：caps L1 需要可用且未禁用的 ai/cn lane（lane ${task.lane} 不在本次执行 lanes [${laneKeys.join(',')}] 内）。修复：--lanes 纳入 ${task.lane}，或任务改 --as`);
+    else if (task.lane && task.effSet.length) {
+      // 能力任务钉死 lane 后该 lane 未启用：明确报错（进公共队列可能落到 cline worker = 静默改路）
+      throw new Error(`任务 ${task.id}：caps ${task.effCaps} 需要可用且未禁用的 ai/cn lane（lane ${task.lane} 不在本次执行 lanes [${laneKeys.join(',')}] 内）。修复：--lanes 纳入 ${task.lane}，或任务改 --as`);
     } else {
       if (task.lane) say(`${task.id} 绑定 lane ${task.lane} 未启用，改投公共队列`);
       sharedQueue.push(task);
@@ -1987,19 +2086,19 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
   async function runTask(task, lane) {
     const started = Date.now();
     const mdl = task.model; // 传给 askOnce 的显式模型（null -> core 按配置解析）
-    const capsLevel = task.caps || defaultCaps;
-    // L1：任务级超时上浮 + 每 job 每 task 独立 scratch（读边界）
-    const taskTimeoutMs = capsLevel === 'L1' ? Math.max(timeoutMs, 600000) : timeoutMs;
-    const l1Scratch = capsLevel === 'L1' ? ensureScratch(`job-${job.id}-${task.id}`) : null;
+    // 超时单点决策（resolveCapsTimeoutS）：显式 --timeout 最高优先；缺省按任务能力集 ∅=300s / 非 ∅=600s
+    const taskTimeoutMs = resolveCapsTimeoutS(timeoutS, task.effSet) * 1000;
+    // 非 ∅ 能力集任务级独立 scratch（读边界）
+    const capsScratch = task.effSet.length ? ensureScratch(`job-${job.id}-${task.id}`) : null;
     // 材料播种：reference 任务把 files 复制进 scratch（保持相对路径结构，rel 已在任务校验防越界），
     // 提示词材料区只有清单+路径——worker 用 Read 工具自行读取（重试复用同一 scratch，不重复播种判断）
     let seededFiles = null;
     let seedError = null;
-    if (task.filesMode === 'reference' && l1Scratch && !task._seeded) {
+    if (task.filesMode === 'reference' && capsScratch && !task._seeded) {
       seededFiles = [];
       try {
         for (const f of task.files) {
-          const dest = path.join(l1Scratch, f.rel);
+          const dest = path.join(capsScratch, f.rel);
           fs.mkdirSync(path.dirname(dest), { recursive: true });
           fs.copyFileSync(f.abs, dest);
           seededFiles.push(f.rel);
@@ -2019,7 +2118,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
         id: task.id, lane, status: 'failed', attempts: 0,
         durationMs: Date.now() - started,
         model: resolveModel(task.model), effort: task.effort || null,
-        caps: capsLevel, usage: null, error: seedError,
+        caps: task.effCaps, usage: null, error: seedError,
         ...(task.filesMode === 'reference' ? { filesMode: 'reference' } : {}),
       };
       results[task.index] = rec;
@@ -2030,7 +2129,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     let res = null, attempts = 0, clineHeal = null;
     for (let a = 0; a <= retryN; a++) {
       attempts = a + 1;
-      res = await askOnce({ lane, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs: taskTimeoutMs, caps: capsLevel, scratchDir: l1Scratch, maxTurns: task.maxTurns ?? null });
+      res = await askOnce({ lane, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });
       if (res.ok) break;
       const rl = res.hint === 'ratelimit' || isRateLimit(res.error);   // 限流判定先于落盘（指针路径文本不得污染判定）
       await dumpFailedAttempt(job.dir, task.id, attempts, res);   // 失败 attempt 全量落盘+指针
@@ -2045,7 +2144,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       if (clineHeal) {
         attempts++;
         say(`${task.id}@cline auto-heal -> ${clineHeal.to}，重投一次`);
-        res = await askOnce({ lane, prompt: task.prompt, model: null, effort: task.effort, timeoutMs: taskTimeoutMs, caps: capsLevel, scratchDir: l1Scratch, maxTurns: task.maxTurns ?? null });   // model:null -> 用已 heal 的 config 值
+        res = await askOnce({ lane, prompt: task.prompt, model: null, effort: task.effort, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });   // model:null -> 用已 heal 的 config 值
         if (!res.ok) await dumpFailedAttempt(job.dir, task.id, attempts, res);
       }
     }
@@ -2053,11 +2152,11 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     if (!res.ok) {
       // L1 跨 lane 回退只在 ai/cn 之间（cline/doubao 不承载 L1，不得进入回退目标）
       let fb = fallbackLane(lane);
-      if (capsLevel === 'L1' && fb !== 'ai' && fb !== 'cn') fb = null;
+      if (task.effSet.length && fb !== 'ai' && fb !== 'cn') fb = null;
       if (fb) {
         attempts++;
         say(`${task.id}@${lane} 用尽重试（${res.kind}），跨 lane 回退 -> ${fb}`);
-        res = await askOnce({ lane: fb, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs: taskTimeoutMs, caps: capsLevel, scratchDir: l1Scratch, maxTurns: task.maxTurns ?? null });
+        res = await askOnce({ lane: fb, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });
         if (!res.ok) await dumpFailedAttempt(job.dir, task.id, attempts, res);   // 回退 attempt 同样落盘
         if (res.ok) { usedLane = fb; fallbackFrom = lane; }
       }
@@ -2071,7 +2170,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       durationMs: Date.now() - started,
       model: res.ok ? res.model : resolveModel(mdl),
       effort: task.effort || null,
-      caps: capsLevel,
+      caps: task.effCaps,
       usage: res.usage || null,
     };
     if (clineHeal && usedLane === 'cline') rec['cline-model-healed'] = `${clineHeal.from}→${clineHeal.to}`;   // 结果 meta：旧→新（仅 heal 重投真正产出结果时标注）
@@ -2090,7 +2189,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     }
     results[task.index] = rec;
     await writeTaskRecord(job.dir, rec);
-    say(`${task.id}${fallbackFrom ? `（${fallbackFrom}→${usedLane} 回退）` : `@${usedLane}`} -> ${rec.status}（${fmtMs(rec.durationMs)}，尝试 ${attempts}${capsLevel !== 'L0' ? `，caps ${capsLevel}` : ''}）`);
+    say(`${task.id}${fallbackFrom ? `（${fallbackFrom}→${usedLane} 回退）` : `@${usedLane}`} -> ${rec.status}（${fmtMs(rec.durationMs)}，尝试 ${attempts}${task.effSet.length ? `，caps ${task.effCaps}` : ''}）`);
   }
 
   async function runWorker(lane) {
@@ -2264,13 +2363,12 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
   const routeNote = dl === 'auto' ? 'auto（ai 免费优先）' : dl;
   step('route', null, `default-lane=${routeNote}${disabled.length ? `；disabled-lanes=[${disabled.join(',')}]` : ''}${dl !== 'auto' && disabled.includes(dl) ? '（⚠ default-lane 指向的 lane 已禁用，实际按 auto 处理）' : ''}`);
 
-  // 4b) caps 能力分级：两键合法性 + L2 总闸状态 + 交付面
-  const dc = parseCaps(cfg['default-caps']);
-  const l2gate = cfg['caps-l2-enabled'] === true;
-  const capsValid = !!dc && typeof cfg['caps-l2-enabled'] === 'boolean';
+  // 4b) caps 能力矩阵（v19）：键合法性 + 交付面
+  const dcParsed = parseCapsSet(cfg['default-caps']);
+  const dcIsL2 = !dcParsed.ok && dcParsed.kind === 'caps-l2-not-delivered';
+  const capsValid = (dcParsed.ok || dcIsL2) && typeof cfg['caps-l2-enabled'] === 'boolean';
   step('caps', capsValid ? null : false,
-    `default-caps=${dc || `非法（${JSON.stringify(cfg['default-caps'])}，已按 L0 处理）`}；L2 总闸=${l2gate ? 'on' : 'off（默认）'}；`
-    + `能力面：L0=四 lane（ai/cn/cline/doubao） | L1=仅 ai/cn（联网+只读，--caps L1 / 任务 "caps":"L1"；cline/doubao 不承载） | L2=本版未交付（cline 3.0.65 无命令级 deny，Phase 0 实测；上游支持后按完整六层防护栈交付）`);
+    `default-caps=${dcIsL2 ? 'L2（保留未交付，任务声明即报错）' : (dcParsed.ok ? (dcParsed.normalized || '∅(L0)') : `非法（${JSON.stringify(cfg['default-caps'])}，已按 L0 处理）`)}；能力矩阵：∅(L0)=四 lane 纯文本零回退 | net,read(L1)=仅 ai/cn 联网+只读（--caps "net,read" 或 L1；cline/doubao 不承载） | 含 write=本轮未交付（探针 P3 沙箱前提破裂，声明即报 caps-write-disabled） | readDirs=本轮缓期（探针 P4 add-dir 边界不可证，任务字段声明即报错） | L2=保留未交付（cline 无命令级 deny；声明即报错）`);
 
   // 5) 模板缓存（登录前置条件；cline/doubao 走各自独立认证，无模板概念）
   for (const key of LANE_ORDER) {
@@ -2477,9 +2575,11 @@ export function userBlockText(bridgeScriptPath) {
     '默认过一道评审批判（T7）——多一次免费调用换质量下限。fanout ≥6 任务或结果很长时，用自己的子代理',
     '管理整批、主上下文只收摘要（层级 ≤2）。',
     '',
-    '能力分级 caps（v6）：L0 纯文本默认零回退；L1 联网+只读（--caps L1，仅 ai/cn，时效调研用 T4-L1，',
-    '带来源清单）；L2 本版未交付（--caps L2 报错；上游 cline 支持命令级 deny 后按六层防护栈交付）。',
-    'caps 是任务契约：失败不静默降档、lane 不匹配明确报错。',
+    '能力矩阵 caps（v19）：caps=能力集合（net/read/write 逗号组合），L0≡∅（缺省纯文本零回退）、',
+    'L1≡net,read 为别名；net,read 联网+只读（--caps "net,read"，仅 ai/cn，时效调研用 T4-L1，',
+    '带来源清单；按需最小可用 net/read）；含 write 本轮未交付（探针 P3 实证 headless 写无进程级',
+    '边界，声明即报 caps-write-disabled）；L2 未交付（--caps L2 报错；上游 cline 支持命令级 deny 后',
+    '按六层防护栈交付）。caps 是任务契约：失败不静默降档、lane 不匹配明确报错。',
     '',
     '防护不变：结果必校验后才用；涉密/隐私/凭证绝不外包；L0 提示词含无工具声明、L1 含能力边界+',
     '注入防御+来源清单（模板见桥 PROMPTS.md §速查表）；doctor FAIL、连续 >= 2 失败或',

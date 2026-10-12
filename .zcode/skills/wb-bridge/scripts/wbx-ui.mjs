@@ -42,7 +42,7 @@ import zlib from 'node:zlib';
 import {
   WBX_VERSION, RUNTIME_ROOT, JOBS_DIR,
   LANE_ORDER, CONFIG_DEFS, bridgeForm,
-  redact, loadConfig, setConfig, parseLane, parseCaps,
+  redact, loadConfig, setConfig, parseLane, parseCapsSet,
   laneStatusInfo, resolveDefaultLane, newJobId, getJob, listJobs, tokenTotals,
   runAskJob, runFanoutJob, doctorStatus, fetchClineFreeModels,
   laneBalance, ensureDoubao,
@@ -443,10 +443,14 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
           <summary>高级<span class="adv-sum" id="ask-adv-sum"></span></summary>
           <div class="dbd">
             <div class="row">
-              <label>能力档
-                <select id="ask-caps" title="L0=纯文本（默认）；L1=联网+只读（仅 WorkBuddy AI/国内版）；L2 本版未交付">
+              <label>能力集
+                <select id="ask-caps" title="能力集（v19 能力矩阵）：net=联网、read=读 scratch、write=写（本轮未交付）；逗号组合、序无关；L0=∅ 纯文本、L1=net,read">
                   <option value="L0">L0 纯文本</option>
-                  <option value="L1">L1 联网+只读</option>
+                  <option value="L1">L1 = net,read（联网+只读）</option>
+                  <option value="net">net 仅联网</option>
+                  <option value="read">read 仅只读</option>
+                  <option value="net,read">net,read（同 L1）</option>
+                  <option value="net,read,write" disabled title="含 write 本轮未交付：探针 P3 沙箱前提破裂，声明即报 caps-write-disabled">net,read,write（未交付）</option>
                   <option value="L2" disabled title="L2 本版未交付：上游 cline 无命令级权限管控，六层防护栈缺层不交付">L2（未交付）</option>
                 </select></label>
               <label>思考档
@@ -454,9 +458,9 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
                   <option value="">默认</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option>
                 </select></label>
               <label>模型 <input type="text" id="ask-model" placeholder="默认取 config.model" style="width:170px"></label>
-              <label>超时(s) <input type="text" id="ask-timeout" value="300" style="width:70px"></label>
+              <label>超时(s) <input type="text" id="ask-timeout" value="" placeholder="缺省" style="width:70px" title="留空=桥按能力集缺省（∅=300s / 能力任务=600s）；填数字=显式值最高优先"></label>
             </div>
-            <p class="hint" id="ask-caps-hint" style="display:none;margin-top:4px">L1 = 联网搜索+只读工具（仅 WorkBuddy AI / 国内版通道；轨迹与来源清单落盘；缺省超时上浮 600s）。</p>
+            <p class="hint" id="ask-caps-hint" style="display:none;margin-top:4px">能力集 = net（联网搜索）+ read（只读工具）逗号组合，仅 WorkBuddy AI / 国内版通道；轨迹与来源清单落盘；缺省超时 600s（显式 --timeout 最高优先）。write 本轮未交付（声明即报错）。</p>
           </div>
         </details>
       </div>
@@ -912,7 +916,7 @@ function wbCardHtml(l){
     +'<div class="card__bd"><div class="kv">'
     +'<span class="k">成本</span><span class="v"><span class="cost '+costCls+'" title="'+esc(l.cost)+'">'+costTxt+'</span></span>'
     +'<span class="k">模型</span><span class="v"><span class="vtxt">DeepSeek V4.1 Flash</span></span>'
-    +'<span class="k">能力档</span><span class="v"><span class="vtxt">L0 纯文本 · L1 联网+只读（caps L1）</span></span>'
+    +'<span class="k">能力档</span><span class="v"><span class="vtxt" title="v19 能力矩阵：∅=纯文本零回退；net,read（L1 别名）=联网+只读；含 write 未交付">∅(L0) 纯文本 · net,read(L1) 联网+只读 · write 未交付</span></span>'
     + balRow
     +'<span class="k">凭证到期</span><span class="v">'+exp+'</span>'
     +'</div>'
@@ -942,7 +946,7 @@ function doubaoCardHtml(l){
     +'<div class="card__bd"><div class="kv">'
     +'<span class="k">成本</span><span class="v"><span class="cost neutral" title="消耗豆包会员额度（会员期内可用）；工作模式耗额度明显快于普通对话（官方口径）">会员额度</span></span>'
     +'<span class="k">模型</span><span class="v"><span class="vtxt" title="模型与推理档由豆包桌面端工具自管理，任务级 --model/--effort 不生效">豆包 2.1 Pro · 推理高（工具自管理）</span></span>'
-    +'<span class="k">能力档</span><span class="v"><span class="vtxt">L0 纯文本（不承载 L1/L2：桌面 agent 不受桥控）</span></span>'
+    +'<span class="k">能力档</span><span class="v"><span class="vtxt">∅(L0) 纯文本（不承载任何能力集：豆包桌面 agent 不受桥控）</span></span>'
     +'<span class="k">客户端进程</span><span class="v" id="doubao-proc">检测中…</span>'
     +'<span class="k">调试口 9225</span><span class="v" id="doubao-cdp">检测中…</span>'
     +'<span class="k">客户端拉起</span><span class="v"><button class="mini" id="doubao-ensure-btn" title="幂等确保豆包以调试口 9225 运行：已在线零触碰；未运行自动拉起；已运行无调试口则 -Force 重启（未发送草稿会丢失）">启动</button> <span class="hint">自动模式（doubao-autostart）下派发到达豆包 lane 时同样会自动确保</span></span>'
@@ -1017,7 +1021,7 @@ function clineCardHtml(l,s){
     +'<div class="card__bd"><div class="kv">'
     +'<span class="k">成本</span><span class="v"><span class="cost warn" title="'+esc(costTitle)+'">免费 · 限时配额</span></span>'
     +'<span class="k">模型</span><span class="v">'+modelRow+'</span>'
-    +'<span class="k">能力档</span><span class="v"><span class="vtxt" title="L2 需上游命令级权限管控，六层防护栈缺层不交付（2026-09-25 裁决缓期）">L0 纯文本 · L2 未交付</span></span>'
+    +'<span class="k">能力档</span><span class="v"><span class="vtxt" title="L2 需上游命令级权限管控，六层防护栈缺层不交付（2026-09-25 裁决缓期）；write 本轮未交付（探针 P3 沙箱前提破裂）">∅(L0) 纯文本 · write/L2 未交付</span></span>'
     +'<span class="k">免费组</span><span class="v">'+freeRow+'</span>'
     +'</div>'
     +'<details aria-expanded="false"><summary>详情与排障</summary><div class="dbd"><div class="kv">'
@@ -1141,7 +1145,7 @@ function pollJob(jobId,onDone,onTick){
 function taskHead(r){
   if(!r)return '<span class="badge neutral">无记录</span>';
   return '<span class="badge '+(r.status==='success'?'ok':'err')+'">'+esc(taskStatusLabel(r.status))+'</span>'
-    +(r.caps&&r.caps!=='L0'?'<span class="badge acc" title="能力档（v6 caps）">'+esc(r.caps)+' 联网档</span>':'')
+    +(r.caps&&r.caps!=='L0'?'<span class="badge acc" title="能力集（v19 能力矩阵）">'+esc(r.caps)+'</span>':'')
     +'<span>通道 <b>'+esc(fallbackText(r.fallbackFrom,r.lane))+'</b></span><span class="num">'+fmtMs(r.durationMs)+'</span>'
     +'<span>Token 数 <span class="num">'+(r.usage?((r.usage.in!=null?r.usage.in:'?')+' / '+(r.usage.out!=null?r.usage.out:'?')):'—')+'</span></span>'
     +'<span>尝试 '+r.attempts+'</span><span class="num">'+esc(r.model||'')+'</span>';
@@ -1179,10 +1183,11 @@ $('ask-lane-seg').addEventListener('click',function(e){
 function updAskSum(){
   const e=$('ask-effort').value||'默认档';
   const m=$('ask-model').value.trim()||'自动模型';
-  const t=parseInt($('ask-timeout').value,10)||300;
+  const traw=$('ask-timeout').value.trim();
+  const t=(traw&&parseInt(traw,10)>0)?(parseInt(traw,10)+'s'):'auto';
   const c=$('ask-caps').value||'L0';
-  $('ask-adv-sum').textContent=c+' · '+e+' · '+m+' · '+t+'s';
-  const hint=$('ask-caps-hint');if(hint)hint.style.display=c==='L1'?'block':'none';
+  $('ask-adv-sum').textContent=c+' · '+e+' · '+m+' · '+t;
+  const hint=$('ask-caps-hint');if(hint)hint.style.display=(c&&c!=='L0')?'block':'none';
 }
 ['ask-caps','ask-effort','ask-model','ask-timeout'].forEach(function(id){$(id).addEventListener('input',updAskSum);$(id).addEventListener('change',updAskSum)});
 function updFanSum(){
@@ -1225,7 +1230,7 @@ function renderFanRows(){
     h+='<div class="fan-row">'
       +'<input type="text" data-i="'+i+'" data-f="id" value="'+esc(r.id)+'" placeholder="任务 ID">'
       +'<select data-i="'+i+'" data-f="lane"><option value="">自动</option><option value="ai"'+(r.lane==='ai'?' selected':'')+'>WorkBuddy AI</option><option value="cn"'+(r.lane==='cn'?' selected':'')+'>WorkBuddy</option><option value="cline"'+(r.lane==='cline'?' selected':'')+'>Cline</option><option value="doubao"'+(r.lane==='doubao'?' selected':'')+'>豆包</option></select>'
-      +'<select data-i="'+i+'" data-f="caps" title="能力档：L0 纯文本（默认）/ L1 联网+只读（仅 WorkBuddy AI、国内版）"><option value=""'+(!r.caps?' selected':'')+'>L0</option><option value="L1"'+(r.caps==='L1'?' selected':'')+'>L1 联网</option></select>'
+      +'<select data-i="'+i+'" data-f="caps" title="能力集（v19）：∅=L0 纯文本 / net,read=联网+只读（L1 别名，仅 WorkBuddy AI、国内版）/ 含 write 未交付"><option value=""'+(!r.caps?' selected':'')+'>L0</option><option value="net"'+(r.caps==='net'?' selected':'')+'>net</option><option value="read"'+(r.caps==='read'?' selected':'')+'>read</option><option value="net,read"'+(r.caps==='net,read'||r.caps==='L1'?' selected':'')+'>net,read</option></select>'
       +'<textarea data-i="'+i+'" data-f="prompt" style="min-height:44px" placeholder="worker 提示词">'+esc(r.prompt)+'</textarea>'
       +'<button class="fan-del" data-del="'+i+'" title="删除此任务行">×</button></div>';
   }
@@ -1317,7 +1322,7 @@ async function toggleJob(id,row){
     const dist=Object.keys(j.laneDist||{}).map(function(k){return esc(laneLabel(k))+'×'+j.laneDist[k]}).join('、')||'—';
     const capsSet={};(j.tasks||[]).forEach(function(t){if(t.record&&t.record.caps)capsSet[t.record.caps]=1});
     const capsList=Object.keys(capsSet);
-    const capsRow=capsList.length?('<span class="k">能力档</span><span class="v">'+esc(capsList.join('、'))+(capsList.indexOf('L1')>=0?'（联网+只读）':'')+'</span>'):'';
+    const capsRow=capsList.length?('<span class="k">能力集</span><span class="v">'+esc(capsList.join('、'))+'</span>'):'';
     let h='<div class="card__hd"><span class="card__title">任务 '+esc(j.id)+'</span>'
       +'<span class="badge '+(j.status==='done'?'ok':'acc run')+'">'+esc(jobStatusLabel(j.status))+'</span>'
       +'<span class="card__sub">'+esc(typeLabel(j.type,j.legacy))+(j.legacy?'（旧 tasks/ 兼容）':'')+'</span>'
@@ -1761,23 +1766,26 @@ async function handler(req, res) {
         as = parseLane(b.lane);
         if (!as) return sendJson(res, 400, { error: `lane 取值只支持 auto|ai|cn|cline|doubao（ai=WorkBuddy AI，cn=WorkBuddy，cline=Cline，doubao=豆包桌面端；收到 ${b.lane}）` });
       }
-      // caps 任务契约字段——不合法值/lane 不匹配/L2 未交付均 400（绝不静默降档或改路）
-      let caps = null;
+      // caps 任务契约（v19 能力矩阵）——不合法值/含 write 未交付/lane 不匹配均 400（绝不静默降档或改路）
+      let caps = null; let capsNorm = null;
       if (b.caps != null && b.caps !== '') {
-        caps = parseCaps(b.caps);
-        if (!caps) return sendJson(res, 400, { error: `caps 只支持 L0 | L1 | L2（收到 ${b.caps}）` });
+        const cp = parseCapsSet(b.caps);
+        if (!cp.ok) return sendJson(res, 400, { error: cp.kind === 'caps-l2-not-delivered' ? 'L2 本版未交付（声明即报错）' : `caps 只支持能力集（net/read/write 逗号组合）或别名 L0 | L1（收到 ${b.caps}）` });
+        if (cp.set.includes('write')) return sendJson(res, 400, { error: 'caps：write 能力本轮未交付（探针 P3 沙箱前提破裂，声明即报错）' });
+        caps = cp.normalized || 'L0';
+        capsNorm = cp.normalized;
       }
-      if (caps === 'L1' && (as === 'cline' || as === 'doubao')) {
-        return sendJson(res, 400, { error: `caps L1 与通道 ${as} 不匹配：L1 仅支持 WorkBuddy AI / 国内版（ai/cn）` });
+      if (capsNorm && (as === 'cline' || as === 'doubao')) {
+        return sendJson(res, 400, { error: `caps ${capsNorm} 与通道 ${as} 不匹配：能力任务仅支持 WorkBuddy AI / 国内版（ai/cn）` });
       }
       const jobId = newJobId();
       runAskJob({
         prompt, as,
         model: typeof b.model === 'string' && b.model ? b.model : null,
         effort: typeof b.effort === 'string' && b.effort ? b.effort : null,
-        timeoutS: Number(b.timeout) > 0 ? Number(b.timeout) : 300,
+        timeoutS: Number(b.timeout) > 0 ? Number(b.timeout) : null,   // 缺省交由 core 超时单点决策
         caps,
-        maxTurns: b.maxTurns ?? null,   // 任务级 L1 回合上限（core 校验 1-64/仅 L1）
+        maxTurns: b.maxTurns ?? null,   // 任务级回合上限（core 校验 1-64/任何非 ∅ 能力集）
         jobId,
       }).catch((e) => writeFailedJob(jobId, e.message));
       sendJson(res, 200, { jobId });
@@ -1804,7 +1812,7 @@ async function handler(req, res) {
       runFanoutJob({
         tasksIn, lanes,
         parallel: Number(b.parallel) > 0 ? Number(b.parallel) : null,
-        timeoutS: Number(b.timeout) > 0 ? Number(b.timeout) : 300,
+        timeoutS: Number(b.timeout) > 0 ? Number(b.timeout) : null,   // 缺省交由 core 超时单点决策
         retry: Number.isInteger(b.retry) && b.retry >= 0 ? b.retry : null,
         jobId,
       }).catch((e) => writeFailedJob(jobId, e.message));

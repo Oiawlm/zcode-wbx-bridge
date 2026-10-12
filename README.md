@@ -81,21 +81,22 @@ wbx ui
 
 **安全说明**：控制台只监听 `127.0.0.1`（本机回环），并校验请求的 Host 头与 Origin（防 DNS rebinding 和跨站请求）；守护模式的关闭端点带随机 token，只有本机的 wbx 命令能触发。日志在 `~/.wbx/logs/ui.log`。
 
-## 能力分级 caps（v6 起）：worker 可选联网与只读工具
+## 能力矩阵 caps（v19 起）：按调用自选联网/读/写
 
-免费 lane worker 默认是纯文本端点（L0）。v6 起升级为显式能力契约——**caps 是契约不是偏好**：档位写在命令里，绝不静默降档。
+免费 lane worker 默认是纯文本端点（∅）。v19 起能力契约还原为**能力集合**——caps 是契约不是偏好：能力集写在命令里，绝不静默降档；L0/L1 保留为预设别名（行为与旧用法完全兼容）。
 
-| 档位 | 能力 | 通道 | 说明 |
+| 能力集 | 能力 | 通道 | 说明 |
 |---|---|---|---|
-| L0（默认） | 纯文本，无工具 | 四 lane 全部（ai/cn/cline/doubao） | ai/cn/cline 与 v5 行为字节级一致，零回归；doubao 走桌面端工作任务模式 |
-| L1 | 联网搜索 + 只读工具（白名单 `WebSearch/WebFetch/Read/Glob/Grep`） | 仅 WorkBuddy AI / 国内版 | 每任务独立 scratch 工作目录（越界读取进程级拒绝）；工具轨迹与完整转录落盘可审计；缺省超时上浮 600s；联网内容当数据不当指令（注入防御写入提示词模板） |
-| L2 | 受控全能力 | 仅 cline | **本版未交付**：上游 cline 3.0.65 缺命令级权限管控（deny 清单实测无效），六层防护栈缺层不交付；`--caps L2` 会得到明确的未交付错误，待上游支持后按完整防护栈交付 |
+| ∅（默认，别名 L0） | 纯文本，无工具 | 四 lane 全部（ai/cn/cline/doubao） | 与 v5 行为字节级一致，零回归；doubao 走桌面端工作任务模式 |
+| net,read（别名 L1；可只选 `net` 或 `read`） | 联网搜索 + 只读工具（白名单 `WebSearch/WebFetch/Read/Glob/Grep`） | 仅 WorkBuddy AI / 国内版 | 每任务独立 scratch 工作目录（cwd 外读取被审批拒绝）；工具轨迹与完整转录落盘可审计；缺省超时 600s（显式 `--timeout` 最高优先）；联网内容当数据不当指令（注入防御写入提示词模板） |
+| 含 write | 写文件 | — | **本轮未交付**：探针实测 headless 下写无进程级边界（越界绝对路径可写），声明即报 `caps-write-disabled`；交付将随后续轮次（进程级边界修复+重探针）评估 |
+| L2 | 受控全能力 | 仅 cline | **本版未交付**：上游 cline 3.0.65 缺命令级权限管控（deny 清单实测无效），六层防护栈缺层不交付；`--caps L2` 会得到明确的未交付错误 |
 
-用法：`wbx ask --caps L1 --file 任务.txt`；fanout 任务里写 `"caps": "L1"`；控制台调用页「高级」里选能力档（L2 灰显标注未交付）。历史/详情页会显示「L1 联网档」徽标与工具轨迹（如 `WebSearch×6、WebFetch×1`）。
+用法：`wbx ask --caps "net,read" --file 任务.txt`（等价旧写法 `--caps L1`）；fanout 任务里写 `"caps": "net,read"`；控制台调用页「高级」里选能力集（含 write 与 L2 灰显标注未交付）。历史/详情页会显示能力集徽标（如 `net,read`）与工具轨迹（如 `WebSearch×6、WebFetch×1`）。
 
-**L1 回合上限（v6.2）**：L1 任务缺省回合上限 24（`config` 键 `caps-l1-max-turns`），单任务可 `wbx ask --max-turns 1-64` 或 fanout 任务里写 `"maxTurns": n` 覆盖（仅 L1 生效，L0 无回合概念）；回合耗尽任务显式报 `l1-turns-exhausted`，绝不静默截断。
+**回合上限**：能力任务（任何非 ∅ 能力集）缺省回合上限 24（`config` 键 `caps-l1-max-turns`，键名沿用），单任务可 `wbx ask --max-turns 1-64` 或 fanout 任务里写 `"maxTurns": n` 覆盖（∅ 无回合概念）；回合耗尽任务显式报 `l1-turns-exhausted`，绝不静默截断。
 
-两条如实声明：① L1 下 WebFetch 在默认权限档会被拒，联网主力是 WebSearch；② cline lane 用的是免费模型组（限时轮换 + 每日配额，超额报 `Daily free model limit reached` 并带重置时间），与本节 caps 分级是两回事——caps 管能力边界，配额管用量。
+两条如实声明：① net,read 下 WebFetch 在默认权限档会被拒，联网主力是 WebSearch；② cline lane 用的是免费模型组（限时轮换 + 每日配额，超额报 `Daily free model limit reached` 并带重置时间），与本节能力矩阵是两回事——caps 管能力边界，配额管用量。
 
 ## 适合 / 不适合
 
@@ -110,7 +111,7 @@ wbx ui
 
 **❌ 不适合的任务**（留给主力模型自己做）：
 
-- 需要执行命令、写文件的任务（任何档位都不开；联网查资料与只读文件在 **L1 档**可外包，默认 L0 无工具——见上文「能力分级 caps」）
+- 需要执行命令、写文件的任务（write/L2 本轮未交付，声明即报错；联网查资料与只读文件在 **net,read 档**（别名 L1）可外包，默认 ∅ 无工具——见上文「能力矩阵 caps」）
 - 需要探索式多轮交互的任务（开放式架构探索、边跑边看的多轮调试）——注意：接口先定清楚、材料可贴的编码任务**适合**外包，探索式的才留下
 - 涉密内容：凭证、内部代码、未公开数据、个人隐私——绝不外包
 - 需要高确定性的关键产出（外包结果务必先校验再使用）
@@ -228,8 +229,8 @@ node .zcode\skills\wb-bridge\scripts\wbx.mjs config set cline-model "<免费模�
 |---|---|
 | `wbx doctor` | 自检：node/CLI 路径/模板/各 lane 凭证与模型探测（含 cline 可选段与豆包 status 探测段） |
 | `wbx login [--identity cn\|ai\|cline]` | 登录（cn 微信扫码；ai 邮箱/OneID；cline 浏览器 OAuth；豆包无登录流程——登录态在客户端内自理） |
-| `wbx ask --file p.txt` 或 `--text "…"` | 单条任务；stdout 出结果，失败自动换 lane（`--as ai\|cn\|cline\|doubao` 指定通道；可加 `--caps L1` 联网档、`--max-turns` 回合上限） |
-| `wbx fanout --file tasks.json` | 批量并行（任务文件格式见 [examples](.zcode/skills/wb-bridge/examples/tasks.example.json)；任务可绑 lane（含 `"as":"doubao"`）、可挂材料文件（`"filesMode":"reference"` 播种进 worker 工作目录自读，需 `"caps":"L1"`）、可写 caps/maxTurns） |
+| `wbx ask --file p.txt` 或 `--text "…"` | 单条任务；stdout 出结果，失败自动换 lane（`--as ai\|cn\|cline\|doubao` 指定通道；可加 `--caps "net,read"` 联网+只读（别名 L1）、`--max-turns` 回合上限） |
+| `wbx fanout --file tasks.json` | 批量并行（任务文件格式见 [examples](.zcode/skills/wb-bridge/examples/tasks.example.json)；任务可绑 lane（含 `"as":"doubao"`）、可挂材料文件（`"filesMode":"reference"` 播种进 worker 工作目录自读，需任务级 caps 显式含 read）、可写 caps/maxTurns） |
 | `wbx history --last 10` / `wbx history <jobId>` | 历史列表 / 回放某次任务的完整双向对话（v6.4 起历史页含全量 token 用量合计；豆包调度任务 usage 无计量，计入「无用量记录」） |
 | `wbx config list` / `set <key> <value>` | 路由与并发配置（default-lane（含 doubao）、disabled-lanes、parallel-per-lane、doubao-parallel、doubao-autostart（默认 true：派发到达豆包且调试口不可达时自动拉起/重启）、cline-auto-heal（默认 true：配置模型被免费组轮换下线时自动切换可用 id 并写回）、default-caps、caps-l1-max-turns、cline-* 等） |
 | `wbx models` | 探测模型可用性、列出账号下全部模型（`--as cline --free` 列当前免费模型组；doubao 无模型清单概念） |

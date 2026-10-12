@@ -178,7 +178,7 @@ async function cmdAsk(opts) {
       as: opts.as || null,
       model: opts.model || null,
       effort: opts.effort || null,
-      timeoutS: opts.timeout ?? 300,
+      timeoutS: opts.timeout ?? null,   // 缺省交由 core 超时单点决策（∅=300s / 能力任务=600s；显式值最高优先）
       caps: opts.caps || null,
       maxTurns: opts.maxTurns ?? null,
     });
@@ -271,7 +271,7 @@ async function cmdFanout(opts) {
       tasksIn,
       lanes,
       parallel: opts.parallel ?? null,
-      timeoutS: opts.timeout ?? 300,
+      timeoutS: opts.timeout ?? null,   // 缺省交由 core 超时单点决策（∅=300s / 能力任务=600s；显式值最高优先）
       retry: opts.retry ?? null,
       log: (m) => console.error(`[fanout] ${m}`),
     });
@@ -708,17 +708,19 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                      [--wait 300] [--no-open] [--force]
   node wbx.mjs ask     --file t.txt | --text "..."  单次调用（落盘为 job）；stdout=结果，stderr=用量/lane
                      [--as ai|cn|cline|doubao] [--model M] [--effort low] [--timeout 300] [--json] [--stdin]
-                     [--caps L0|L1|L2]                能力档（v6，默认 L0=config default-caps）：L0 纯文本；
-                                                      L1 只读+联网（仅 ai/cn，缺省超时上浮 600s，轨迹落盘）；
-                                                      L2 本版未交付（声明即报错，等上游命令级 deny）
-                     [--max-turns N]                  L1 回合上限（v6.2，整数 1-64，仅 --caps L1 生效；
+                     [--caps 能力集]                  能力集（v19 能力矩阵，缺省=config default-caps）：
+                                                      token ∈ net|read|write 逗号组合（序无关、去重）；
+                                                      别名 L0=∅ 纯文本零回退、L1=net,read（仅 ai/cn，缺省超时
+                                                      600s，轨迹落盘）；含 write 本轮未交付（声明即报错）；
+                                                      L2 保留未交付（声明即报错）
+                     [--max-turns N]                  能力任务回合上限（v6.2，整数 1-64，任何非 ∅ 能力集生效；
                                                       缺省 config caps-l1-max-turns=24；耗尽报 l1-turns-exhausted）
   node wbx.mjs fanout  --file tasks.json            并发池批量执行；任务可用 files:[路径] 拼材料；结果写 <运行时根>/jobs/<jobId>/
                      [--lanes ai,cn,cline,doubao] [--parallel 2] [--timeout 300] [--retry 1]
-                                                      任务对象支持 "caps":"L1"（任务级能力档，语义同 ask --caps）、
-                                                      "maxTurns":N（任务级 L1 回合上限，语义同 ask --max-turns）、
-                                                      "filesMode":"reference"（v6.8 L1 材料播种：files 复制进
-                                                      worker scratch 按相对路径自读；需任务级 caps:"L1"+ai/cn）
+                                                      任务对象支持 "caps":"net,read"（能力集，语义同 ask --caps；
+                                                      L1 别名同值）、"maxTurns":N（任务级回合上限，语义同 ask）、
+                                                      "filesMode":"reference"（材料播种：files 复制进 worker
+                                                      scratch 按相对路径自读；需任务级 caps 显式含 read+ai/cn）
   node wbx.mjs models  [--as cn|ai|cline] [--probe "m1,m2"]   探测模型可用性并列出产品配置中的模型
                      [--free]     （--as cline --free：列当前免费模型组，recommended-models 端点实时）
   node wbx.mjs usage  [--json] [--force]             各 lane 余额（v6.8：WorkBuddy 双 lane 走社区 billing
@@ -729,9 +731,10 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                                                    parallel-per-lane、model、cli-path、cline-path/data-dir/provider/
                                                    model（默认 cline-free/deepseek-v4.1-flash）/thinking/compaction、
                                                    cline-parallel、doubao-parallel（默认 1 上限 2，单客户端 UI 串行保护）、
-                                                   default-caps=L0|L1|L2（缺省能力档，默认 L0）、
-                                                   caps-l1-max-turns=24（L1 缺省回合上限，v6.2 起 8→24）、
-                                                   caps-l2-enabled=true|false（L2 总闸，默认 false）
+                                                   default-caps=∅(L0)|net,read(L1)|能力集串（缺省能力集，默认 L0）、
+                                                   caps-l1-max-turns=24（能力任务缺省回合上限，键名沿用，v19 起
+                                                   语义=任何非 ∅ 能力集）、
+                                                   caps-l2-enabled=true|false（L2 总闸，默认 false，未交付留位）
                                                    （存 <运行时根>/config.json）
   node wbx.mjs history [--last 10]                 历史列表（时间/类型/任务数/成功率/lane 分布/目录）
   node wbx.mjs history <jobId> [--task <id>]       完整回放一次 job 的双向对话（prompt+回复全文）
@@ -755,7 +758,7 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                                                    目录解析：全局 ~/.zcode/wbx-bridge/doubao/（self-install 复制）
                                                    -> 仓库 tools/doubao-bridge/（v12 源；未装则明确报错，不影响其余 lane）
 
-tasks.json 格式：[{"id":"t1","prompt":"...","as?":"ai|cn|cline|doubao","model?":"...","effort?":"low","file?":"p.txt","files?":["a.js"],"filesMode?":"reference（需 caps:L1）","caps?":"L1","maxTurns?":24}]
+tasks.json 格式：[{"id":"t1","prompt":"...","as?":"ai|cn|cline|doubao","model?":"...","effort?":"low","file?":"p.txt","files?":["a.js"],"filesMode?":"reference（需任务级 caps 显式含 read）","caps?":"net,read（能力集或 L1 别名）","maxTurns?":24}]
 
 环境变量（均可选）：WBX_HOME（运行时根）、WBX_CLI、WBX_CLINE（cline 二进制）、WBX_MODEL、
 WBX_PROJECT_ROOT、WBX_PRODUCT_CONFIG（login 模板）`;
