@@ -1,8 +1,8 @@
 # GLM 双模型画像（GLM-5.3 / GLM-5.3-Flash，附 FlashX）
 
-> **一句话定位**：写 GLM 提示词前的事实底座——双模型的模态分工、体量与价格定位、强制思考与 effort 语义、官方 8 个完整提示词模板的共性结构、参数语义速查与旧口径勘误。全部事实为官方文档口径，逐条带来源、可证伪；官方没有的一律标 UNKNOWN，不编造。
+> **一句话定位**：写 GLM 提示词前的事实底座——双模型的模态分工与读图链路、体量与价格定位、双型分工与编码能力对比、强制思考与 effort 语义、官方 8 个完整提示词模板的共性结构、参数语义速查与旧口径勘误。事实以官方文档口径为主，社区基准/价差等二手内容逐条标注；全部带来源、可证伪；官方没有的一律标 UNKNOWN，不编造。
 > **来源**：智谱 bigmodel 官方文档站、Z.ai 官方文档站、zai-org 官方仓库（均一手）；完整台账与访问日期见 [official-sources.md](official-sources.md)。
-> **日期**：2026-10-10（v1；含 2026-09-29 与 2026-10-10 两批一手抓取）
+> **日期**：2026-10-13（v2；含 2026-09-29、2026-10-10 与 2026-10-13 三批抓取）
 
 每节末尾「→ 写法含义」一行给出对写提示词的直接推论；完整工艺规则见 SKILL.md。
 
@@ -24,8 +24,9 @@
 - 官方口径：GLM-5.3-Flash 是 GLM-5 系首个原生多模态模型，输入 Video / Image / Text / File、输出纯文本（Z.ai 文档站将其归入 VLM 分类）；官方 Cline 指引明确 Flash 支持 Support Images，GLM-5.3 不支持。
 - 官方口径：GLM-5.3 定位纯文本深推理。
 （来源：docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash.md、docs.bigmodel.cn/cn/coding-plan/latest-model.md；2026-10-10 访问）
+- **ZCode 会话内读图链路（2026-10-13 增补）**：GLM-5.3 会话的读图属客户端链路而非模型原生——v3.12.2 前图片以图像附件进入上下文（视觉识别由服务端透明桥接完成，非模型原生接收图像），更新后仅返回 CDN URL 文本；该回归截至 2026-10-13 复核仍未修复（P2、Open，最近动态 2026-10-10），临时解=切 Flash 会话（zai-org/feedback#680，一手）。官方兜底=视觉理解 MCP Server（Coding Plan 专属 Local MCP，图像分析/视频理解），「如需体验 GLM-5.3-Flash 能力」需装 ≥0.1.2（docs.bigmodel.cn/cn/coding-plan/mcp/vision-mcp-server.md，一手）；其底层视觉模型型号官方未声明（见 §十 UNKNOWN）。
 
-→ 写法含义：给 Flash 的提示词可直接引用图片/文件类材料；给 5.3 的必须把视觉信息转成文字描述或改投 Flash。
+→ 写法含义：给 Flash 的提示词可直接引用图片/文件类材料；面向 5.3 的提示词不硬依赖图片材料，涉视觉按当次指定模型写（ZCode 会话读图走客户端链路，以当次会话实际行为为准）。
 
 ## 三、体量、价格与配额
 
@@ -35,7 +36,17 @@
 - UNKNOWN：两型的绝对单价表与速率上限数值，来源未覆盖。
 （来源：github.com/zai-org/GLM-5、docs.z.ai/guides/vlm/glm-5.3-flash.md、docs.bigmodel.cn/cn/coding-plan/latest-model.md；2026-10-10 访问）
 
-## 四、强制思考与 effort 语义
+## 四、双型分工与编码能力对比
+
+- 官方定位（一手，2026-10-13）：GLM-5.3 是智谱最新旗舰模型，「复杂软件工程与 Agent 任务能力全面进阶」（纯文本模态、1M 上下文）；GLM-5.3-Flash「保持 GLM 系列 Coding 能力基础上主打极致低成本」（原生多模态：视频/图像/文本/文件输入、输出纯文本），适合代码生成、代码理解、问题修复等代码任务及 Office/文档类任务，Coding Plan 配额翻 3 倍。
+- 同榜社区基准（二手，2026-10-13 检索）：Terminal-Bench 2.1：5.3 88.2 vs Flash 84.3；DeepSWE v1.1：66.9 vs 63.4；AutomationBench 48.2 vs 48.8（Flash 略高）；HLE-with-tools 62.5 vs 55.3；AA 智能指数 60 vs 57——社区概括口径：旗舰领先约 3-4 分，「做事类几乎追平、深度思考类让分」（分榜差距见上：HLE 类最大、AutomationBench Flash 反超）。
+- 价差（二手，2026-10-13 检索）：列表价 GLM-5.3 $1.4/$4.4、Flash $0.15/$0.5（每百万 token 输入/输出），约 9 倍（输入 9.3 倍/输出 8.8 倍）。
+- 社区分工口径（二手，多源）：「旗舰上界 vs 可放量默认」；前端/可视化编码 Flash 反而占优（原生多模态看渲染截图形成「改-看-再改」闭环）；仓库级/长链路/疑难调试/长自治 Agent 交旗舰。注：5.3 在 ZCode 会话内看图走客户端链路（feedback#680，见 §二读图链路注记），可视化闭环以 Flash 原生多模态更稳。
+（来源：官方定位见 official-sources.md §一 2026-10-13 批次；基准/价差/分工口径为社区转述，见 official-sources.md §三）
+
+→ 写法含义：选型默认是用户裁决（SKILL.md §二：未明示默认 GLM-5.3），本节只装事实——两型差异集中在长链路/仓库级深度，常规编码接近。
+
+## 五、强制思考与 effort 语义
 
 - **思考不可关闭**：官方口径两型一致——`thinking.type` 仅支持 `enabled`，设 `disabled` 直接报错；Coding Plan 里「关 thinking」实际映射到 low 档、仍轻量思考。官方通用建议「简单任务可关思考」对这两型**不适用**，轻量任务用 `reasoning_effort: "low"` 替代关思考。
 - **effort 三档**：仅 `low` / `high` / `max`，默认 max；官方明言编码等复杂任务建议用 max。API 收到无效值直接报错、不静默回退；Coding Plan 旧 7 档自动映射到 3 档。
@@ -44,7 +55,7 @@
 
 → 写法含义：想更快更省就调 effort 档位，不要在提示词里写「不要思考」——这两型关不掉；请求级与部署级的思考控制是两套开关，别混用。
 
-## 五、官方 8 个完整提示词模板的共性
+## 六、官方 8 个完整提示词模板的共性
 
 官方 8 个完整提示词模板全部位于 GLM-5.3-Flash 文档页「最佳实践」章，GLM-5.3 页零模板（来源：docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash.md；2026-10-10 访问）。
 
@@ -65,7 +76,7 @@
 
 → 写法含义：产出型任务（文档/代码/视觉）直接套四步共性；「自观察产物再迭代」对各类交付物通用；产出物要求列「未验证项与风险清单」。
 
-## 六、参数语义速查
+## 七、参数语义速查
 
 - **reasoning_content 回传铁则**：多轮 + 工具调用场景，必须把思考块完整、原样、按原序回传（连续块与原序列完全一致），乱序或编辑会导致性能与缓存命中双降。与「子代理只回传结论」不冲突：后者是子代理对主代理的汇报边界，前者是消息历史对模型的上下文管理。
 （来源：docs.z.ai/guides/capabilities/thinking-mode.md、github.com/zai-org/GLM-5；2026-10-10 访问）
@@ -76,7 +87,7 @@
 - **输出与上下文**：两型均 1M 上下文 / 128K 最大输出；max_tokens 建议 ≥1024（5.3 系默认 65536、上限 131072）；1M 上下文在 Claude Code 需模型名后缀 `[1m]` + 环境变量 `CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000`。
 （来源：docs.z.ai/guides/llm/glm-5.3.md、docs.z.ai/guides/overview/concept-param.md（2026-09-29 访问）；docs.bigmodel.cn/cn/coding-plan/latest-model.md（2026-10-10 访问））
 
-## 七、官方 Agent / 编码提示词建议（5.3 模型页）
+## 八、官方 Agent / 编码提示词建议（5.3 模型页）
 
 - 任务按「真实专家工作单元」写：多步依赖、隐藏状态、端到端 ownership；**不做步进式监督**（不要把任务拆成一步步等待确认的微指令）。
 - 系统提示词给角色专长 + 边界清晰的具体用户任务。
@@ -84,7 +95,7 @@
 
 → 写法含义：给执行窗口的任务提示词写「目标+边界+完成标准」，不写逐操作剧本——与目标模式（/goal）的校验器机制天然契合（见 [goal-mode-writing.md](goal-mode-writing.md)）。
 
-## 八、旧口径勘误表
+## 九、旧口径勘误表
 
 早期沉淀口径（2026-09-29 版）与官方文档冲突处，以下表为准，防止回退到旧错误表述：
 
@@ -95,8 +106,9 @@
 | clear_thinking 单一默认 | 两层默认相反：API 层 vs chat template 层须分开写（docs.z.ai/guides/capabilities/thinking-mode.md、github.com/zai-org/GLM-5；2026-10-10） |
 | effort 档位表述存疑 | low/high/max 三档确认无误；无效值报错不静默回退；旧 7 档自动映射 3 档（docs.bigmodel.cn/cn/coding-plan/latest-model.md；2026-10-10） |
 
-## 九、官方未提供事项（截至 2026-10-10 未找到，如实记录）
+## 十、官方未提供事项（截至 2026-10-13 复核，如实记录）
 
+- 视觉 MCP Server 的底层视觉模型型号：官方未声明（vision-mcp-server.md 未给出，2026-10-13）。
 - GLM-5.3 专属的通用 prompt-engineering 指南页：两家文档站 llms.txt 全索引均无（docs.z.ai 的 `/guides/prompt-engineering/overview` 实测 404，勿再尝试）。
 - 官方「Flash vs 满血（GLM-5.3）差异化写法」的直接论述：未找到，只能从两页内容间接推出。
 - GLM-5.3 提示词反模式专条：未找到。

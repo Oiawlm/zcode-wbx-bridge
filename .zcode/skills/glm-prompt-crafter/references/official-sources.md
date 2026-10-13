@@ -1,32 +1,37 @@
 # 官方来源台账（official-sources）
 
-> **一句话定位**：本 skill 全部事实的来源台账——三路调研（R1 模型 / R2 ZCode 机制 / R3 社区先例，2026-10-10）与早期官方工艺沉淀（2026-09-29）。核对某条口径的出处、或更新本库时读本文。
+> **一句话定位**：本 skill 全部事实的来源台账——三路调研（R1 模型 / R2 ZCode 机制 / R3 社区先例；2026-10-10 首批、2026-10-13 增补）与早期官方工艺沉淀（2026-09-29）。核对某条口径的出处、或更新本库时读本文。
 > **标注约定**：一手 = 官方域名原文；二手 = 社区 / 聚合 / 转述。URL 均为访问当日可达版本；「访问日期」随条目标注。
-> **日期**：2026-10-10（v1）
+> **日期**：2026-10-13（v2）
 
-## 一、模型事实来源（R1，一手，2026-10-10）→ 事实正文见 [glm-model-profiles.md](glm-model-profiles.md)
+## 一、模型事实来源（R1，一手；2026-10-10 首批 / 2026-10-13 增补）→ 事实正文见 [glm-model-profiles.md](glm-model-profiles.md)
 
 | 来源 | 支撑内容 |
 |---|---|
 | docs.bigmodel.cn/cn/guide/models/vlm/glm-5.3-flash.md | Flash 模态与 VLM 分类、官方 8 模板与共性结构、自观察迭代 |
 | docs.bigmodel.cn/cn/coding-plan/latest-model.md | Coding Plan 配额、「关 thinking」→low 映射、effort 量化数据、旧 7 档映射、1M 上下文开启 |
-| docs.bigmodel.cn/cn/guide/models/text/glm-5.3.md | effort 三档默认与编码建议、Agent/编码提示词建议 |
+| docs.bigmodel.cn/cn/guide/models/text/glm-5.3.md | effort 三档默认与编码建议、Agent/编码提示词建议；2026-10-13 复核增补：旗舰定位（「复杂软件工程与 Agent 任务能力全面进阶」）、纯文本模态/1M 上下文、Terminal-Bench 3.0/DeepSWE 等官方基准 |
+| docs.bigmodel.cn/cn/coding-plan/mcp/vision-mcp-server.md | 视觉理解 MCP Server（Coding Plan 专属 Local MCP）：图像分析/视频理解、「如需体验 GLM-5.3-Flash 能力」需装 ≥0.1.2、除 Claude Code 外客户端粘贴图片不走此 MCP（2026-10-13 访问） |
+| github.com/zai-org/feedback/issues/680 | ZCode 会话读图=客户端链路而非模型原生：v3.12.2 前图片以图像附件进上下文、更新后仅返回 CDN URL 文本；回归未修复（P2、Open）、临时解=切 Flash 会话（2026-10-13 访问） |
 | github.com/zai-org/GLM-5 | 双型体量/激活参数、chat template 层 thinking 默认 |
 | docs.z.ai/guides/vlm/glm-5.3-flash.md | Flash 体量/参数推荐 |
 | docs.z.ai/guides/capabilities/thinking-mode.md | reasoning_content 回传铁则、Preserved Thinking API 层默认 |
 | docs.z.ai/guides/overview/migrate-to-glm-new.md | temperature/top_p 默认与「只调一个」 |
 
-早期批补充（一手，2026-09-29，支撑 profiles §四/§五/§六/§七）：docs.z.ai/guides/llm/glm-5.3.md（强制思考、预算参数、Agent 提示词建议）、docs.z.ai/guides/vlm/glm-5.3-flash.md（Flash 页增量：里程碑测试、自观察迭代）、docs.z.ai/guides/capabilities/thinking.md（部署层思考机制家族，评审裁决未入正文、留档备查）、docs.z.ai/guides/overview/concept-param.md（max_tokens 默认与上限）。本批事实的登记见 RESEARCH-V17 §五（迁移批次补遗）。
+早期批补充（一手，2026-09-29，支撑 profiles §五/§六/§七/§八）：docs.z.ai/guides/llm/glm-5.3.md（强制思考、预算参数、Agent 提示词建议）、docs.z.ai/guides/vlm/glm-5.3-flash.md（Flash 页增量：里程碑测试、自观察迭代）、docs.z.ai/guides/capabilities/thinking.md（部署层思考机制家族，评审裁决未入正文、留档备查）、docs.z.ai/guides/overview/concept-param.md（max_tokens 默认与上限）。本批事实的登记见 RESEARCH-V17 §五（迁移批次补遗）。
 
-**勘误注记**：2026-09-29 版沉淀中的旧口径（top_p 0.8–0.95 / 关 thinking=零思考 / clear_thinking 单层 / effort 档位存疑）已按 2026-10-10 一手复核勘误，对照表见 glm-model-profiles.md §八。
+**勘误注记**：2026-09-29 版沉淀中的旧口径（top_p 0.8–0.95 / 关 thinking=零思考 / clear_thinking 单层 / effort 档位存疑）已按 2026-10-10 一手复核勘误，对照表见 glm-model-profiles.md §九。
 
-## 二、ZCode 目标模式与 skill 机制来源（R2，一手，2026-10-10）→ 事实正文见 [goal-mode-writing.md](goal-mode-writing.md) 与 SKILL.md
+## 二、ZCode 目标模式与 skill 机制来源（R2，一手；2026-10-10 首批 / 2026-10-13 增补）→ 事实正文见 [goal-mode-writing.md](goal-mode-writing.md) 与 SKILL.md
 
 - `zcode.z.ai/cn/docs/goal` —— /goal 命令族、单会话单目标、会话持久化、校验器实据清单、官方写作建议（goal-mode-writing.md 全部机制事实的唯一权威来源）。
+- `zcode.z.ai/cn/docs/safety-confirm` —— 执行档位名称「完全访问」「自动编辑」「变更前确认」（另有「计划模式」），执行模式选择器位于输入框附近（goal-mode-writing.md 铁则 4 档位回填来源；2026-10-13 访问）。
+- `zcode.z.ai/cn/docs/configuration` —— 模型切换入口：点对话框中模型名称 → 模型选择器 →「管理模型」→ 设置 → 模型设置（2026-10-13 访问）。
+- goal 页复访注记（2026-10-13）：`zcode.z.ai/cn/docs/goal` 机制与 2026-10-10 抓取一致，无新增命令/参数；用量上限阈值、目标描述字数/多行支持仍 UNKNOWN。
 - `zcode.z.ai/cn/docs/skill` —— 包结构（SKILL.md + references/）、三层渐进披露（元数据常驻 / 正文触发加载 <500 行 / references 按需）、frontmatter 键全集与限制（name=目录名、description ≤1024 超限弃用、每轮摘要截断 ~250 字符）、触发可靠性（无关键词匹配器、措辞前载、`$技能名` 强制兜底）、用户级 `~/.zcode/skills/` 全项目可见、发现顺序与同名遮蔽、Skill vs Command 边界。
 - 本地官方插件镜像（权威等同线上，无独立线上 URL）：skill-creator 0.1.0、zcode-guide 0.3.0 diagnosing-skills——skill 规范交叉印证。
 
-## 三、开源先例（R3，二手社区，2026-10-10）→ 支撑 SKILL.md 形态选型与反模式
+## 三、开源先例（R3，二手社区；2026-10-10 首批 / 2026-10-13 增补）→ 支撑 SKILL.md 形态选型与反模式
 
 - anthropics/skills（含 skill-creator 元技能）、「教 agent 写知识」做成 skill 的官方先例。
 - obra/superpowers（方法论技能包，writing-skills 元技能）。
@@ -34,6 +39,8 @@
 - VoltAgent/awesome-agent-skills（description 成文质量标准：第三人称、what+when、含用户自然会说出的关键词、不硬编码绝对路径）。
 - OpenAI GPT-5 prompting guide（骨架=按工作流分节 + 完整示例 + 反例对照）。
 - Reddit 多帖共识（失败模式实证）：常驻注入约百行后规则降格为建议、约四成死重、深层约束被安静忽略；description 泛化导致永不触发（有改写后激活率 ×20 实测帖）；skill 会腐烂需定期清理。
+- 2026-10-13 增补（模型选型规则先例，均二手）：OpenAI GPT-6 系列模型指南——按工作负载的任务型选型矩阵（「不必默认用最强模型」）；Anthropic「按用例选模型」文档（同型）；社区 model-selection 类 skills（显式选型/自动路由）；awesome-prompts 类库为单模型假设、无跨模型选型矩阵（对照面——本库 SKILL.md §二「显式指定优先+缺省默认」规则与上述先例同型且更简）。
+- 2026-10-13 增补（双型对比社区口径，均二手，支撑 glm-model-profiles.md §四）：同榜基准 Terminal-Bench 2.1 / DeepSWE v1.1 / AutomationBench / HLE-with-tools / AA 智能指数（ampere.sh、xyspace.dev 转述）；列表价差约 9 倍（输入 9.3 倍/输出 8.8 倍）；社区分工口径「旗舰上界 vs 可放量默认、前端/可视化 Flash 占优」（知乎/掘金等多源）。
 
 ## 四、提示词工艺官方沉淀（早期批，2026-09-29）
 
@@ -85,5 +92,5 @@ URL：https://docs.bigmodel.cn/cn/coding-plan/learning-resources/memory-mechanis
 
 ## 五、维护
 
-- 更新本库：先改本台账（新来源 + 访问日期 + 支撑内容），再改正文；与旧口径冲突时走「旧口径 → 官方口径」勘误表（glm-model-profiles.md §八），不静默改写。
+- 更新本库：先改本台账（新来源 + 访问日期 + 支撑内容），再改正文；与旧口径冲突时走「旧口径 → 官方口径」勘误表（glm-model-profiles.md §九），不静默改写。
 - 已探明不可达：docs.z.ai 的 `/guides/prompt-engineering/overview` 实测 404（2026-09-29），勿再尝试；两家文档站 llms.txt 全索引均无 GLM 专属 prompt-engineering 指南页（2026-10-10）。
