@@ -1,9 +1,10 @@
-# WBX — ZCode ↔ 外部算力联动桥（四 lane 子代理调度 · 控制台 · 界面契约化）
+# WBX — ZCode ↔ 外部算力联动桥（五 lane 子代理调度 · 控制台 · 界面契约化）
 
 > **当前事实**（本权威节随版本回写；版本号与逐版变更叙事见 [CHANGELOG.md](CHANGELOG.md)）：
-> **四个外部 Agent** = ZCode 的**子代理**：WorkBuddy 双 lane（ai/cn，DeepSeek V4.1 Flash，免费/近免费）
-> + 可选 Cline CLI（cline 免费孪生）+ 可选豆包桌面端（doubao，会员额度，回退链最末）——
-> **默认分派**高频调用（单个自包含任务也直接派；关键产物 best-of-N、集成前默认过 T7 评审）。
+> **五个外部 Agent** = ZCode 的**子代理**：可选 Codex CLI（codex，ChatGPT Plus 质量优先档，单发默认优先、
+> 额度耗尽自动冷却让位）+ WorkBuddy 双 lane（ai/cn，DeepSeek V4.1 Flash，免费/近免费）+ 可选 Cline CLI
+> （cline 免费孪生）+ 可选豆包桌面端（doubao，会员额度，回退链最末）——**默认分派**高频调用（单个自包含
+> 任务也直接派；关键产物 best-of-N、集成前默认过 T7 评审）。
 > 本地控制台 `wbx ui` 四页签（状态/调用/历史/登录），UI 契约见 [UI-SPEC.md](UI-SPEC.md)；
 > 卸载见 [UNINSTALL.md](UNINSTALL.md)。
 >
@@ -15,30 +16,40 @@
 在 ZCode 会话里，把**相互独立、自包含、单轮可完成**的子任务并行分派给外部算力执行。
 **自包含**（v4 公理）：任务的全部输入（含代码上下文）可由编排器（ZCode）打包进提示词、
 输出可独立校验，即可外包——包括**代码模块编写**（ZCode 负责接口定义、集成与审查）。
-四个外部 Agent（WorkBuddy 国内版 / WorkBuddy AI / Cline / 豆包桌面端）定位为 **ZCode 的子代理**：
-几乎免费 → **默认分派**（单个自包含任务也直接派）、材料给足（裁剪只为信噪比）、
-关键产物 best-of-N 双份择优、集成前默认过评审批判（T7）。
+五个外部 Agent（Codex CLI / WorkBuddy 国内版 / WorkBuddy AI / Cline / 豆包桌面端）定位为 **ZCode 的
+子代理**：免费三 lane 几乎免费 + codex 质量档单发优先 + doubao 会员档 → **默认分派**（单个自包含任务也
+直接派）、材料给足（裁剪只为信噪比）、关键产物 best-of-N 双份择优、集成前默认过评审批判（T7）。
 
 ```
-ZCode ──> node wbx.mjs fanout [--lanes ai,cn,cline,doubao] ──> 并行 worker 进程
+ZCode ──> node wbx.mjs fanout [--lanes codex,ai,cn,cline,doubao] ──> 并行 worker 进程
+   codex    = Codex CLI（可选·第五 lane：exec 非交互 read-only，gpt-6.1-sol，ChatGPT Plus 质量优先档）
    ai lane  = WorkBuddy AI 国际版（deepseek-v4.1-flash x0.00 免费）
    cn lane  = WorkBuddy 国内版（x0.03 近免费）
    cline    = Cline CLI（可选：cline-free/deepseek-v4.1-flash 免费孪生，thinking=xhigh）
    doubao   = 豆包桌面端（可选：工作任务模式 CDP 驱动，豆包 2.1 Pro·推理高，会员额度）
-   └─ 结果写 <运行时根>/jobs/<jobId>/（cline 任务另有原始事件流 .cline-stream.jsonl）
+   └─ 结果写 <运行时根>/jobs/<jobId>/（流式 lane 另有原始事件流 .cline-stream.jsonl/.codex-stream.jsonl）
 ```
 
-### 四 lane 与默认路由
+### 五 lane 与默认路由
 
 | lane | 身份 | endpoint | 默认模型 | 成本 | 凭证 |
 |---|---|---|---|---|---|
+| `codex` | Codex CLI（**可选**，第五 lane·质量优先档） | 本机 codex.exe（exec 非交互） | gpt-6.1-sol（≥GPT-6 护栏，config 管理） | **ChatGPT Plus 额度**（5h 滚动窗口+周上限，耗尽自动冷却让位） | `<运行时根>/codex-home/auth.json`（一次性只读复制 ~/.codex/auth.json） |
 | `ai` | 国际版 WorkBuddy AI | www.workbuddy.ai | deepseek-v4.1-flash | **x0.00 完全免费** | `<运行时根>/sessions/ai.json` + `product/ai.json` |
 | `cn` | 国内版 | copilot.tencent.com | deepseek-v4.1-flash | x0.03 近免费 | `<运行时根>/sessions/cn.json` + `product/cn.json` |
 | `cline` | Cline CLI（**可选**） | Cline provider（OAuth） | cline-free/deepseek-v4.1-flash | **免费（cline-free 孪生，限时轮换+每日配额）** | `<运行时根>/cline-home/.cline/data/settings/providers.json`（OAuth） |
 | `doubao` | 豆包桌面端（**可选**） | CDP 127.0.0.1:9225（工作任务模式） | 豆包 2.1 Pro · 推理高（工具自管理） | 会员额度（免费 lane 优先，回退链最末） | 桥侧零凭证（登录态在豆包客户端 GUI 自理，需以调试口 9225 运行） |
 
-**默认路由：ai 已登录 → ai（免费），否则 cn；回退链 ai → cn → cline → doubao → ZCode 自己做**
-（各一次；cline 未装/无凭证直接跳过、doubao 调试口不在线秒退失败自然跳过，均不耗重试额度）。
+**路由三分（v21 D-036，三个路由常量单点）**：
+
+- `LANE_ORDER=['codex','ai','cn','cline','doubao']`（canonical 序）——单发 ask 缺省 `auto`＝**codex
+  就绪即质量档优先**（laneReady 含额度冷却判定），否则 ai 免费优先、cn 次之。
+- `FANOUT_DEFAULT_POOL=['ai','cn','cline','doubao']`（fanout 批量缺省池）——**调度池=缺省池∪任务级
+  点名 lane**：codex 不进缺省池（Plus 额度保护），任务级 `"as":"codex"` 或 `--lanes codex` 才并入；
+  caps 任务钉 ai/cn 逻辑不变。
+- `FALLBACK_ORDER=['cn','ai','cline','codex','doubao']`（回退链）——各一次；fb(codex)='cn'（免费优先，
+  **免费 lane 失败不自动烧 Plus 额度**，codex 只被前三全不可用时到达且先于 doubao）；cline 未装/无凭证、
+  codex 未装/额度冷却、doubao 调试口不在线均自动跳过，不耗重试额度。
 
 ## 运行时布局（v3：两种形态，均 gitignore）
 
@@ -231,10 +242,10 @@ tasks.json 格式与示例：`.zcode/skills/wb-bridge/examples/tasks.example.jso
 
 | 命令 | 说明 |
 |---|---|
-| `wbx doctor [--no-probe]` | 自检向导：node / CLI / 模板 / 四 lane 凭证+探测；exit 0 = 至少一个 lane 可用 |
+| `wbx doctor [--no-probe]` | 自检向导：node / CLI / 模板 / 五 lane 体检（codex 段免额度探测）；exit 0 = 至少一个 lane 可用 |
 | `wbx login [--identity cn\|ai\|cline]` | 登录引导（默认 cn 微信扫码；ai 有 state 锦囊；cline 走 OAuth 设备授权；doubao 无登录流程——客户端 GUI 自理） |
 | `wbx ask --file p.txt \| --text "…" [--as ai\|cn\|cline\|doubao] [--caps L0\|L1]` | 单次调用（落盘 job）；默认路由按 config；失败自动跨 lane 回退；stdout=结果、stderr=lane/用量 |
-| `wbx fanout --file t.json [--lanes ai,cn,cline,doubao] [--parallel 2]` | 并发池批量（落盘 job）；任务级 `as`/`caps`/`maxTurns` 可绑定；`files:[路径]` 拼材料 |
+| `wbx fanout --file t.json [--lanes codex,ai,cn,cline,doubao] [--parallel 2]` | 并发池批量（落盘 job；缺省池不含 codex，任务级 `as` 点名才投）；任务级 `as`/`caps`/`maxTurns` 可绑定；`files:[路径]` 拼材料 |
 | `wbx models [--as cn\|ai\|cline] [--free]` | 探测模型 + 列产品配置模型；`--as cline --free` 列当前免费组（实时端点） |
 | `wbx config list\|get <key>\|set <key> <value>` | 运行时配置（default-lane / disabled-lanes / 并发 / cline-* / doubao-parallel / caps-* 等，键清单见 `config list`） |
 | `wbx history [--last N]` / `wbx history <jobId>` | 历史列表 / 完整回放双向对话（含旧 tasks/ 只读兼容；历史页=lane 调度记录，`wbx doubao` 直通不入史） |
@@ -1549,3 +1560,64 @@ CHANGELOG 之外的独有内容（实测/契约细节/不变量）。
 - **STOP 分支留痕**：置闸与真机冒烟**未执行**（探针 P3/P4 依据）；沙箱写管道/artifacts/readDirs
   实现不存在于本版（最简：无死代码）；T1-W 模板先行入库（未启用）。桥版本 `WBX_VERSION` 6.9.0。
 - 发布：self-install 同步全局副本+用户级 AGENTS 块能力矩阵口径；commit/push 按 FROZEN 二.2 全流程。
+
+## v6.10 章：Codex 第五 lane（ChatGPT Plus 质量优先档）· 路由三分 · 额度冷却让位
+
+> 授权=用户 2026-10-14 立项原话+三问对齐裁决（RESEARCH-V21 §〇）；探针 `internal/archive/v21/v21p1-p0~p3`。
+
+**定位**：Codex CLI（ChatGPT Plus 已登录）接入为第五 lane——编码/规划综合能力强的**质量优先档**。
+路由三分（第一性：路由=任务类别×lane 成本档×可用性，不是单一全序）：
+
+- **单发 ask 默认 codex 优先**（用户「先优先调用 Codex」）：LANE_ORDER codex 首位，auto=就绪即默认；
+- **fanout 批量默认免费池**（FANOUT_DEFAULT_POOL 不含 codex——Plus 额度保护）：任务级 `"as":"codex"`
+  点名或 `--lanes codex` 才并入（调度池=缺省池∪点名）；
+- **额度耗尽自动冷却让位**（用户「额度用完了，我们就不用它去做桥接了」）：markCodexQuota 三处扫描
+  （stdout+stderr+JSONL error）→ `codex-quota.json` 冷却态 → laneReady=false（auto 路由/回退链/批量池
+  自动跳过）；显式点名放行+WARN。回退链 codex 在 cline 后 doubao 前（免费 lane 失败不自动烧 Plus 额度）。
+
+**隔离运行时与凭证（D-037）**：`CODEX_HOME=<运行时根>/codex-home`（--ephemeral --ignore-user-config
+运行）；`wbx login --identity codex` 一次性只读复制 `~/.codex/auth.json`——「不动桌面版文件」红线的
+唯一显式授权例外（单文件、只读、一次；除它外 ~/.codex 零读取；凭证内容绝不展示/入日志/入库）。
+二进制解析：WBX_CODEX env → config codex-path → `%LOCALAPPDATA%/OpenAI/Codex/bin/*/codex.exe`
+（按 exe 自身存在+mtime 最新——探针 P0 实证存在无 codex.exe 的 hash 目录）。
+
+**调用与收割（D-037）**：`codex exec --ephemeral --ignore-user-config --skip-git-repo-check --color never
+-s read-only -m <config codex-model> -c model_reasoning_effort=<档> --json -o <tmp>`，>12000 字符走
+stdin；**收割绝不信任退出码**（探针 P2）——-o 文件为最终权威正文+JSONL 事件流判失败；usage 只取
+input_tokens/output_tokens（**实测流无 total_tokens**，勘误二手来源）；JSONL 全文落盘
+`ask.codex-stream.jsonl`/`<task>.codex-stream.jsonl`（流文件名按产出 lane 泛化，cline 字节兼容）。
+模型恒取 config codex-model（任务级 model 不生效——额度保护）；任务级 effort low/medium/high 直通。
+
+**模型契约（D-038）**：默认 `gpt-6.1-sol`；validateCodexModel 单点护栏——须匹配 `^gpt-(\d+)` 且主版本
+≥6（用户裁决「不用 GPT-5.6 及以下」），config set 与运行时读取同源；拒 gpt-5.5/gpt-5.6-*/
+codex-auto-review/gpt-reserve，放 gpt-6 系与未来 gpt-7+。config 五键：codex-path / codex-model /
+codex-reasoning（low|medium|high|xhigh，默认 medium，xhigh 仅 config 可设）/ codex-parallel（默认 1，
+Plus 单账号保护）/ codex-quota-cooldown-min（默认 30）。caps：codex 拒绝一切非 ∅ 能力集
+（caps-lane-mismatch 五处枚举+UI 400；FROZEN 二.8「仅 ai/cn」语义不变）。
+
+**doctor 第 9 段（D-039，免额度探测）**：二进制+版本、隔离 CODEX_HOME `codex login status`（实测
+输出在 stderr——判定扫双流）、模型与冷却状态；绝不做 tiny-ask（D-002 同类：探测性提问也真实消耗
+Plus 5h 滚动窗口额度）。余额 state='na'——Plus 额度以 ChatGPT 网页端 Settings→Usage 为准（无本地
+端点，诚实降级）；`wbx models` codex 守卫（模型经 config 管理，不做逐个探测）。
+
+**探针结论（v21p1，以实测为准）**：P0 旗标全确认+空 CODEX_HOME=Not logged in（exit 1）；P1 复制流
+落位正确；P2 真实 tiny exec（授权消耗：JSONL 4 事件 schema 实测、-o=权威正文、--ephemeral 零 sessions
+残留、read-only 零 scratch 写入、隔离 home 副作用全困桥目录、usage 无 total_tokens）；P3 护栏矩阵
+15/15。T8 双份草稿择优（job 20261014-115825-xco，A 基底+B 三处并入）+ T7 评审（job
+20261014-121904-qoq：1 阻断+2 采纳修复、2 驳回有因、1 UNKNOWN 解答）。
+
+**门禁**：新增 `internal/v21-regression.mjs`（第十一套件 55 断言：路由三分常量逐字锁/fallbackLane
+期望/fanout 调度池功能+运行时 spawn argv 证据（fake bin=node.exe 副本+work 目录无扩展名 `exec` 主
+脚本——Node ≥18 禁无 shell spawn .cmd）/caps×codex 五处/护栏矩阵/额度状态机六态/askOnceCodex 源级
+八锁/login 复制流黑盒六断言）。同步既有：v14 ③d（4→5）、v13 ①c/①g/②/⑥a-⑥f/⑧c+沙箱 codex 读性
+伪造、v19 ③a/③b 矩阵+codex；v6 ④ 实测不撞（fb(cline)='cn' 保持）。门禁终态：v21 55 + v6 35 +
+v7 50 + v8 22 + v11.3 38 + v13 52 + v19 76 + contract 24 + 红测 + tokens-sha 108=6e0415da13（不变）
++ v14-consistency 27——十套件+第十一套件全绿。
+
+**UI（内容级，contract v1.5.0）**：codexCardHtml 通道卡（四态徽标+冷却倒计时+成本「ChatGPT Plus
+额度」+路由说明）；LANE_LABEL/TITLE +codex（FROZEN_TERMS 三处同步纯新增）；路由卡「固定 Codex」；
+ask/fanout 选择器；登录页 Codex 收割说明卡；/api 校验与 errorHint。token 键集与值零改动。
+
+**发布**：self-install 同步全局副本+用户级 AGENTS 标记块五 lane 口径；PROMPTS.md v4.2（GPT-6.1-Sol
+画像章+成本口径「免费三 lane+付费两 lane」）；commit/push 按 FROZEN 二.2 全流程（敏感模式另加
+`codex-home|auth\.json` 零命中审计）。桥版本 `WBX_VERSION` 6.10.0。

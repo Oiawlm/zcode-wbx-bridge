@@ -21,7 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '6.9.0';
+export const WBX_VERSION = '6.10.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -83,10 +83,13 @@ export const IDENTITIES = {
   },
 };
 // lane 合法集合的唯一定义点（--lanes/parseLane/config 校验/UI 派生全部 import 本常量，不得平行硬编码）
-export const LANE_ORDER = ['ai', 'cn', 'cline', 'doubao']; // 默认路由顺序：免费优先，cline（可选）次之，doubao（会员额度）最末
+// 路由三分（v21 D-036）：canonical 序 codex 首位=单发 ask 质量优先档（auto 语义即「codex ready 即默认」）；
+// fanout 批量缺省走 FANOUT_DEFAULT_POOL（免费+会员档，不含 codex）；回退链 codex 在 cline 后 doubao 前。
+export const LANE_ORDER = ['codex', 'ai', 'cn', 'cline', 'doubao'];
 // 命名公式：品牌（版本）全称——doctor/CLI 人读输出用；数据层 label 字段不变
-export const LANE_BRAND = { ai: 'WorkBuddy AI（国际版）', cn: 'WorkBuddy（国内版）', cline: 'Cline CLI', doubao: '豆包（桌面端）' };
-const FALLBACK_ORDER = ['cn', 'ai', 'cline', 'doubao'];     // 回退顺序：国内版兜底，cline 次之，doubao（会员额度）最末
+export const LANE_BRAND = { codex: 'Codex CLI（ChatGPT Plus·可选通道）', ai: 'WorkBuddy AI（国际版）', cn: 'WorkBuddy（国内版）', cline: 'Cline CLI', doubao: '豆包（桌面端）' };
+const FALLBACK_ORDER = ['cn', 'ai', 'cline', 'codex', 'doubao'];  // 回退顺序：国内版兜底，cline 次之；codex（Plus 额度，付费档）只被免费三 lane 全不可用时到达且先于 doubao
+export const FANOUT_DEFAULT_POOL = ['ai', 'cn', 'cline', 'doubao']; // fanout 批量缺省调度池（不含 codex——Plus 额度保护，任务级 as:"codex" / --lanes codex 点名才并入）
 
 const DEFAULT_CLI_PATH = 'D:\\App\\WorkBuddyAI\\resources\\app.asar.unpacked\\cli\\bin\\codebuddy';
 const FALLBACK_MODEL = 'deepseek-v4.1-flash';
@@ -258,6 +261,163 @@ export async function ensureDoubao() {
   return doubaoEnsureFlight_;
 }
 
+// ---------- codex lane（第五 lane：OpenAI Codex CLI / ChatGPT Plus 质量优先档；可选） ----------
+// 调用形态：spawn `codex exec` 非交互子进程，一次一问（无多轮、无 resume）。
+// 关键不变量：仅 validateCodexModel 会 throw；凭证内容绝不进日志/返回值/错误文案；
+// 进程退出码绝不参与 codex 的成功/失败判定（实测失败路径退出码不可信，探针 v21p1-p2）。
+// 本区段初稿由 wbx fanout T8 双份草稿产出（job 20261014-115825-xco），ZCode 评审择优集成。
+export const CODEX_HOME = path.join(RUNTIME_ROOT, 'codex-home');
+export const CODEX_WORK_DIR = path.join(CODEX_HOME, 'work');
+const CODEX_QUOTA_FILE = path.join(RUNTIME_ROOT, 'codex-quota.json');
+
+// 额度耗尽特征（不区分大小写）；命中即进入冷却并驱动路由跳过（D-039）
+const CODEX_QUOTA_RE = /you('|’)ve hit your usage limit|usage limit (has been )?reached|rate limit|429/i;
+
+// 从失败/错误事件取可读文案：error?.message ?? message ?? error 字符串 ?? JSON 截断 200
+function codexErrorText_(obj) {
+  if (!obj || typeof obj !== 'object') return '';
+  const e = obj.error;
+  const picked = (e && typeof e === 'object' && typeof e.message === 'string' && e.message) ||
+    (typeof obj.message === 'string' && obj.message) ||
+    (typeof e === 'string' && e) || null;
+  if (picked) return picked;
+  let s = '';
+  try { s = JSON.stringify(obj); } catch { s = ''; }
+  return (s || String(obj)).slice(0, 200);
+}
+
+// 二进制解析链：WBX_CODEX env → config codex-path → %LOCALAPPDATA% 桌面版捆绑 CLI（exe mtime 最新）。
+// 实测存在「hash 目录在但目录内只有 rg.exe」的情形（v21p1-p0）：必须以 codex.exe 文件存在为准，
+// 绝不按目录 mtime 解析——桌面版更新换 hash 目录时只有含 exe 者才可当选。
+export function resolveCodexPath() {
+  if (process.env.WBX_CODEX) return process.env.WBX_CODEX;
+  const cfg = loadConfig();
+  if (cfg['codex-path']) return cfg['codex-path'];
+  const lad = process.env.LOCALAPPDATA;
+  if (!lad) return null;
+  const binRoot = path.join(lad, 'OpenAI', 'Codex', 'bin');
+  let names = [];
+  try { names = fs.readdirSync(binRoot); } catch { return null; }
+  let best = null, bestMtime = -Infinity;
+  for (const name of names) {
+    const exe = path.join(binRoot, name, 'codex.exe');
+    if (!fs.existsSync(exe)) continue;
+    let mtime = 0;
+    try { mtime = fs.statSync(exe).mtimeMs; } catch { continue; }
+    if (mtime > bestMtime) { bestMtime = mtime; best = exe; }
+  }
+  return best;
+}
+
+// codex 调用专用隔离 env：CODEX_HOME 指向桥目录，绝不指向用户 ~/.codex（auth.json 经
+// `wbx login --identity codex` 一次性只读复制进来——「不动桌面版文件」红线的唯一显式授权例外）
+export function codexSpawnEnv() {
+  return { ...process.env, CODEX_HOME };
+}
+
+// 模型底线护栏（单点；config set 与 askOnceCodex 读取同源）：
+// 用户 2026-10-14 裁决「不用 GPT-5.6 及以下」——须匹配 ^gpt-(\d+) 且主版本 ≥6，
+// 否则抛 err.code='codex-model-floor'（拒 gpt-5.5 / gpt-5.6-* / codex-auto-review / gpt-reserve / 非 gpt slug）。
+export function validateCodexModel(id) {
+  const raw = typeof id === 'string' ? id.trim() : '';
+  const m = /^gpt-(\d+)/.exec(raw);
+  const major = m ? Number(m[1]) : NaN;
+  if (!m || !(major >= 6)) {
+    const err = new Error(
+      `codex-model 底线护栏：不用 GPT-5.6 及以下模型（用户 2026-10-14 裁决）——须为 gpt-6 及以上主版本（如 gpt-6.1-sol）；实际收到 ${JSON.stringify(id)}`
+    );
+    err.code = 'codex-model-floor';
+    throw err;
+  }
+  return raw;
+}
+
+// parseCodexJsonl —— 解析 codex exec --json 的 stdout JSONL 全文（纯函数，任何输入不抛异常）。
+// 实测 schema（v21p1-p2 权威，二手来源仅参考）：成功流 thread.started → turn.started →
+// item.completed(item.type=agent_message, item.text=正文) → turn.completed(usage)；usage 无
+// total_tokens 字段（只有 input/cached_input/cache_write_input/output/reasoning_output）。
+// 正文裁决：-o 文件为最终权威（askOnceCodex 内），parsed.text 仅回退来源。
+export function parseCodexJsonl(text) {
+  const out = { events: 0, text: null, usage: null, error: null, hasTurnCompleted: false };
+  if (typeof text !== 'string' || !text.length) return out;
+  const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;   // BOM 容忍
+  const chunks = [];
+  for (const rawLine of body.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    let obj;
+    try { obj = JSON.parse(line); } catch { continue; }   // 非 JSON 行（横幅/日志）忽略
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) continue;
+    out.events += 1;
+    if (obj.type === 'item.completed' && obj.item && obj.item.type === 'agent_message') {
+      if (typeof obj.item.text === 'string') chunks.push(obj.item.text);
+    } else if (obj.type === 'turn.completed') {
+      out.hasTurnCompleted = true;
+      const u = obj.usage && typeof obj.usage === 'object' ? obj.usage : {};
+      out.usage = { in: u.input_tokens ?? null, out: u.output_tokens ?? null };
+    } else if (out.error === null && (obj.type === 'turn.failed' || obj.type === 'error')) {
+      out.error = codexErrorText_(obj);   // 首个命中为准
+    }
+  }
+  if (chunks.length) out.text = chunks.join('');
+  return out;
+}
+
+// 额度冷却状态机（D-039）：状态文件 <runtime>/codex-quota.json { limitedAt, cooldownUntil, reason }。
+// 读取侧只认 cooldownUntil；缺失/损坏/过期一律 inactive（过期文件 best-effort 清理）。
+export function codexQuotaState() {
+  const idle = { active: false, until: null, reason: null, remainingMin: null };
+  let obj = null;
+  try { obj = JSON.parse(fs.readFileSync(CODEX_QUOTA_FILE, 'utf8')); } catch { return idle; }
+  if (!obj || typeof obj !== 'object') return idle;
+  const until = Number(obj.cooldownUntil);
+  if (!Number.isFinite(until)) return idle;
+  const now = Date.now();
+  if (until <= now) {
+    try { fs.rmSync(CODEX_QUOTA_FILE, { force: true }); } catch { /* best-effort */ }
+    return idle;
+  }
+  return {
+    active: true, until,
+    reason: typeof obj.reason === 'string' ? obj.reason : null,
+    remainingMin: Math.ceil((until - now) / 60000),
+  };
+}
+
+// 扫描文本，命中额度耗尽即落盘冷却状态；未命中返回 null。返回与 codexQuotaState() 同构
+//（按刚写入值计算，不重读文件）。检测窗口=stdout+stderr+JSONL error 三处（askOnceCodex 调用侧）。
+export function markCodexQuota(text, { now = Date.now() } = {}) {
+  if (typeof text !== 'string' || !text.length) return null;
+  const m = CODEX_QUOTA_RE.exec(text);
+  if (!m) return null;
+  // 冷却截止：优先解析 "try again at <时间>"（截到 " or " 或行尾；解析失败/过去 → config 兜底分钟数）
+  let until = null;
+  const tm = /try again at\s+([^\n]+)/i.exec(text);
+  if (tm) {
+    const frag = tm[1].split(/\s+or\s+/i)[0].trim();
+    const parsed = Date.parse(frag);
+    if (Number.isFinite(parsed) && parsed > now) until = parsed;
+  }
+  if (until === null) until = now + Number(loadConfig()['codex-quota-cooldown-min'] || 30) * 60000;
+  // reason=命中所在整行（截 160 字符），无凭证无 token
+  const lineStart = text.lastIndexOf('\n', m.index) + 1;
+  let lineEnd = text.indexOf('\n', m.index);
+  if (lineEnd < 0) lineEnd = text.length;
+  const reason = text.slice(lineStart, lineEnd).trim().slice(0, 160);
+  try {
+    fs.mkdirSync(path.dirname(CODEX_QUOTA_FILE), { recursive: true });
+    fs.writeFileSync(CODEX_QUOTA_FILE, JSON.stringify({ limitedAt: now, cooldownUntil: until, reason }, null, 2), 'utf8');
+  } catch { /* best-effort：写盘失败不阻断，本次仍按内存值返回 */ }
+  return { active: true, until, reason, remainingMin: Math.ceil((until - now) / 60000) };
+}
+
+// codex 读性（静态，对齐 clineReady/doubaoReady 先例）：二进制可解析 + 隔离 home 有 auth.json
+// + 额度未冷却。冷却期 laneReady=false → auto 路由/回退链/fanout 缺省池自动跳过；
+// 显式 --as codex / 任务级 as:"codex" 照放行（调用侧打 WARN）。
+export function codexReady() {
+  return !!resolveCodexPath() && fs.existsSync(path.join(CODEX_HOME, 'auth.json')) && !codexQuotaState().active;
+}
+
 // ---------- cline 免费模型清单（recommended-models 端点） ----------
 // 官方端点（Bearer OAuth accessToken；token 只用不打印，绝不进日志/响应/导出）。
 // 返回 {recommended,free,clinePass,clineCloud} 四数组，元素 {id,name,description,tags}。
@@ -366,7 +526,7 @@ export function extractFreeLimitResetIn(text) {
 // ---------- worker 能力矩阵 caps（v19：能力原语 net/read/write，L0/L1 预设降格为别名） ----------
 // 第一性：caps 是任务契约不是偏好——绝不静默降档、绝不自动改路；∅ 出厂零回退。
 // 历史（探针定案，证据 internal/archive/v10/ + v19/ + WBX.md 各版本章）：
-//   ∅（L0 别名）= 四 lane 现有链逐字不变；
+//   ∅（L0 别名）= 纯文本零回退（v21 起五 lane 全部）；
 //   net,read（L1 别名）= 仅 ai/cn（codebuddy --tools 白名单，最小权限 default 档；cwd 外绝对路径
 //         读取被审批拒绝（v10 P2c+v19 P4），空 scratch 为 cwd 获得读边界）；
 //   含 write = 本轮未交付（v19 探针 P3：acceptEdits 档越界写逃逸，沙箱前提破裂——声明即
@@ -570,6 +730,8 @@ export function ensureDirs() {
   fs.mkdirSync(JOBS_DIR, { recursive: true });
   fs.mkdirSync(CLINE_HOME, { recursive: true });             // cline 隔离主目录（HOME 覆盖目标）
   fs.mkdirSync(CLINE_WORK_DIR, { recursive: true });         // cline 调用的空工作目录（-c）
+  fs.mkdirSync(CODEX_HOME, { recursive: true });             // codex 隔离 CODEX_HOME（auth.json 复制目标）
+  fs.mkdirSync(CODEX_WORK_DIR, { recursive: true });         // codex exec 的空工作目录（cwd，read-only 沙箱）
 }
 
 export function readStdin() {
@@ -656,6 +818,26 @@ export const CONFIG_DEFS = {
     type: 'boolean', default: false,
     desc: 'L2 总闸（默认 false；本版 L2 未交付——开闸也报「未交付」。留作上游支持命令级 deny 后的前置闸，日常开闸须用户显式授权）',
   },
+  'codex-path': {
+    type: 'string', default: '',
+    desc: 'codex.exe 路径（可选第五 lane；空=自动扫描 %LOCALAPPDATA%\\OpenAI\\Codex\\bin\\<hash>\\codex.exe 取 mtime 最新；传空串清空）',
+  },
+  'codex-model': {
+    type: 'string', default: 'gpt-6.1-sol',
+    desc: 'codex lane 模型（默认 gpt-6.1-sol；底线护栏：仅放行 gpt-6 及以上主版本——用户 2026-10-14 裁决「不用 GPT-5.6 及以下」，拒 gpt-5.5/gpt-5.6-*/codex-auto-review/gpt-reserve）',
+  },
+  'codex-reasoning': {
+    type: 'enum', values: ['low', 'medium', 'high', 'xhigh'], default: 'medium',
+    desc: 'codex 推理档（默认 medium；任务级 effort low/medium/high 直通映射，xhigh 仅 config 可设、任务级不暴露）',
+  },
+  'codex-parallel': {
+    type: 'int', min: 1, max: 8, default: 1,
+    desc: 'codex lane 并发上限（默认 1，Plus 单账号 5h 滚动窗口额度保护）',
+  },
+  'codex-quota-cooldown-min': {
+    type: 'int', min: 1, max: 720, default: 30,
+    desc: 'Plus 额度耗尽后的冷却分钟数（检测到 usage limit 即写 codex-quota.json 冷却让位；冷却期 auto 路由跳过 codex，显式点名放行）',
+  },
 };
 
 export function loadConfig() {
@@ -711,6 +893,16 @@ export function loadConfig() {
   if (!Number.isInteger(out['caps-l1-max-turns']) || out['caps-l1-max-turns'] < 1 || out['caps-l1-max-turns'] > 64) {
     out['caps-l1-max-turns'] = L1_MAX_TURNS_DEFAULT;
   }
+  // codex-* 五键（v21 起可选）：类型/枚举/边界容错一律回缺省；codex-model 护栏同源校验
+  //（护栏失败回默认 gpt-6.1-sol——存量坏值不阻断加载，config set 与 askOnceCodex 的显式路径仍报 floor）
+  if (typeof out['codex-path'] !== 'string') out['codex-path'] = '';
+  if (typeof out['codex-model'] !== 'string' || !out['codex-model'].trim()) out['codex-model'] = 'gpt-6.1-sol';
+  else { try { out['codex-model'] = validateCodexModel(out['codex-model']); } catch { out['codex-model'] = 'gpt-6.1-sol'; } }
+  if (!['low', 'medium', 'high', 'xhigh'].includes(out['codex-reasoning'])) out['codex-reasoning'] = 'medium';
+  if (!Number.isInteger(out['codex-parallel']) || out['codex-parallel'] < 1 || out['codex-parallel'] > 8) out['codex-parallel'] = 1;
+  if (!Number.isInteger(out['codex-quota-cooldown-min']) || out['codex-quota-cooldown-min'] < 1 || out['codex-quota-cooldown-min'] > 720) {
+    out['codex-quota-cooldown-min'] = 30;
+  }
   if (migratedClineModel) {
     try {
       fs.writeFileSync(CONFIG_FILE, JSON.stringify(out, null, 2) + '\n', 'utf8');
@@ -725,6 +917,8 @@ export function parseConfigValue(key, valueStr) {
   if (!def) throw new Error(`未知配置键 ${key}（可用：${Object.keys(CONFIG_DEFS).join(', ')}）`);
   let v;
   try { v = JSON.parse(valueStr); } catch { v = valueStr; }
+  // codex-model 走 validateCodexModel 单点（与 askOnceCodex 读取同源；报错含 codex-model-floor 语义文案）
+  if (key === 'codex-model') return validateCodexModel(typeof v === 'string' ? v : String(v));
   switch (def.type) {
     case 'enum':
       if (!def.values.includes(v)) throw new Error(`${key} 只支持 ${def.values.join(' | ')}（收到 ${JSON.stringify(v)}）`);
@@ -817,6 +1011,7 @@ export function readSession(laneKey) {
 export function laneReady(laneKey) {
   if (laneKey === 'cline') return clineReady();
   if (laneKey === 'doubao') return doubaoReady();
+  if (laneKey === 'codex') return codexReady();
   const id = IDENTITIES[laneKey];
   return !!id && fs.existsSync(id.sessionPath) && fs.existsSync(id.productPath);
 }
@@ -841,6 +1036,27 @@ export function laneStatusInfo(laneKey) {
       disabled: isLaneDisabled('cline'),
       model: cfg['cline-model'] || null,
       thinking: cfg['cline-thinking'], compaction: cfg['cline-compaction'],
+      nickname: null, uinMasked: null, expiresAt: null, expiresInDays: null,
+      templateExists: installed,
+      binaryPath: bin,
+    };
+  }
+  // codex 专用分支（对齐 cline/doubao 分支形态）——绝不落进下方 IDENTITIES[laneKey] || IDENTITIES.cn 兜底。
+  // 四态：未装（无二进制）/ 未登录（无 auth.json）/ 冷却中（额度）/ 已登录。
+  if (laneKey === 'codex') {
+    const bin = resolveCodexPath();
+    const installed = !!bin;
+    const credential = installed && fs.existsSync(path.join(CODEX_HOME, 'auth.json'));
+    const quota = codexQuotaState();
+    const cfg = loadConfig();
+    return {
+      key: 'codex', label: 'Codex CLI', cost: 'ChatGPT Plus 额度',
+      endpoint: 'Codex CLI（ChatGPT 账号，ChatGPT Plus）',
+      ready: credential && !quota.active, installed, credential,
+      disabled: isLaneDisabled('codex'),
+      model: cfg['codex-model'] || null,
+      reasoning: cfg['codex-reasoning'],
+      cooldown: quota.active ? { until: new Date(quota.until).toISOString(), remainingMin: quota.remainingMin, reason: quota.reason } : null,
       nickname: null, uinMasked: null, expiresAt: null, expiresInDays: null,
       templateExists: installed,
       binaryPath: bin,
@@ -883,6 +1099,7 @@ export function laneStatusInfo(laneKey) {
 const LANE_BAL_CACHE = new Map();
 const balNum = (v) => (Number.isFinite(Number(v)) ? Number(v) : NaN);
 const BAL_NA_HINT = {
+  codex: 'Plus 额度以 ChatGPT 网页端 Settings→Usage 为准（无本地端点，诚实降级）',
   cline: '免费孪生无余额端点（官方未提供）',
   doubao: '会员额度无 API——余额在豆包客户端内查看',
 };
@@ -959,7 +1176,9 @@ async function laneBalanceProbe_(laneKey, { ttlMs = 300000, force = false } = {}
   return value;
 }
 
-// 默认路由：config.default-lane 固定任一 lane（未禁用），否则 auto（enabled+已登录 里 ai 优先，doubao 最末）
+// 默认路由（单发 ask）：config.default-lane 固定任一 lane（未禁用），否则 auto——LANE_ORDER 序
+// codex 首位=质量优先档（codex ready 即默认，用户 2026-10-14 裁决「先优先调用 Codex」）；未就绪
+// 顺序回落 ai→cn→cline→doubao。批量路由独立走 FANOUT_DEFAULT_POOL（见 runFanoutJob）。
 export function resolveDefaultLane() {
   const pick = loadConfig()['default-lane'];
   if (parseLane(pick) && !isLaneDisabled(pick)) return pick;   // parseLane 含 doubao，固定值校验随之覆盖
@@ -970,9 +1189,11 @@ export function resolveDefaultLane() {
   return enabled[0] || 'cn';
 }
 
-// 回退 lane：其余已登录且未禁用的 lane（顺序 cn→ai→cline→doubao，各一次）；没有则 null。
+// 回退 lane：其余已登录且未禁用的 lane（顺序 cn→ai→cline→codex→doubao，各一次）；没有则 null。
 // cline 未装/无凭证时 laneReady 为 false，天然跳过（不耗重试额度）；
-// doubao 排最末（会员额度 lane 只在前三条免费 lane 都不可用时才被回退到达——免费优先序不变）。
+// codex（Plus 额度付费档）在 cline 之后 doubao 之前——仅当免费三 lane 全不可用才被回退到达，
+// 且先于会员档（免费 lane 失败不自动烧 Plus 额度，v21 D-036 公理 2）；doubao 仍排最末。
+// codex 额度冷却期 laneReady=false，同样天然跳过。
 //
 // 【红线断言·非 DeepSeek 禁回退（用户定案）】cline lane 失败的一切路径都不得改用
 // 非 DeepSeek 模型顶替：本函数只换 lane（ai/cn 的 WorkBuddy DeepSeek V4.1 Flash 仍是 DeepSeek），
@@ -1181,10 +1402,13 @@ function normalizeResult(j) {
  *（用户定案：cline 思考档一律取 config cline-thinking，不下调）。
  * v13：lane=doubao 走 askOnceDoubao（豆包桌面端工作任务模式）；任务级 effort/model 对 doubao
  * 不生效（工具自管理豆包 2.1 Pro + 推理高）。
+ * v21：lane=codex 走 askOnceCodex（Codex CLI exec 非交互）；任务级 model 不生效（恒取 config
+ * codex-model——Plus 额度保护），任务级 effort low/medium/high 直通映射推理档。
  */
 export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000, caps = 'L0', scratchDir = null, maxTurns = null }) {
   if (lane === 'cline') return askOnceCline({ prompt, model, timeoutMs, caps });
   if (lane === 'doubao') return askOnceDoubao({ prompt, model, timeoutMs, caps });   // 分流在 caps 校验之前（对齐 cline 先例），caps 契约由 askOnceDoubao 内部执行
+  if (lane === 'codex') return askOnceCodex({ prompt, effort, timeoutMs, caps });    // 分流在 caps 校验之前（对齐 cline/doubao 先例），caps 契约由 askOnceCodex 内部执行
   const parsed = parseCapsSet(caps);
   if (!parsed.ok) {
     return capsReject_(parsed, caps);
@@ -1622,6 +1846,106 @@ export async function askOnceDoubao({ prompt, model = null, timeoutMs = 300000, 
   return res;
 }
 
+/**
+ * codex lane 一次性纯文本调用（第五 lane；ChatGPT Plus 质量优先档，额度有限须保护）。
+ * 命令行：codex exec --ephemeral --ignore-user-config --skip-git-repo-check --color never
+ *         -s read-only -m <config codex-model> -c model_reasoning_effort=<档> --json -o <tmp> [- | prompt]
+ * 隔离：CODEX_HOME=<运行时根>/codex-home（auth.json 经 login 复制收割；除该单文件外 ~/.codex 零读取）。
+ * 模型恒取 config codex-model（任务级 model 不生效——Plus 额度保护+护栏单点）；任务级 effort
+ * low/medium/high 直通映射推理档，其余（含 null）用 config codex-reasoning。
+ * 提示词 >STDIN_THRESHOLD 字符走 stdin（`-` 位置参数），与 cline 先例同阈值语义。
+ * 收割（关键不变量）：**进程退出码绝不参与成功/失败判定**（实测失败路径退出码不可信）——
+ * -o 文件全文为最终权威正文；JSONL 只供 usage/error/完整性判定（turn.failed/error 事件=
+ * 失败；无 turn.completed 且无 -o 正文=失败）。JSONL 全文随 rawStream 返回供 job 落盘回放。
+ * caps：仅 ∅；非空能力集明确报 caps-lane-mismatch（codex exec 沙箱与工具面不受桥控，
+ * 无法承诺只读语义，对齐 cline/doubao 先例），绝不静默降档。
+ * 额度：stdout+stderr+JSONL error 三处扫描（markCodexQuota）——命中写冷却状态并按
+ * hint=codex-quota 失败返回（auto 路由/回退链随即跳过 codex；显式点名放行语义由调用侧承接）。
+ */
+export async function askOnceCodex({ prompt, effort = null, timeoutMs = 300000, caps = 'L0' }) {
+  const capsParsed = parseCapsSet(caps);
+  if (!capsParsed.ok) {
+    return capsReject_(capsParsed, caps);
+  }
+  if (capsParsed.set.length) {
+    return { ok: false, kind: 'caps-lane-mismatch', error: `能力集 ${capsParsed.normalized} 仅支持 ai | cn lane（codebuddy --tools 白名单承载，--as ai / --as cn）；codex 不承载能力任务：exec 沙箱与工具面不受桥控，无法承诺只读语义`, durationMs: 0, hint: 'caps-lane-mismatch' };
+  }
+  const bin = resolveCodexPath();
+  if (!bin) {
+    return { ok: false, kind: 'cli-error', error: 'codex 未安装（可选 lane）。修复：安装/更新 Codex 桌面版（捆绑 CLI），或 wbx config set codex-path "<codex.exe 完整路径>"', durationMs: 0, hint: 'not-installed' };
+  }
+  const cfg = loadConfig();
+  let mdl;
+  try {
+    mdl = validateCodexModel(cfg['codex-model']);
+  } catch (err) {
+    return { ok: false, kind: 'cli-error', error: err.message, durationMs: 0, hint: 'codex-model-floor' };
+  }
+  const eff = effort === 'low' || effort === 'medium' || effort === 'high' ? effort : (cfg['codex-reasoning'] || 'medium');
+  const useStdin = prompt.length > STDIN_THRESHOLD;
+  const outFile = path.join(RUNTIME_ROOT, `codex-last-${stamp()}-${Math.random().toString(36).slice(2, 6)}.txt`);
+  try { fs.mkdirSync(CODEX_WORK_DIR, { recursive: true }); } catch { /* 已存在/竞态 */ }
+  const args = ['exec', '--ephemeral', '--ignore-user-config', '--skip-git-repo-check', '--color', 'never', '-s', 'read-only', '-m', mdl, '-c', `model_reasoning_effort=${eff}`, '--json', '-o', outFile];
+  if (useStdin) args.push('-'); else args.push(prompt);
+
+  const t0 = Date.now();
+  let r;
+  try {
+    r = await spawnBin(bin, args, { env: codexSpawnEnv(), timeoutMs: timeoutMs + 20000, stdin: useStdin ? prompt : null, cwd: CODEX_WORK_DIR });
+  } catch (err) {
+    try { fs.rmSync(outFile, { force: true }); } catch { /* 容错 */ }
+    return { ok: false, kind: 'cli-error', error: `codex 进程启动失败：${brief(String((err && err.message) || err))}`, durationMs: Date.now() - t0, hint: 'spawn-failed' };
+  }
+  const durationMs = Date.now() - t0;
+  const stdout = ansiStrip(r.stdout || '');
+  const stderr = ansiStrip(r.stderr || '');
+  const parsed = parseCodexJsonl(stdout);
+  // -o 文件：读成功即权威（全文为最终正文；读失败 → null 走 parsed.text 回退）。用完即删。
+  let outText = null;
+  try {
+    outText = fs.readFileSync(outFile, 'utf8');
+  } catch { outText = null; }
+  finally {
+    try { fs.rmSync(outFile, { force: true }); } catch { /* best-effort */ }
+  }
+  const combined = stdout + '\n' + stderr;   // 失败 attempt 全量输出（随失败结果返回，编排器落盘）
+
+  // 额度检测先于超时判定（T8-B 理由：配额耗尽的调用不该被误判为「只是慢」而继续消耗额度）
+  const quota = markCodexQuota(stdout) || markCodexQuota(stderr) || markCodexQuota(parsed.error || '');
+  if (quota) {
+    return {
+      ok: false, kind: 'cli-error',
+      error: `ChatGPT Plus 额度耗尽（冷却至 ${new Date(quota.until).toISOString()}，约 ${quota.remainingMin} 分钟）——auto 路由/回退/批量池将跳过 codex；显式点名仍会放行`,
+      durationMs, hint: 'codex-quota', rawStream: stdout, combined,
+    };
+  }
+  if (r.timedOut) {
+    return { ok: false, kind: 'timeout', error: `执行超时（> ${Math.round(timeoutMs / 1000)}s，桥侧兜底 kill）`, durationMs, rawStream: stdout, combined };
+  }
+  if (isAuthError(stderr) || (parsed.error && /未登录|401/i.test(parsed.error))) {
+    return { ok: false, kind: 'auth', error: 'codex 凭证无效或未登录（隔离 CODEX_HOME 无有效 auth.json）——重新收割：wbx login --identity codex（一次性只读复制 ~/.codex/auth.json）', durationMs, rawStream: stdout, hint: 'login', combined };
+  }
+  // 收割不变量：退出码绝不进判定。半截流（有 item.completed 无 turn.completed）仅在 -o 有正文时判成功。
+  // -o 读成功但为空串（T7#1）：不构成权威正文，回退 parsed.text（两者皆空才判失败）。
+  const outHasBody = typeof outText === 'string' && outText.trim() !== '';
+  const text = outHasBody ? outText : (parsed.text || '');
+  const failed = parsed.error !== null || (!parsed.hasTurnCompleted && !outHasBody) || !text.trim();
+  if (failed) {
+    let msg;
+    if (parsed.error !== null) msg = parsed.error;
+    else if (!parsed.hasTurnCompleted && !outHasBody) msg = `codex 事件流不完整（无 turn.completed 且 -o 无正文，events=${parsed.events}）`;
+    else msg = `codex 无有效正文（events=${parsed.events}）`;
+    const detail = brief(stderr || '') || brief(stdout || '');
+    if (detail) msg = `${msg}：${detail}`;
+    return { ok: false, kind: 'cli-error', error: brief(msg), durationMs, hint: parsed.error !== null ? 'codex-error' : 'incomplete-stream', rawStream: stdout, combined };
+  }
+  return {
+    ok: true, text, usage: parsed.usage, durationMs, model: mdl,
+    raw: { hasTurnCompleted: parsed.hasTurnCompleted, events: parsed.events },
+    rawStream: stdout,
+  };
+}
+
 // ---------- 统一 job 模型（ask/fanout 都落盘，可回放） ----------
 export function newJobId() {
   return stamp() + '-' + Math.random().toString(36).slice(2, 5);
@@ -1889,7 +2213,7 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
   if (isLaneDisabled(primary)) {
     throw new Error(`lane ${primary} 已被 disabled-lanes 硬禁用。启用：wbx config set disabled-lanes []`);
   }
-  if (capsSet.length && (primary === 'cline' || primary === 'doubao')) {
+  if (capsSet.length && (primary === 'cline' || primary === 'doubao' || primary === 'codex')) {
     throw new Error(`caps ${capsNorm} 与 lane ${primary} 不匹配：能力任务仅支持 ai | cn（codebuddy --tools 白名单承载）。请显式 --as ai 或 --as cn`);
   }
   const fb = fallbackLane(primary);
@@ -1905,10 +2229,17 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
   const job = await createJob('ask', { promptPreview: brief(prompt, 120), as: as || 'auto', model: resolveModel(model), effort, timeoutS: effTimeoutS, ...(capsSet.length ? { caps: capsNorm } : {}) }, { lanes: chain, tasksInput: [{ id: 'ask', prompt, ...(capsSet.length ? { caps: capsNorm } : {}), ...(mt != null ? { maxTurns: mt } : {}) }], jobId });
   const capsScratch = capsSet.length ? ensureScratch('job-' + job.id) : null;
 
-  let usedLane = null, res = null, attempts = 0, clineHeal = null;
+  // 显式点名 codex 且额度冷却中：放行但打 WARN（auto 路由不会解析到冷却中的 codex——laneReady=false）
+  if (chain.includes('codex')) {
+    const qs = codexQuotaState();
+    if (qs.active) console.error(`[WARN] codex 额度冷却中（剩余约 ${qs.remainingMin}m，${qs.reason || 'usage limit'}）——显式点名放行，失败将按回退链改投`);
+  }
+
+  let usedLane = null, res = null, resLane = null, attempts = 0, clineHeal = null;
   for (const lane of chain) {
     attempts++;
     res = await askOnce({ lane, prompt, model, effort, timeoutMs: effTimeoutS * 1000, caps: capsNorm || 'L0', scratchDir: capsScratch, maxTurns: mt });
+    resLane = lane;
     if (res.ok) { usedLane = lane; break; }
     await dumpFailedAttempt(job.dir, 'ask', attempts, res);   // 失败 attempt 全量落盘+指针
     // cline auto-heal：配置修复（写回 config）后链内重投一次；重投仍失败照旧走后续回退
@@ -1940,7 +2271,8 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
   if (res?.ok) rec.result = res.text; else { rec.error = `${res?.kind}: ${res?.error || ''}`; if (res?.hint) rec.hint = res.hint; if (res?.resetIn) rec.resetIn = res.resetIn; }
   if (res?.ok && res.toolTrace) rec.toolTrace = res.toolTrace;   // L1 工具轨迹摘要（工具名+次数+参数截断）
   if (res?.rawStream) {
-    await fsp.writeFile(path.join(job.dir, 'ask.cline-stream.jsonl'), res.rawStream, 'utf8');
+    // 流式 lane（cline/codex）原始事件流全文落盘，供回放与解析器迭代；文件名按产出 lane 泛化（cline 字节兼容）
+    await fsp.writeFile(path.join(job.dir, `ask.${resLane || usedLane || primary}-stream.jsonl`), res.rawStream, 'utf8');
   }
   if (res?.rawTranscript) {
     // L1 原始 transcript 落盘（联网内容不可冻结复现，轨迹全文留档供回放核对）
@@ -1970,7 +2302,12 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
   if (lanes && lanes.length) {
     laneKeys = lanes;
   } else {
-    laneKeys = LANE_ORDER.filter((k) => laneReady(k) && !isLaneDisabled(k));
+    // 路由三分（v21 D-036）：批量缺省池=FANOUT_DEFAULT_POOL（免费+会员档，不含 codex——Plus 额度
+    // 保护，付费档不是批量回退目标）；任务级 as 点名的 lane 并入调度池（调度池=缺省池∪点名 lane，
+    // 含显式 as:"codex"——冷却中照样并入，runTask 派发时打 WARN 放行）。
+    laneKeys = FANOUT_DEFAULT_POOL.filter((k) => laneReady(k) && !isLaneDisabled(k));
+    const named = [...new Set(tasksIn.map((t) => (t && t.as ? parseLane(t.as) : null)).filter(Boolean))];
+    for (const k of named) if (!laneKeys.includes(k)) laneKeys.push(k);
     if (!laneKeys.length) {
       laneKeys = enabledLanes();
       say(`[WARN] 没有任何已登录且未禁用的 lane，退回 ${laneKeys.join(',')}（任务会认证失败；请先 wbx login）`);
@@ -2025,7 +2362,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       throw new Error(`任务 ${t.id ?? id} 的 maxTurns 仅在含能力的 caps 生效（当前 caps=∅；L0 无回合概念）`);
     }
     if (effSet.length) {
-      if (lane === 'cline' || lane === 'doubao') throw new Error(`任务 ${t.id ?? id}：caps ${effNorm} 与 lane ${lane} 不匹配——能力任务仅支持 ai | cn（--as ai / --as cn）`);
+      if (lane === 'cline' || lane === 'doubao' || lane === 'codex') throw new Error(`任务 ${t.id ?? id}：caps ${effNorm} 与 lane ${lane} 不匹配——能力任务仅支持 ai | cn（--as ai / --as cn）`);
       if (!lane) {
         // 能力任务不进公共队列（可能落到 cline/doubao worker）：显式钉到可用的 ai/cn
         const dl = resolveDefaultLane();
@@ -2051,10 +2388,12 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
 
   const laneParallel = Math.max(1, parallel ?? cfg['parallel-per-lane'] ?? 2);
   // cline 并发单独受 cline-parallel 约束（默认 1，免费额度保护；--parallel 不抬升它）；
-  // doubao 并发单独受 doubao-parallel 约束（默认 1 上限 2，单客户端 UI 串行保护）
+  // doubao 并发单独受 doubao-parallel 约束（默认 1 上限 2，单客户端 UI 串行保护）；
+  // codex 并发单独受 codex-parallel 约束（默认 1，Plus 单账号 5h 滚动窗口额度保护）
   const laneParallelOf = (lane) => (lane === 'cline'
     ? Math.max(1, cfg['cline-parallel'] || 1)
-    : lane === 'doubao' ? Math.max(1, Math.min(2, cfg['doubao-parallel'] || 1)) : laneParallel);
+    : lane === 'doubao' ? Math.max(1, Math.min(2, cfg['doubao-parallel'] || 1))
+    : lane === 'codex' ? Math.max(1, cfg['codex-parallel'] || 1) : laneParallel);
   // 超时单点：显式 --timeout 最高优先；缺省由 runTask 按每任务能力集解析（∅=300s / 非 ∅=600s）。
   // manifest/汇总如实展示两态（修掉 v6.8「展示 300 实跑 600」的观测说谎——一号调研 job 实证）。
   const timeoutDisplay = timeoutS != null ? `${timeoutS}s（显式）` : 'auto（∅=300s / 能力任务=600s）';
@@ -2085,6 +2424,11 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
 
   async function runTask(task, lane) {
     const started = Date.now();
+    // 到达 codex worker 的任务必为点名（缺省池不含 codex）；冷却中放行但打 WARN
+    if (lane === 'codex') {
+      const qs = codexQuotaState();
+      if (qs.active) say(`${task.id}@codex 额度冷却中（剩余约 ${qs.remainingMin}m）——显式点名放行`);
+    }
     const mdl = task.model; // 传给 askOnce 的显式模型（null -> core 按配置解析）
     // 超时单点决策（resolveCapsTimeoutS）：显式 --timeout 最高优先；缺省按任务能力集 ∅=300s / 非 ∅=600s
     const taskTimeoutMs = resolveCapsTimeoutS(timeoutS, task.effSet) * 1000;
@@ -2180,8 +2524,8 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     else rec.error = `${res.kind}: ${res.error || ''}`;
     if (res.ok && res.toolTrace) rec.toolTrace = res.toolTrace;   // L1 工具轨迹摘要
     if (res.rawStream) {
-      // cline lane：原始 NDJSON 事件流全文落盘，供回放与解析器迭代（RESEARCH 设计 §3.2-5）
-      await fsp.writeFile(path.join(job.dir, `${sanitizeId(task.id)}.cline-stream.jsonl`), res.rawStream, 'utf8');
+      // 流式 lane（cline/codex）：原始事件流全文落盘，供回放与解析器迭代；文件名按产出 lane 泛化（cline 字节兼容）
+      await fsp.writeFile(path.join(job.dir, `${sanitizeId(task.id)}.${usedLane}-stream.jsonl`), res.rawStream, 'utf8');
     }
     if (res.rawTranscript) {
       // L1：codebuddy transcript 全文落盘（联网内容不可冻结复现，轨迹留档供回放核对）
@@ -2360,7 +2704,7 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
   // 4) 路由配置
   const dl = cfg['default-lane'];
   const disabled = cfg['disabled-lanes'];
-  const routeNote = dl === 'auto' ? 'auto（ai 免费优先）' : dl;
+  const routeNote = dl === 'auto' ? 'auto（单发：codex 就绪即质量档优先，否则 ai 免费优先）' : dl;
   step('route', null, `default-lane=${routeNote}${disabled.length ? `；disabled-lanes=[${disabled.join(',')}]` : ''}${dl !== 'auto' && disabled.includes(dl) ? '（⚠ default-lane 指向的 lane 已禁用，实际按 auto 处理）' : ''}`);
 
   // 4b) caps 能力矩阵（v19）：键合法性 + 交付面
@@ -2368,19 +2712,19 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
   const dcIsL2 = !dcParsed.ok && dcParsed.kind === 'caps-l2-not-delivered';
   const capsValid = (dcParsed.ok || dcIsL2) && typeof cfg['caps-l2-enabled'] === 'boolean';
   step('caps', capsValid ? null : false,
-    `default-caps=${dcIsL2 ? 'L2（保留未交付，任务声明即报错）' : (dcParsed.ok ? (dcParsed.normalized || '∅(L0)') : `非法（${JSON.stringify(cfg['default-caps'])}，已按 L0 处理）`)}；能力矩阵：∅(L0)=四 lane 纯文本零回退 | net,read(L1)=仅 ai/cn 联网+只读（--caps "net,read" 或 L1；cline/doubao 不承载） | 含 write=本轮未交付（探针 P3 沙箱前提破裂，声明即报 caps-write-disabled） | readDirs=本轮缓期（探针 P4 add-dir 边界不可证，任务字段声明即报错） | L2=保留未交付（cline 无命令级 deny；声明即报错）`);
+    `default-caps=${dcIsL2 ? 'L2（保留未交付，任务声明即报错）' : (dcParsed.ok ? (dcParsed.normalized || '∅(L0)') : `非法（${JSON.stringify(cfg['default-caps'])}，已按 L0 处理）`)}；能力矩阵：∅(L0)=五 lane 纯文本零回退 | net,read(L1)=仅 ai/cn 联网+只读（--caps "net,read" 或 L1；cline/doubao/codex 不承载） | 含 write=本轮未交付（探针 P3 沙箱前提破裂，声明即报 caps-write-disabled） | readDirs=本轮缓期（探针 P4 add-dir 边界不可证，任务字段声明即报错） | L2=保留未交付（cline 无命令级 deny；声明即报错）`);
 
-  // 5) 模板缓存（登录前置条件；cline/doubao 走各自独立认证，无模板概念）
+  // 5) 模板缓存（登录前置条件；cline/doubao/codex 走各自独立认证，无模板概念）
   for (const key of LANE_ORDER) {
-    if (key === 'cline' || key === 'doubao') continue;
+    if (key === 'cline' || key === 'doubao' || key === 'codex') continue;
     const id = IDENTITIES[key];
     const has = fs.existsSync(id.templatePath);
     if (!has) say(`[SKIP] 模板    lane ${key} 缺 ${id.templatePath}（修复：启动一次${LANE_BRAND[key]}桌面版）`);
   }
 
-  // 6) 每 lane 凭证 + 探测（ai/cn；cline 在第 7 段、doubao 在第 8 段单独体检）
+  // 6) 每 lane 凭证 + 探测（ai/cn；cline 第 7 段、doubao 第 8 段、codex 第 9 段单独体检）
   for (const key of LANE_ORDER) {
-    if (key === 'cline' || key === 'doubao') continue;
+    if (key === 'cline' || key === 'doubao' || key === 'codex') continue;
     const info = laneStatusInfo(key);
     const id = IDENTITIES[key];
     say('');
@@ -2528,6 +2872,46 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
     }
   }
 
+  // 9) codex lane（v21：可选第五 lane；ChatGPT Plus 质量优先档）。只做免额度探测（二进制+版本、
+  //    隔离 CODEX_HOME login status、模型与冷却状态）——绝不做 tiny-ask（D-002 同类：探测性提问
+  //    也真实消耗 Plus 5h 滚动窗口额度）。未装/未登录=WARN/SKIP 不影响 exit 0（可选 lane 先例）。
+  {
+    const xinfo = laneStatusInfo('codex');
+    say('');
+    say(`--- 通道 Codex CLI（ChatGPT Plus·可选通道）· 质量优先档${xinfo.disabled ? ' · 已禁用' : ''} ---`);
+    if (xinfo.disabled) {
+      steps.push({ name: 'lane-codex', good: null, detail: '已禁用（disabled-lanes）' });
+      say('[SKIP] 可选lane  已禁用（disabled-lanes），路由/回退链跳过该 lane');
+      laneRows.push(xinfo);
+    } else if (!xinfo.installed) {
+      steps.push({ name: 'lane-codex', good: null, detail: '未安装（可选，不影响本桥）' });
+      say('[WARN] 可选lane  codex 未安装（可选能力，不影响 ai/cn/cline/doubao）。安装：Codex 桌面版（捆绑 CLI）或 codex CLI，或 wbx config set codex-path "<codex.exe 路径>"');
+      laneRows.push(xinfo);
+    } else {
+      const ver = await spawnBin(xinfo.binaryPath, ['--version'], { env: codexSpawnEnv(), timeoutMs: 30000 });
+      const verStr = ansiStrip(ver.stdout || '').trim().split(/\r?\n/)[0] || '?';
+      say('Codex 登录态探测中（隔离 CODEX_HOME login status，免额度）…');
+      const st = await spawnBin(xinfo.binaryPath, ['login', 'status'], { env: codexSpawnEnv(), timeoutMs: 30000 });
+      // 实测（v21 执行窗口复测）：login status 的 "Logged in using ChatGPT" 写在 stderr、stdout 为空——判定扫双流
+      const logged = st.code === 0 && /Logged in/i.test(ansiStrip(st.stdout || '') + ansiStrip(st.stderr || ''));
+      if (!logged) {
+        steps.push({ name: 'lane-codex', good: null, detail: '未登录（ChatGPT 账号）' });
+        say('[SKIP] 凭证     未登录（隔离 codex-home 无有效 auth.json）-> node wbx.mjs login --identity codex（一次性只读复制 ~/.codex/auth.json；需先在 Codex 桌面版/CLI 登录 ChatGPT 账号）');
+        laneRows.push({ ...xinfo, probe: null });
+      } else {
+        const qs = codexQuotaState();
+        const qNote = qs.active
+          ? `额度冷却中（剩余约 ${qs.remainingMin}m——auto 路由/回退链跳过，显式点名放行）`
+          : '额度窗口正常（余额以 ChatGPT 网页端 Settings→Usage 为准）';
+        say(`[OK]   凭证     已登录（ChatGPT，model=${xinfo.model}，reasoning=${xinfo.reasoning}，${verStr}，隔离目录 ${CODEX_HOME}）`);
+        steps.push({ name: 'lane-codex', good: true, detail: `已登录（${verStr}，model=${xinfo.model}${qs.active ? '，冷却中' : ''}）` });
+        say(`${qs.active ? '[WARN]' : '[OK]'}   额度     ${qNote}`);
+        steps.push({ name: 'codex-quota', good: qs.active ? null : true, detail: qNote });
+        laneRows.push({ ...xinfo, probe: { good: true, detail: `login status OK（${qNote}）` } });
+      }
+    }
+  }
+
   const ready = loggedLanes().filter((k) => !isLaneDisabled(k));
   if (!ready.length) fail++;
   const probeable = laneRows.filter((r) => r.probe);
@@ -2548,19 +2932,20 @@ export function userBlockText(bridgeScriptPath) {
   const wbx = `node "${bridgeScriptPath}"`;
   return [
     USER_BLOCK_BEGIN,
-    '## wbx 外部算力桥（四 lane 子代理：默认分派，放开用）',
+    '## wbx 外部算力桥（五 lane 子代理：默认分派，放开用）',
     '',
-    `本机装有 wbx 桥（入口 "${bridgeScriptPath}"）：四个外部 Agent 当作你的子代理，高频、放量调用`,
-    '（几乎免费，不必为省 token 收着用）。lane：ai/cn = WorkBuddy 双 lane 的 DeepSeek V4.1 Flash',
-    '（国际版免费/国内版近免费）；cline = Cline CLI（可选第三 lane，默认免费调 DeepSeek——',
-    'cline-free/deepseek-v4.1-flash 孪生，限时轮换+每日配额，thinking=xhigh；免费清单：wbx models --as cline --free）；',
-    'doubao = 豆包桌面端（可选第四 lane，耗会员额度——免费 lane 优先，回退链最末；需以调试口 9225 运行豆包）。',
+    `本机装有 wbx 桥（入口 "${bridgeScriptPath}"）：五个外部 Agent 当作你的子代理，高频、放量调用`,
+    '（免费 lane 不必为省 token 收着用）。lane：codex = Codex CLI（ChatGPT Plus 质量优先档——',
+    '单发 ask 默认优先，模型 gpt-6.1-sol；额度耗尽自动冷却让位；fanout 批量默认免费 lane、任务级',
+    'as:"codex" 点名）；ai/cn = WorkBuddy 双 lane 的 DeepSeek V4.1 Flash（国际版免费/国内版近免费）；',
+    'cline = Cline CLI（可选，免费孪生限时轮换+每日配额；免费清单：wbx models --as cline --free）；',
+    'doubao = 豆包桌面端（可选，耗会员额度，回退链最末；需以调试口 9225 运行）。',
     '自包含（v4 公理）：全部输入可由你打包进提示词（材料先行）、输出可独立校验即可外包——含代码模块编写：',
     '',
     '```bash',
     `${wbx} doctor                     # 先自检；可用 lane 全红 -> 提示用户 login，任务自己做`,
-    `${wbx} ask --file <p.txt>           # 单条（--as ai|cn|cline|doubao 指定 lane，默认路由见 config，失败自动回退）`,
-    `${wbx} fanout --file <tasks.json>   # 并行批量（任务可用 files:[路径] 拼材料；结果落 ~/.wbx/jobs/<jobId>/）`,
+    `${wbx} ask --file <p.txt>           # 单条（--as codex|ai|cn|cline|doubao 指定 lane，缺省 codex 优先，失败自动回退）`,
+    `${wbx} fanout --file <tasks.json>   # 并行批量（任务可用 files:[路径] 拼材料、as:"codex" 点名；结果落 ~/.wbx/jobs/<jobId>/）`,
     `${wbx} ui --detach                 # 常开网页控制台 http://127.0.0.1:7788（幂等后台守护；--stop 停止；`,
     '                                   #  --install-autostart 随 ZCode 新会话自动拉起，--remove-autostart 摘除）',
     `${wbx} doubao status | ask "任务文本"  # 豆包桌面桥手工直通（零落盘旁路，不经调度/不入历史；豆包需以`,

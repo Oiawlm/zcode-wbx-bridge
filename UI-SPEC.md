@@ -201,11 +201,11 @@
 #### 成本徽标 `.cost` [frozen]
 - **结构**：inline-flex padding 2px 10px、--r-pill、--fs-xs 500 nowrap、cursor:help；纯胶囊无形状，细则进 title。
 - **API**：三档 `.acc`（免费，--acc-text 字+--acc-soft 底）/`.neutral`（近免费，--dim-hi 字+--neutral-soft 底）/`.warn`（免费·限时配额，--warn 字+--warn-soft 底）；title=原始口径全文。
-- **用法**：通道卡扫读层成本行（ai=免费/cn=近免费/cline=免费·限时配额/doubao=会员额度，v1.4.0 起四通道）。
-- **Do**：成本一律按通道枚举取档（v1.4.0 起四档枚举），原始口径（x0.00/x0.03/限时轮换说明/会员额度说明）进 title。
-- **Don't**：不要新造成本档位措辞（四档是编码层冻结）；不要加形状点（与 badge 刻意区分）。
+- **用法**：通道卡扫读层成本行（ai=免费/cn=近免费/cline=免费·限时配额/doubao=会员额度/codex=ChatGPT Plus 额度，v1.5.0 起五通道）。
+- **Do**：成本一律按通道枚举取档（v1.5.0 起五档枚举），原始口径（x0.00/x0.03/限时轮换说明/会员额度说明/Plus 5h 滚动窗口+周上限说明）进 title。
+- **Don't**：不要新造成本档位措辞（五档是编码层冻结）；不要加形状点（与 badge 刻意区分）。
 - **何时不用**：非成本语义的强调用 badge；成本徽标只承载「这条通道花不花钱」。
-- **A11y 与不变量**：四档映射为编码层冻结（机器断言 S3 守护标签映射的存在性机制）；title 兜底完整口径。
+- **A11y 与不变量**：五档映射为编码层冻结（机器断言 S3 守护标签映射的存在性机制）；title 兜底完整口径。
 - **相关组件**：badge、kv。
 
 #### status-dot `.dot--running` [extension]
@@ -243,7 +243,7 @@
 #### card `.card` [extension]
 - **结构**：--panel 底+--line 边+--r-md+--shadow-1+margin-bottom --s4+scroll-margin-top --s4；hover(`@media(hover:hover)`) translateY(-1px)+--shadow-2+边框亮化；`.off` 变体（bd/title/sub opacity .62）；grid3 内 margin-bottom:0。
 - **API**：变体 `.off`；槽位=卡头/卡体/任意内容。
-- **用法**：通道卡×4（grid3，v1.4.0 起含豆包 lane 卡）、路由卡、体检卡、调用卡、历史表卡、job 详情卡、登录卡×3（登录引导 + Cline 折叠卡 + 豆包说明卡，v6.5 起豆包卡为内容级新增；v1.4.0 起说明卡文案=「豆包已是第四 lane，登录在客户端自理」）。原静态豆包桥工具卡（v12.1 内容级新增）已于 v1.4.0 升格为豆包 lane 卡进 grid（退役静态卡）。
+- **用法**：通道卡×5（grid3，v1.4.0 起含豆包 lane 卡、v1.5.0 起含 Codex lane 卡）、路由卡、体检卡、调用卡、历史表卡、job 详情卡、登录卡×4（登录引导 + Cline 折叠卡 + 豆包说明卡 + Codex 收割说明卡，v6.5 起豆包卡为内容级新增；v1.4.0 起说明卡文案=「豆包已是第四 lane，登录在客户端自理」）。原静态豆包桥工具卡（v12.1 内容级新增）已于 v1.4.0 升格为豆包 lane 卡进 grid（退役静态卡）。
 - **Do**：抬升只 1px 且包 hover:hover；停用卡用 `.off` 降亮而非改文字色。
 - **Don't**：不要用 --line 表达可交互边界（只作装饰分隔 1.31:1）。
 - **何时不用**：多个同级条目天然成表时用 table，不堆卡片。
@@ -481,9 +481,10 @@ T4/C3/C5/D4 的保活前置）、形状双编码（S1）、阈值乱序（S2）�
 - **组件层**：§2 各 [frozen] 组件的类名契约与结构（badge 八变体、toast 三型、table 容器、button
   三档、form-control、tabs 四页签、details aria 机制、kv 网格、chip 三重编码、power、copybtn）。
 - **IA 层**：四页签（状态/调用/历史/登录）与三层信息分层尺子（扫读→详情→排障）。
-- **编码层**：四态→形状→颜色映射；到期色阶阈值（≤0 红 / ≤7 橙 / ≤30 黄 / >30 绿）；成本四档
-  （免费/近免费/免费·限时配额/会员额度，v1.4.0 起随通道枚举）。
-- **术语层**：v5.2 冻结术语表全文继承。
+- **编码层**：四态→形状→颜色映射；到期色阶阈值（≤0 红 / ≤7 橙 / ≤30 黄 / >30 绿）；成本五档
+  （免费/近免费/免费·限时配额/会员额度/ChatGPT Plus 额度，v1.5.0 起随通道枚举）。
+- **术语层**：v5.2 冻结术语表全文继承；通道品牌全称五件套（WorkBuddy AI（国际版）/WorkBuddy（国内版）/
+  Cline CLI（可选通道）/豆包（桌面端）/Codex CLI（ChatGPT Plus·可选通道），v1.5.0 起纯新增）。
 - **安全层**：零依赖零外部资源；toast 全面替代 alert()。
 
 ### 5.2 五条判定规则（新增 vs 修改）
@@ -530,3 +531,4 @@ T4/C3/C5/D4 的保活前置）、形状双编码（S1）、阈值乱序（S2）�
 | v1.3.0 | 2026-10-03 | efeee49b0e（token 零改动） | D2 契约回退（授权=用户 2026-10-03 翻案原话「怎么把我和豆包的聊天记录放进去了？上面还写着"豆包桥接"，这是错误的」）：TYPE_LABEL/type 枚举收回 `doubao`（v1.2.0 的 D2 扩展整体回退），LANE_LABEL/LANE_TITLE 同步回 v6.3 形态；ui-contract FROZEN_TYPE_KEYS 与 v7 ⑤c/v8 ④a 断言同步回退；tokenTotals 去 doubaoTasks、历史页豆包表述清理（豆包直通恢复零落盘，历史页语义=外部算力调度记录）。内容级新增（§5.2/§5.4 放行）：登录页新增豆包（桌面端）说明卡（无需在此登录+launch.ps1 指引，不造假登录按钮）。内容级修复：Cline 卡免费模型下拉 `#cline-free-select` 内联 min-width:220px → min-width:0;width:100%（宽屏撑破卡片）。v1.2.0 其余内容级变更（豆包卡位置/总览 chip/历史表 fixed/累计 tokens chip）全部保留。token 键集与值零改动 |
 | v2.0.0 | 2026-10-08 | 6e0415da13（双主题口径：浅 66+深 42） | 双主题契约变更（授权=用户 2026-10-08 原话「我希望咱们的前端能够做成浅色模式。最好是浅色和深色模式可以相互切换，不过我个人更喜欢浅色模式」+ GOAL-V16 §4 FROZEN 7 变更授权；桥 v6.8.0；T8 双提案实测择优+全表机器实测）：①token 值分层双调色板——`:root`=浅色（默认，T8-b 提案：冷蓝灰系延续深色版色相家族，§1.2 浅色档全表实测达标）、`[data-theme="dark"]`=原深色值原样迁移（视觉零回归）；键集语义不动；②哨兵块外硬编码色收编 8 个新 token（--acc-ink/--err-ink/--err-ctrl/--hover-ring/--hover-soft/--scrollbar/--scrollbar-hover/--panel-fade），T4 allowlist 清空（theme-color meta 派生色唯一例外，等值由 T6 断言）；③主题切换管道：head 首个内联脚本读 localStorage（key wbx-theme，缺省 light）先设 dataset.theme 防 FOUC + header 两态切换按钮（新组件=扩展点，内联 SVG 图标）+ 无 JS 兜底=浅色默认正确渲染；④ui-contract 重构：T1 双主题键集、T2 双值快照、T5 双调色板塌缩断言、新增 T6 主题管道（23→24 断言）；红测 25 变异全红+4 对照全绿+恢复自证；⑤PWA 派生色（theme-color/manifest bg）=浅色 --bg 由 T6 等值断言守护。深色 --err-ctrl 2.21:1 迁移债见 §1.2 注记 |
 | v1.4.0 | 2026-10-03 | efeee49b0e（token 零改动） | 内容级 lane 化升格（授权=用户 2026-10-03 原话「完全lan化」——豆包升格第四 lane，路由/回退/fanout 全进调度体系；桥 v6.6.0）：①静态豆包桥工具卡退役，新增 `doubaoCardHtml()` 渲染的豆包 lane 卡进 `#lane-cards` grid（通道卡×3→×4；4 态探针徽标/电源开关/成本行「会员额度」/调试口 9225 行/launch.ps1 详情与三处诚实声明全文保留）；②成本徽标 `.cost` 新增第四档「会员额度」（doubao，复用 `.neutral` 视觉档，title 兜底原始口径——§2 条目与 §5.1 编码层同步三改四）；③LANE_LABEL +`doubao:'豆包'`、LANE_TITLE +`doubao:'豆包（桌面端）'`、LANE_ORDER_UI +doubao（内容级：三 lane 冻结术语不减，纯新增）；④路由卡 +「固定 豆包」按钮、调用页 ask 分段器与 fanout 行下拉 +豆包；⑤总览豆包 chip 锚点 `#doubao-card`→`#lane-card-doubao`、title 去「非三 lane」；⑥登录页豆包说明卡文案改「豆包已是第四 lane，登录仍在客户端自理」（消除失实）；⑦tokens chip/hist-count 的 unknownUsage hint 扩「含豆包 lane——桌面端不走 API 计量」。D2 TYPE_LABEL 键集不动（豆包调度任务 type=ask/fanout）；token 键集与值零改动 |
+| v1.5.0 | 2026-10-14 | 6e0415da13（token 零改动） | 内容级 lane 化扩展（授权=用户 2026-10-14 立项原话「前端 UI 也记得要改」+ 三问对齐裁决；桥 v6.10.0；探针 v21p1-p0~p3 + T8 双草稿择优 + T7 评审）：①Codex CLI 升格第五 lane（ChatGPT Plus 质量优先档：单发 ask 默认优先、fanout 批量默认免费池、额度耗尽自动冷却让位），新增 `codexCardHtml()` 渲染的 Codex lane 卡进 `#lane-cards` grid（通道卡×4→×5；四态徽标 未装/未登录/冷却中/已登录、冷却倒计时行、成本行「ChatGPT Plus 额度」、路由说明「单发默认优先·批量需点名」、凭证收割/隔离排障详情）；②成本徽标 `.cost` 新增第五档「ChatGPT Plus 额度」（codex，复用 `.neutral` 视觉档，title 兜底原始口径——§2 条目与 §5.1 编码层同步四改五）；③LANE_LABEL +`codex:'Codex'`、LANE_TITLE +`codex:'Codex CLI（ChatGPT Plus·可选通道）'`（FROZEN_TERMS 三处同步纯新增：代码/ui-contract/UI-SPEC）、LANE_ORDER_UI 自 core 派生 +codex 居首；④路由卡 +「固定 Codex」按钮、自动按钮文案改「Codex 就绪即优先，否则免费档」、回退链 hint 五元化；⑤调用页 ask 分段器与 fanout 行下拉 +Codex（fanout 选项标注「点名」）；⑥登录页新增 Codex 收割说明卡（`wbx login --identity codex` 一次性只读复制 auth.json；失联 --force 重收割指引），登录卡×3→×4；⑦/api/ask 枚举与 caps×codex 400 校验、/api/login/start 对 codex 硬拒、errorHint +Plus 额度冷却提示。D2 TYPE_LABEL 键集不动（codex 调度任务 type=ask/fanout）；token 键集与值零改动（tokens-sha 不变） |

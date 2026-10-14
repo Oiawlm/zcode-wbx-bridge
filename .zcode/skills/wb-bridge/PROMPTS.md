@@ -1,4 +1,4 @@
-# PROMPTS — worker 提示词知识库（v4.1）
+# PROMPTS — worker 提示词知识库（v4.2）
 
 > 本文件是 wbx 桥的 **worker 提示词模板库与经验知识库**，由 [SKILL.md](SKILL.md) 引用。桥 v4 时期核心：
 > 外包判定从「轻量文本活」升级为「**自包含任务**」——全部输入（含代码上下文）可由编排器
@@ -18,6 +18,10 @@
 > （桥 v19 caps 能力矩阵：token ∈ net|read|write，L0/L1 降格为别名）；新增 T1-W 写盘变体
 > （**留位未启用**——探针 P3 实证 acceptEdits 档越界写逃逸，write 本轮不交付，模板先行入库）；
 > T10 注记同步；速查表/checklist 能力集口径。
+> v4.2（2026-10-14，本文件版本）：新增「GPT-6.1-Sol（codex lane）」模型画像节（桥 v6.10.0 第五 lane·
+> ChatGPT Plus 质量优先档：定位/写法要点/反模式/effort 映射/lane 特殊性——单发默认优先+批量点名、
+> 额度冷却语义、长任务 --timeout 600、模型经 config 管理任务级不生效）；成本口径「三 lane 几乎免费」
+> 改「免费三 lane + 付费两 lane（Plus 额度/会员额度）」（来源：本机一手探针 internal/archive/v21/v21p1-*）。
 
 ## 通用原则（所有模板共用）
 
@@ -45,7 +49,8 @@
    关键实现段」，并在材料段首注明「已裁剪：仅保留接口与关键段」；不要无声截断。
    长度上限：v4 起桥对 >12000 字符的提示词自动走 stdin 通道（实测 60k+ 字符可用），
    但材料越长费用/延迟越高，仍应按需裁剪。**v5 语义修正：裁剪只为信噪比（质量），不为省钱**
-   ——三 lane 几乎免费，材料给足；20k 准则继续用于控制信噪比与延迟。
+   ——免费三 lane 几乎免费、付费两 lane（codex Plus 额度/doubao 会员额度）按路由规则消耗，材料给足；
+   20k 准则继续用于控制信噪比与延迟。
 6. **JSON 任务给骨架**：提示词中必须出现 "JSON" 字样并给出目标格式样例
    （DeepSeek 官方 json_mode 指南要求），字段语义逐行说明，缺省值写明（null / UNKNOWN）。
 7. **effort 档位**（官方实际三档 `low / high / max`，`none` 关闭；`minimal→low`、`medium/xhigh→high`、
@@ -80,7 +85,7 @@
 > 证据分级：官方一手 > 双 worker+主力检索三方收敛 > 社区转述（检索摘要级，仅旁证）> L0 自述（一律
 > （待核实））；URL 直连未果或归属漂移者逐条注明（`api-docs/zh-cn/guides/reasoning_model` 现为
 > 「首次 API 调用」页，参数面以 api-docs 现行页为准；DeepSeek-R1 README 直连被网络阻断）。
-> **两模型的官方建议互不移植**（few-shot 分场景见各节要点）；官方未单列处如实标 UNKNOWN，绝不编造；
+> **各模型的官方建议互不移植**（few-shot 分场景见各节要点）；官方未单列处如实标 UNKNOWN，绝不编造；
 > 条目均经「沉淀闭环」入库四标准过滤，新证据走同一流程校订。画像只调「模型怎么喂」：通用骨架
 > （P1 四段式 / P3 输出硬约束 / P4 材料先行）照常适用。豆包 L0 自述本轮缺席（桌面端未以调试口
 > 运行，未强拉），自述面留待后轮补。
@@ -154,6 +159,51 @@
    翻译 1.3、创意 1.5。
 6. **Responses API**：`instructions` 字段 = 首条 system 消息置顶；`text.format` 接
    JSON schema 做结构化输出。
+
+### GPT-6.1-Sol（codex lane）
+
+#### 定位与调用形态
+
+- **模型身份**：`gpt-6.1-sol`——OpenAI 官方编码主力（models_cache 官方描述「Latest workhorse model
+  for coding」，推荐语 near-Astra performance at a lower cost）；推理档 low/medium/high/xhigh/max/ultra，
+  桥暴露任务级 low|medium|high 直通 + config `codex-reasoning`（默认 medium，xhigh 仅 config 可设）。
+  **底线护栏**：仅放行 gpt-6 及以上主版本（用户 2026-10-14 裁决「不用 GPT-5.6 及以下」）——
+  gpt-5.5/gpt-5.6-*/codex-auto-review/gpt-reserve 一律拒绝（config set 报 codex-model-floor）。
+- **lane 特殊性**：仅 ∅ L0（exec 沙箱与工具面不受桥控，不承载任何能力集）；**单发 ask 默认优先**
+  （质量档——编码/规划综合任务首选），fanout 批量默认免费池、任务级 `"as":"codex"` 点名才投；
+  额度=ChatGPT Plus 5h 滚动窗口+周上限，耗尽自动冷却让位（显式点名放行+WARN）；模型恒取 config
+  codex-model（任务级 model 不生效——额度保护）；长任务（高推理档/大材料）建议 `--timeout 600`。
+- **调用形态**：`codex exec --ephemeral --ignore-user-config -s read-only --json -o <file>` 非交互一次一问；
+  收割以 -o 文件+JSONL 事件流为准、不信退出码（探针 v21p1-p2 实测：失败路径退出码不可信）。
+
+#### 提示词要点（GPT-6.1-Sol）
+
+- 通用骨架照常适用：P1 四段式（角色行+任务句+【接口契约/输入材料】+【输出要求】）、P3 输出硬约束、
+  P4 材料先行——codex 对结构化契约的服从度高，四段式收益同样成立。
+- **代码任务给完整契约**：接口签名/调用约定/验收标准逐条列出（T1 模板原样适用）；sol 对「可判定的
+  验收标准」响应好，边界条件写成枚举清单。
+- **长上下文可用足**：cached_input_tokens 占比高（实测 16.3k 输入中 12.5k 命中缓存），重复材料的
+  增量成本低——评审/迭代类任务可贴大材料；仍遵守 P5 信噪比裁剪准则。
+- 评审/批判类任务（T7）直给固定输出格式（位置→问题→严重度→最小修复四元组），sol 收敛快。
+- 中文任务直接用中文写提示词即可（双语任务给「语言：中文」行钉死输出语言）。
+
+#### 反模式
+
+- 不要在提示词里让 codex「执行命令/写文件/联网」——L0 无工具声明照常保留（桥只开 read-only 纯文本面）。
+- 不要任务级传 model 字段（不生效）；换模型走 `wbx config set codex-model <gpt-6+>`（护栏单点）。
+- 不要在 fanout 批量里不点名就期望走 codex（缺省池是免费 lane——Plus 额度保护是刻意的）。
+- 不要为省额度把 effort 压到 low 做关键模块评审（质量档的意义就是质量；额度豁免原则适用）。
+- 探索式多轮调试不要派 codex（一次一问无会话延续；resume/fork 本桥不用——D-023 边界）。
+
+#### effort 映射（任务级字段 → codex 推理档）
+
+| 任务 effort | codex `model_reasoning_effort` | 适用 |
+|---|---|---|
+| low | low | 翻译/摘要/简单抽取 |
+| medium（缺省） | medium（config 缺省） | 常规编码/文案/结构化抽取 |
+| high | high | 关键模块实现/评审批判/架构方案 |
+
+（xhigh/max/ultra 不经任务级暴露——需要时 `wbx config set codex-reasoning xhigh` 全局上调。）
 
 ### 豆包 2.1 Pro·推理高（doubao lane）
 
@@ -621,7 +671,7 @@ module.exports = function parseDuration(input) {
 **定位**：T8 **不是新提示词格式**，而是编排模式 = T1（文案/方案类沿用 T2/T6）× 2 份 +
 差异化附加指令 + 评审择优。产物形态、四段式结构、无工具声明、输出硬约束、材料先行，
 全部沿用底层模板；T8 只额外规定三件事：①同一契约派两份；②两份给**互不相同**的附加侧重
-指令；③回收后由 ZCode 评审择优并留档。**成本观**：三 lane 几乎免费，不必为省 token 收着用
+指令；③回收后由 ZCode 评审择优并留档。**成本观**：免费三 lane 几乎免费不必收着用；codex/doubao 付费档按路由规则（单发优先 codex、批量点名才投）
 ——关键产物默认 2 份，复杂模块可 3 份。
 
 **使用判定表**：

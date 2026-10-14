@@ -5,10 +5,12 @@
  * 可复用逻辑在 ./wbx-core.mjs，安装/打包在 ./wbx-setup.mjs，Web UI 在 ./wbx-ui.mjs。
  * 本文件是薄 CLI 壳：参数解析 + 输出格式化。
  *
- * 四 lane：ai = 国际版（deepseek-v4.1-flash x0.00 免费）；cn = 国内版（x0.03 近免费）；
+ * 五 lane：codex = Codex CLI（ChatGPT Plus 质量优先档：单发 ask 默认优先，额度耗尽自动冷却让位）；
+ * ai = 国际版（deepseek-v4.1-flash x0.00 免费）；cn = 国内版（x0.03 近免费）；
  * cline = Cline CLI（默认免费孪生 cline-free/deepseek-v4.1-flash，限时轮换+每日配额）；
  * doubao = 豆包桌面端（会员额度；回退链最末）+ 手工直通双入口并存。
- * 默认路由由 config.default-lane 决定（auto = ai 免费优先）；失败/限流自动回退下一 lane（各一次）。
+ * 默认路由三分：单发 auto=codex 就绪即优先、否则 ai 免费优先；fanout 批量缺省免费池（codex 点名才投）；
+ * 失败/限流自动回退下一 lane（各一次，付费两档排后）。
  *
  * 用法（node wbx.mjs <子命令>，详见 --help）：
  *   doctor / login / ask / fanout / models          v2 全量保留
@@ -31,6 +33,7 @@ import path from 'node:path';
 import {
   WBX_VERSION, SCRIPT_DIR, PROJECT_ROOT, RUNTIME_ROOT, JOBS_DIR, LEGACY_TASKS_DIR,
   IDENTITIES, LANE_ORDER, STDIN_THRESHOLD, CONFIG_DEFS,
+  HOME, CODEX_HOME,
   clineReady, clineProvidersFile, clineHomeDir, runClineAuth,
   die, redact, brief, fmtMs,
   ensureDirs, readStdin, migrateIfNeeded,
@@ -76,6 +79,32 @@ async function cmdLogin(opts) {
     if (k === 'doubao') die('豆包无「登录豆包」流程：登录态由你在豆包桌面客户端内自理，桥侧零凭证。检查就绪态：wbx doubao status（或先跑 doubao/launch.ps1 以调试口 9225 拉起）');
     return k;
   })() : 'cn';
+
+  // codex lane：凭证收割（D-037）——一次性只读复制 ~/.codex/auth.json -> <运行时根>/codex-home/。
+  // 授权边界（用户 2026-10-14 裁决 2）：auth.json 是「不动桌面版文件」红线的唯一显式授权例外
+  //（单文件、只读、一次、复制进 gitignore 运行时）；绝不回写/展示/入库；除它外 ~/.codex 零读取。
+  if (identity === 'codex') {
+    const src = path.join(HOME, '.codex', 'auth.json');
+    const dst = path.join(CODEX_HOME, 'auth.json');
+    if (fs.existsSync(dst) && !opts.force) {
+      console.log(`[OK] lane codex 已收割凭证（${dst} 存在）。加 --force 重新收割（Codex 侧令牌刷新失联时用）`);
+      return;
+    }
+    if (!fs.existsSync(src)) {
+      die(`未找到 ${src}——请先在 Codex 桌面版或 codex CLI 登录 ChatGPT 账号（codex login），再回来收割`);
+    }
+    try {
+      fs.mkdirSync(CODEX_HOME, { recursive: true });
+      fs.copyFileSync(src, dst);   // 一次性只读复制（源零改动，内容绝不展示）
+    } catch (e) {
+      die(`凭证复制失败：${e.message}`);
+    }
+    if (!fs.existsSync(dst)) die('凭证复制后校验失败（目标未落盘）');
+    console.error(`[1/1] 完成：已一次性只读复制 ~/.codex/auth.json -> ${dst}（源未改动；隔离 CODEX_HOME，绝不回写）`);
+    console.error('验证：node wbx.mjs doctor（lane codex 段应显示已登录）。额度耗尽自动冷却让位；Codex 侧令牌刷新导致失联时重跑本命令 --force');
+    await exitWith(0);
+    return;
+  }
 
   // cline lane：OAuth 设备授权流（spawn cline auth，stdio 直通，用户在浏览器完成）
   if (identity === 'cline') {
@@ -155,6 +184,8 @@ function hintText(r) {
   const h = r && r.hint;
   if (h === 'login') return '（未登录/凭证过期 -> wbx login）';
   if (h === 'ratelimit') return '（疑似限流/配额 -> 降低并发或稍后再试）';
+  if (h === 'codex-quota') return '（ChatGPT Plus 额度耗尽 -> 已进入冷却让位，auto 路由/回退自动跳过 codex；稍后再试或显式改投免费 lane）';
+  if (h === 'codex-model-floor') return '（codex-model 底线护栏：仅放行 gpt-6 及以上主版本 -> wbx config set codex-model gpt-6.1-sol）';
   if (h === 'free-limit') return `（cline 免费额度今日已达上限${r.resetIn ? `，约 ${r.resetIn} 后重置` : ''} -> 稍后再试 / wbx models --as cline --free 换免费模型；跨 lane 已自动回退 ai/cn 仍是 DeepSeek）`;
   if (h === 'free-promotion-ended') return '（该免费模型促销已结束/被轮换下线 -> wbx models --as cline --free 查当前免费清单后 config set cline-model）';
   if (h === 'model-not-found') return '（模型 id 不存在或已被轮换下线 -> wbx models --as cline --free 查当前免费清单后 config set cline-model）';
@@ -384,6 +415,11 @@ async function cmdModels(opts) {
     }
     await exitWith(allOk ? 0 : 1);
     return;
+  }
+  // codex 无模型探测：模型经 config codex-model 管理（护栏单点）；逐个探测会真实消耗 Plus
+  // 额度（每次 tiny ask 一发），与 doctor 同策略不做（D-002 同类）。可用值清单在 doctor/桌面版。
+  if (lane === 'codex') {
+    die('codex lane 无模型探测：模型经 config codex-model 管理（默认 gpt-6.1-sol，≥GPT-6 底线护栏——wbx config set codex-model <gpt-6+>；探测会真实消耗 Plus 额度故不做）。检查就绪态：wbx doctor');
   }
   console.error(`lane = ${lane}（${IDENTITIES[lane].label}）`);
   const list = (opts.probe ? opts.probe.split(',').map((s) => s.trim()).filter(Boolean) : [resolveModel()]);
@@ -685,29 +721,37 @@ function parseArgs(argv) {
   return opts;
 }
 
-const HELP = `wbx — ZCode <-> 外部算力联动桥（v${WBX_VERSION} 四 lane：WorkBuddy 双 lane + 可选 Cline CLI + 可选豆包桌面端）
+const HELP = `wbx — ZCode <-> 外部算力联动桥（v${WBX_VERSION} 五 lane：Codex CLI + WorkBuddy 双 lane + 可选 Cline CLI + 可选豆包桌面端）
 
-lane：ai = 国际版 WorkBuddy AI（deepseek-v4.1-flash x0.00 免费）
+lane：codex = Codex CLI（可选第五 lane·ChatGPT Plus 质量优先档：单发 ask 默认优先——编码/规划综合
+              能力强；模型 gpt-6.1-sol（≥GPT-6 底线护栏，config codex-model）；任务级 --model 不生效、
+              --effort low|medium|high 直通推理档；Plus 额度 5h 滚动窗口+周上限，耗尽自动冷却让位）
+      ai = 国际版 WorkBuddy AI（deepseek-v4.1-flash x0.00 免费）
       cn = 国内版 WorkBuddy（x0.03 近免费）
       cline = Cline CLI（可选第三 lane：默认免费调 DeepSeek——cline-free/deepseek-v4.1-flash 孪生，
               限时轮换+每日配额，--thinking xhigh --compaction off；清单：models --as cline --free）
       doubao = 豆包桌面端（可选第四 lane，耗会员额度；工作任务模式 CDP 驱动，模型由工具自管理
               豆包 2.1 Pro · 推理高；任务级 --model/--effort 对 doubao 不生效）
-默认路由：config default-lane（auto=ai 免费优先，cline 次之，doubao 会员额度 lane 永远排最后）；
-失败/限流自动跨 lane 回退（cn→ai→cline→doubao 各一次，仍是 DeepSeek；cline 内部绝不换非 DeepSeek
-模型顶替）；cline 未装/未登录直接跳过；doubao 客户端调试口不在线时 ask 秒退失败自然跳过。
+默认路由三分（v21）：单发 ask auto=codex 就绪即质量档优先，否则 ai 免费优先；fanout 批量缺省=免费
+池 ai/cn/cline/doubao（codex 不进缺省池——Plus 额度保护，任务级 "as":"codex" 点名才投）；回退链
+cn→ai→cline→codex→doubao 各一次（免费 lane 失败不自动烧 Plus/会员额度，付费两档排后）。
+失败/限流自动跨 lane 回退（仍是 DeepSeek；cline 内部绝不换非 DeepSeek 模型顶替）；cline 未装/未登录
+直接跳过；doubao 调试口不在线时 ask 秒退失败自然跳过；codex 额度冷却期 laneReady=false 自动跳过。
 运行时根：WBX_HOME env -> ~/.wbx/（装过 self-install 即全局形态） -> 项目 .wbx/
 cline 隔离：桥的 cline 状态只在 <运行时根>/cline-home/（HOME 覆盖），绝不读写用户 ~/.cline。
+codex 隔离：CODEX_HOME=<运行时根>/codex-home（--ignore-user-config 运行）；凭证=login --identity codex
+一次性只读复制 ~/.codex/auth.json（唯一显式授权例外，绝不回写）。
 doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao …」手工直通为零落盘旁路（不经调度、不入历史）。
 
 用法：
   node wbx.mjs doctor  [--no-probe]                 自检向导：node/CLI 探测/模板/两 lane 凭证+模型探测
                                                    + cline 可选段（含免费孪生存在性校验）
-  node wbx.mjs login   [--identity cn|ai|cline] [...] 登录引导（默认 cn 微信扫码；ai 有 state 修补锦囊；
-                     cline 为 OAuth 设备授权，浏览器完成）
+                                                   + codex 可选段（免额度探测：login status+模型+冷却态）
+  node wbx.mjs login   [--identity cn|ai|cline|codex] [...] 登录引导（默认 cn 微信扫码；ai 有 state 修补锦囊；
+                     cline 为 OAuth 设备授权，浏览器完成；codex 为一次性只读复制 ~/.codex/auth.json）
                      [--wait 300] [--no-open] [--force]
   node wbx.mjs ask     --file t.txt | --text "..."  单次调用（落盘为 job）；stdout=结果，stderr=用量/lane
-                     [--as ai|cn|cline|doubao] [--model M] [--effort low] [--timeout 300] [--json] [--stdin]
+                     [--as codex|ai|cn|cline|doubao] [--model M] [--effort low] [--timeout 300] [--json] [--stdin]
                      [--caps 能力集]                  能力集（v19 能力矩阵，缺省=config default-caps）：
                                                       token ∈ net|read|write 逗号组合（序无关、去重）；
                                                       别名 L0=∅ 纯文本零回退、L1=net,read（仅 ai/cn，缺省超时
@@ -716,21 +760,29 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                      [--max-turns N]                  能力任务回合上限（v6.2，整数 1-64，任何非 ∅ 能力集生效；
                                                       缺省 config caps-l1-max-turns=24；耗尽报 l1-turns-exhausted）
   node wbx.mjs fanout  --file tasks.json            并发池批量执行；任务可用 files:[路径] 拼材料；结果写 <运行时根>/jobs/<jobId>/
-                     [--lanes ai,cn,cline,doubao] [--parallel 2] [--timeout 300] [--retry 1]
+                     [--lanes codex,ai,cn,cline,doubao] [--parallel 2] [--timeout 300] [--retry 1]
                                                       任务对象支持 "caps":"net,read"（能力集，语义同 ask --caps；
                                                       L1 别名同值）、"maxTurns":N（任务级回合上限，语义同 ask）、
                                                       "filesMode":"reference"（材料播种：files 复制进 worker
                                                       scratch 按相对路径自读；需任务级 caps 显式含 read+ai/cn）
   node wbx.mjs models  [--as cn|ai|cline] [--probe "m1,m2"]   探测模型可用性并列出产品配置中的模型
-                     [--free]     （--as cline --free：列当前免费模型组，recommended-models 端点实时）
+                     [--free]     （--as cline --free：列当前免费模型组，recommended-models 端点实时；
+                                   codex 无模型探测：走 config codex-model+doctor，不做逐个 tiny ask）
   node wbx.mjs usage  [--json] [--force]             各 lane 余额（v6.8：WorkBuddy 双 lane 走社区 billing
-                                                    端点并显式标注「非官方」；cline/doubao 如实标注无端点；
+                                                    端点并显式标注「非官方」；cline/doubao/codex 如实标注
+                                                    无端点——Plus 额度以 ChatGPT 网页端 Settings→Usage 为准；
                                                     unavailable 诚实兜底+官方控制台指路；TTL 缓存）
   node wbx.mjs config  list | get <key> | set <key> <value>
-                                                   配置：default-lane=auto|ai|cn|cline|doubao、disabled-lanes=["cn"]、
-                                                   parallel-per-lane、model、cli-path、cline-path/data-dir/provider/
-                                                   model（默认 cline-free/deepseek-v4.1-flash）/thinking/compaction、
-                                                   cline-parallel、doubao-parallel（默认 1 上限 2，单客户端 UI 串行保护）、
+                                                   配置：default-lane=auto|codex|ai|cn|cline|doubao、
+                                                   disabled-lanes=["cn"]、parallel-per-lane、model、cli-path、
+                                                   cline-path/data-dir/provider/model（默认 cline-free/
+                                                   deepseek-v4.1-flash）/thinking/compaction、cline-parallel、
+                                                   doubao-parallel（默认 1 上限 2，单客户端 UI 串行保护）、
+                                                   codex-path（空=自动扫描桌面版捆绑 CLI）、codex-model
+                                                   （默认 gpt-6.1-sol，≥GPT-6 底线护栏）、codex-reasoning
+                                                   （low|medium|high|xhigh，默认 medium）、codex-parallel
+                                                   （默认 1，Plus 额度保护）、codex-quota-cooldown-min
+                                                   （默认 30，额度冷却分钟）、
                                                    default-caps=∅(L0)|net,read(L1)|能力集串（缺省能力集，默认 L0）、
                                                    caps-l1-max-turns=24（能力任务缺省回合上限，键名沿用，v19 起
                                                    语义=任何非 ∅ 能力集）、
@@ -758,10 +810,10 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                                                    目录解析：全局 ~/.zcode/wbx-bridge/doubao/（self-install 复制）
                                                    -> 仓库 tools/doubao-bridge/（v12 源；未装则明确报错，不影响其余 lane）
 
-tasks.json 格式：[{"id":"t1","prompt":"...","as?":"ai|cn|cline|doubao","model?":"...","effort?":"low","file?":"p.txt","files?":["a.js"],"filesMode?":"reference（需任务级 caps 显式含 read）","caps?":"net,read（能力集或 L1 别名）","maxTurns?":24}]
+tasks.json 格式：[{"id":"t1","prompt":"...","as?":"codex|ai|cn|cline|doubao","model?":"...","effort?":"low","file?":"p.txt","files?":["a.js"],"filesMode?":"reference（需任务级 caps 显式含 read）","caps?":"net,read（能力集或 L1 别名）","maxTurns?":24}]
 
-环境变量（均可选）：WBX_HOME（运行时根）、WBX_CLI、WBX_CLINE（cline 二进制）、WBX_MODEL、
-WBX_PROJECT_ROOT、WBX_PRODUCT_CONFIG（login 模板）`;
+环境变量（均可选）：WBX_HOME（运行时根）、WBX_CLI、WBX_CLINE（cline 二进制）、WBX_CODEX（codex 二进制）、
+WBX_MODEL、WBX_PROJECT_ROOT、WBX_PRODUCT_CONFIG（login 模板）`;
 
 async function main() {
   const argv = process.argv.slice(2);

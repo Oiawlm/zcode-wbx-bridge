@@ -398,7 +398,8 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
     <div class="card__bd">
       <div class="row">
         <span class="seg" id="route-pill">
-          <button data-v="auto">自动（WorkBuddy AI 免费优先）</button>
+          <button data-v="auto">自动（Codex 就绪即优先，否则免费档）</button>
+          <button data-v="codex">固定 Codex</button>
           <button data-v="ai">固定 WorkBuddy AI</button>
           <button data-v="cn">固定 WorkBuddy</button>
           <button data-v="cline">固定 Cline</button>
@@ -407,7 +408,7 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
       </div>
       <div class="hint" id="route-hint" style="margin-top:8px"></div>
       <div class="warn-box" id="route-warn" style="display:none"></div>
-      <div class="hint" style="margin-top:8px">写 <b>config.json</b>（default-lane / disabled-lanes），体检、单条调用、批量并行、回退链即时生效；通道停用开关在各通道卡右上角。回退链：cn → ai → cline → 豆包（会员额度 lane 排最末，免费优先）。</div>
+      <div class="hint" style="margin-top:8px">写 <b>config.json</b>（default-lane / disabled-lanes），体检、单条调用、批量并行、回退链即时生效；通道停用开关在各通道卡右上角。路由三分（v21）：单发自动=Codex 就绪即质量档优先；批量缺省=免费池（Codex 不进缺省池，任务级点名才投）；回退链：cn → ai → cline → Codex → 豆包（免费优先，Plus 额度与会员档排后）。</div>
     </div>
   </div>
   <div class="card">
@@ -432,6 +433,7 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
         <div class="row">
           <span class="seg" id="ask-lane-seg">
             <button data-v="" class="active">自动</button>
+            <button data-v="codex">Codex</button>
             <button data-v="ai">WorkBuddy AI</button>
             <button data-v="cn">WorkBuddy</button>
             <button data-v="cline">Cline</button>
@@ -542,6 +544,18 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
       </details>
     </div>
   </div>
+  <div class="card">
+    <div class="card__bd" style="padding:0">
+      <details id="codex-guide">
+        <summary>Codex CLI（ChatGPT Plus·可选通道）· 命令行收割凭证</summary>
+        <div class="dbd">
+          <p class="hint">Codex 是第五 lane（ChatGPT Plus 质量优先档：单发 ask 默认优先；额度耗尽自动冷却让位）。登录在 Codex 桌面版或 codex CLI 里完成（ChatGPT 账号），桥侧只做<b>一次性只读复制</b>凭证（不回写、不展示、不入库；除 auth.json 单文件外不读 ~/.codex 任何内容）：</p>
+          <div class="copyline"><span class="t">node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" login --identity codex</span><button class="copybtn" data-copy='node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" login --identity codex'>复制</button></div>
+          <p class="hint">收割后到「状态」页 Codex 通道卡确认已登录（模型 gpt-6.1-sol，仅放行 gpt-6 及以上——用户裁决底线护栏）。Codex 侧令牌刷新导致桥内副本失联时，重跑上面命令加 --force 重新收割即可修复。</p>
+        </div>
+      </details>
+    </div>
+  </div>
 </section>
 
 </main>
@@ -549,8 +563,8 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
 <script>
 'use strict';
 // ---------- 渲染层中文化映射表（冻结术语：只改排布/密度/编码不改译法；数据值/config 键/API 字段一律不动） ----------
-const LANE_LABEL={ai:'WorkBuddy AI',cn:'WorkBuddy',cline:'Cline',doubao:'豆包',auto:'自动'};            // 短称：下拉/表格列/回退
-const LANE_TITLE={ai:'WorkBuddy AI（国际版）',cn:'WorkBuddy（国内版）',cline:'Cline CLI（可选通道）',doubao:'豆包（桌面端）'}; // 全称：卡片标题
+const LANE_LABEL={codex:'Codex',ai:'WorkBuddy AI',cn:'WorkBuddy',cline:'Cline',doubao:'豆包',auto:'自动'};            // 短称：下拉/表格列/回退
+const LANE_TITLE={codex:'Codex CLI（ChatGPT Plus·可选通道）',ai:'WorkBuddy AI（国际版）',cn:'WorkBuddy（国内版）',cline:'Cline CLI（可选通道）',doubao:'豆包（桌面端）'}; // 全称：卡片标题
 const TYPE_LABEL={ask:'单条调用',fanout:'批量并行',unknown:'未知'};                        // 历史「类型」列（键集=UI 契约 D2 冻结集）
 const TASK_STATUS_LABEL={success:'成功',failed:'失败'};
 const JOB_STATUS_LABEL={done:'已完成',running:'进行中',pending:'等待中'};
@@ -566,6 +580,7 @@ function fallbackText(from,to){return from?(laneLabel(from)+' → '+laneLabel(to
 // 超额状态机的 UI 侧提示（与 CLI hintText 同源语义；原始错误原文保留，只追加友好提示）
 function errorHint(text){
   var t=String(text||'');
+  if(/ChatGPT Plus 额度耗尽|额度冷却/i.test(t))return '（Plus 额度冷却中 → auto 路由已自动改投免费 lane；稍后再试，余额以 ChatGPT 网页端 Settings→Usage 为准）';
   if(/Daily free model limit reached/i.test(t))return '（Cline 免费额度今日已达上限 → 稍后再试，或到「状态」页 Cline 卡换免费模型）';
   if(/Free model promotion ended/i.test(t))return '（该免费模型促销已结束/被轮换下线 → 到「状态」页 Cline 卡换当前免费模型）';
   if(/model not found|not a valid model/i.test(t))return '（模型 id 不存在或已被轮换下线 → 到「状态」页 Cline 卡换当前免费模型）';
@@ -714,6 +729,14 @@ function laneTier(l){
   if(l.key==='cline'){
     if(!l.installed)return{rank:3,cls:'absent',shape:'s-ring',label:'未安装（可选）',signal:'未安装'};
     if(!l.credential)return{rank:2,cls:'warn',shape:'s-dia',label:'未登录（OAuth）',signal:'未登录'};
+    return{rank:4,cls:'ok',shape:'s-dot',label:'已登录',signal:'已登录'};
+  }
+  // codex 分支（第五 lane·Plus 质量档）四态：未装（absent）/未登录（warn，登录=收割 auth.json）/
+  // 冷却中（warn2，额度耗尽自动让位——laneReady=false 即 auto 路由跳过）/已登录（ok）
+  if(l.key==='codex'){
+    if(!l.installed)return{rank:3,cls:'absent',shape:'s-ring',label:'未安装（可选）',signal:'未安装'};
+    if(!l.credential)return{rank:2,cls:'warn',shape:'s-dia',label:'未登录（ChatGPT）',signal:'未登录'};
+    if(l.cooldown)return{rank:2,cls:'warn2',shape:'s-dia',label:'额度冷却中',signal:'冷却 '+l.cooldown.remainingMin+'m'};
     return{rank:4,cls:'ok',shape:'s-dot',label:'已登录',signal:'已登录'};
   }
   // doubao 分支——静态读性=桥脚本可解析（win32+doubao.mjs）；桌面端进程/调试口 4 态由
@@ -890,6 +913,7 @@ function laneCardsHtml(s){
   return lanes.map(function(l){
     if(l.key==='cline')return clineCardHtml(l,s);
     if(l.key==='doubao')return doubaoCardHtml(l);   // 豆包 lane 卡渲染进 grid
+    if(l.key==='codex')return codexCardHtml(l);     // codex lane 卡（第五 lane·Plus 质量档）渲染进 grid
     return wbCardHtml(l);
   }).join('');
 }
@@ -984,6 +1008,39 @@ function doubaoCardHtml(l){
     +'<li class="hint">④ 单行道：工作模式与普通对话在会话中途不可互切（切了上下文作废）——工具只用「新工作任务」开新会话，不动你既有会话。</li>'
     +'</ul>'
     +'<p class="hint">工作模式耗额度明显快于普通对话（官方口径）。</p>'
+    +'</div></details></div></div>';
+}
+// codex 第五 lane 卡（ChatGPT Plus 质量优先档）。徽标=laneTier 四态（未装/未登录/冷却中/已登录）；
+// 冷却倒计时行来自 laneStatusInfo.cooldown；路由说明=单发默认优先·批量需点名（v21 D-036）。
+function codexCardHtml(l){
+  const t=laneTier(l);
+  const badge='<span class="badge '+t.cls+'">'+esc(t.label)+'</span>';
+  const loginCmd=WBX_PS+'" login --identity codex';
+  const askCmd=WBX_PS+'" ask --as codex "任务文本"';
+  const coolRow=l.cooldown
+    ?'<span class="k">额度冷却</span><span class="v"><span class="c-warn2">剩余约 '+esc(String(l.cooldown.remainingMin))+' 分钟（至 '+esc(String(l.cooldown.until).replace('T',' ').slice(0,19))+'）</span><span class="hint">——auto 路由/回退链跳过，显式点名放行</span></span>'
+    :'<span class="k">额度</span><span class="v"><span class="vtxt">5h 滚动窗口+周上限（余额以 ChatGPT 网页端 Settings→Usage 为准——无本地端点，诚实降级）</span></span>';
+  const binRow=l.binaryPath
+    ?'<span class="vtxt" title="'+esc(l.binaryPath)+'">'+esc(baseName(l.binaryPath))+'</span>'+copyBtn(l.binaryPath)
+    :'<span class="hint">未找到（安装 Codex 桌面版，或 config set codex-path）</span>';
+  return '<div class="card'+(l.disabled?' off':'')+'" id="lane-card-codex">'
+    +'<div class="card__hd"><span class="card__title">'+esc(laneTitle('codex'))+'</span>'+badge
+    +'<span class="card__sub">单发默认优先 · 批量需点名</span>'
+    +'<label class="pwr"><input type="checkbox" class="power" data-lane="codex"'+(l.disabled?'':' checked')+' aria-label="启用或停用 Codex" title="停用 / 启用此通道（即时写 config）"></label></div>'
+    +'<div class="card__bd"><div class="kv">'
+    +'<span class="k">成本</span><span class="v"><span class="cost neutral" title="ChatGPT Plus 会员额度（5 小时滚动窗口+每周上限）；耗尽自动冷却让位，冷却期路由跳过">ChatGPT Plus 额度</span></span>'
+    +'<span class="k">模型</span><span class="v"><span class="vtxt" title="模型经 config codex-model 管理（任务级不生效——Plus 额度保护）；底线护栏：仅放行 gpt-6 及以上主版本（用户 2026-10-14 裁决）">'+esc(l.model||'gpt-6.1-sol')+' · 推理 '+esc(l.reasoning||'medium')+'</span></span>'
+    +'<span class="k">能力档</span><span class="v"><span class="vtxt">∅(L0) 纯文本（不承载任何能力集：exec 沙箱与工具面不受桥控）</span></span>'
+    +coolRow
+    +'<span class="k">路由</span><span class="v"><span class="vtxt">单发 ask 默认优先（质量档）；fanout 批量默认免费池，任务级 as:"codex" 点名才投</span></span>'
+    +'</div>'
+    +'<div class="copyline"><span class="t">'+esc(askCmd)+'</span>'+copyBtn(askCmd)+'</div>'
+    +'<details aria-expanded="false"><summary>详情与排障</summary><div class="dbd"><div class="kv">'
+    +'<span class="k">二进制</span><span class="v">'+binRow+'</span>'
+    +'<span class="k">凭证收割</span><span class="v"><span class="vtxt" title="'+esc(loginCmd)+'">wbx login --identity codex（一次性只读复制 ~/.codex/auth.json）</span>'+copyBtn(loginCmd)+'</span>'
+    +'<span class="k">隔离</span><span class="v"><span class="vtxt">CODEX_HOME=桥隔离目录（--ephemeral --ignore-user-config 运行；除 auth.json 单文件一次性只读复制外 ~/.codex 零读取）</span></span>'
+    +'</div>'
+    +'<p class="hint">需先在 Codex 桌面版或 codex CLI 登录 ChatGPT 账号，再跑上面的凭证收割命令。Codex 侧令牌刷新导致失联（doctor 显示未登录）时，重跑收割命令 --force 即修复。长任务建议 --timeout 600（高推理档耗时更长）。</p>'
     +'</div></details></div></div>';
 }
 function clineCardHtml(l,s){
@@ -1229,7 +1286,7 @@ function renderFanRows(){
     const r=fanRows[i];
     h+='<div class="fan-row">'
       +'<input type="text" data-i="'+i+'" data-f="id" value="'+esc(r.id)+'" placeholder="任务 ID">'
-      +'<select data-i="'+i+'" data-f="lane"><option value="">自动</option><option value="ai"'+(r.lane==='ai'?' selected':'')+'>WorkBuddy AI</option><option value="cn"'+(r.lane==='cn'?' selected':'')+'>WorkBuddy</option><option value="cline"'+(r.lane==='cline'?' selected':'')+'>Cline</option><option value="doubao"'+(r.lane==='doubao'?' selected':'')+'>豆包</option></select>'
+      +'<select data-i="'+i+'" data-f="lane"><option value="">自动（免费池）</option><option value="codex"'+(r.lane==='codex'?' selected':'')+'>Codex（点名）</option><option value="ai"'+(r.lane==='ai'?' selected':'')+'>WorkBuddy AI</option><option value="cn"'+(r.lane==='cn'?' selected':'')+'>WorkBuddy</option><option value="cline"'+(r.lane==='cline'?' selected':'')+'>Cline</option><option value="doubao"'+(r.lane==='doubao'?' selected':'')+'>豆包</option></select>'
       +'<select data-i="'+i+'" data-f="caps" title="能力集（v19）：∅=L0 纯文本 / net,read=联网+只读（L1 别名，仅 WorkBuddy AI、国内版）/ 含 write 未交付"><option value=""'+(!r.caps?' selected':'')+'>L0</option><option value="net"'+(r.caps==='net'?' selected':'')+'>net</option><option value="read"'+(r.caps==='read'?' selected':'')+'>read</option><option value="net,read"'+(r.caps==='net,read'||r.caps==='L1'?' selected':'')+'>net,read</option></select>'
       +'<textarea data-i="'+i+'" data-f="prompt" style="min-height:44px" placeholder="worker 提示词">'+esc(r.prompt)+'</textarea>'
       +'<button class="fan-del" data-del="'+i+'" title="删除此任务行">×</button></div>';
@@ -1764,7 +1821,7 @@ async function handler(req, res) {
       let as = null;
       if (b.lane && b.lane !== 'auto') {
         as = parseLane(b.lane);
-        if (!as) return sendJson(res, 400, { error: `lane 取值只支持 auto|ai|cn|cline|doubao（ai=WorkBuddy AI，cn=WorkBuddy，cline=Cline，doubao=豆包桌面端；收到 ${b.lane}）` });
+        if (!as) return sendJson(res, 400, { error: `lane 取值只支持 auto|codex|ai|cn|cline|doubao（codex=Codex CLI（ChatGPT Plus），ai=WorkBuddy AI，cn=WorkBuddy，cline=Cline，doubao=豆包桌面端；收到 ${b.lane}）` });
       }
       // caps 任务契约（v19 能力矩阵）——不合法值/含 write 未交付/lane 不匹配均 400（绝不静默降档或改路）
       let caps = null; let capsNorm = null;
@@ -1775,7 +1832,7 @@ async function handler(req, res) {
         caps = cp.normalized || 'L0';
         capsNorm = cp.normalized;
       }
-      if (capsNorm && (as === 'cline' || as === 'doubao')) {
+      if (capsNorm && (as === 'cline' || as === 'doubao' || as === 'codex')) {
         return sendJson(res, 400, { error: `caps ${capsNorm} 与通道 ${as} 不匹配：能力任务仅支持 WorkBuddy AI / 国内版（ai/cn）` });
       }
       const jobId = newJobId();
@@ -1833,8 +1890,8 @@ async function handler(req, res) {
     if (req.method === 'POST' && p === '/api/login/start') {
       const b = await readBody(req);
       const lane = parseLane(b.lane);
-      // 仅 ai/cn 有 SSO 登录流（cline=CLI OAuth；doubao=客户端 GUI 自理，均不走此端点）
-      if (!lane || lane === 'cline' || lane === 'doubao') return sendJson(res, 400, { error: 'lane 只支持 ai|cn' });
+      // 仅 ai/cn 有 SSO 登录流（cline=CLI OAuth；doubao=客户端 GUI 自理；codex=一次性只读复制 auth.json，均不走此端点）
+      if (!lane || lane === 'cline' || lane === 'doubao' || lane === 'codex') return sendJson(res, 400, { error: 'lane 只支持 ai|cn（cline 走 CLI OAuth、doubao 在客户端自理、codex 跑 wbx login --identity codex 收割凭证——本端点仅承载 SSO 流）' });
       if (loginState.status === 'pending') return sendJson(res, 409, { error: `已有登录流程进行中（lane ${loginState.lane}）` });
       loginState.status = 'pending'; // 先占位防并发登录流（TOCTOU），失败回滚
       loginState.lane = lane;

@@ -1,4 +1,4 @@
-# UNINSTALL — wbx 联动桥卸载手册（四 lane + doubao 手工直通；兼容全部历史形态）
+# UNINSTALL — wbx 联动桥卸载手册（五 lane + doubao 手工直通；兼容全部历史形态）
 
 > 原则：桥有两种形态——**项目形态**（一切都在项目文件夹内，删目录即净）与
 > **全局形态**（`wbx self-install` 之后：`~/.zcode/` 四处 + `~/.wbx/` 运行时）。
@@ -19,6 +19,12 @@
 > （`wbx ui --install-autostart` 写入 `~/.zcode/cli/config.json` 的 `hooks` 键）：
 > `wbx ui --remove-autostart` 摘除并逐键还原（实测与安装前逐字节一致）。
 > `self-uninstall` 已自动先做这两步再删文件。
+> v21 说明：新增第五 lane（codex）两件运行物——① 隔离主目录 `~/.wbx/codex-home/`（auth.json
+> 凭证副本 + work/，随 `--purge` 删除或手动删；**不触碰用户 `~/.codex`**——收割是单向只读复制）；
+> ② 冷却状态文件 `~/.wbx/codex-quota.json`（无凭证，随手删）。config 里的 `codex-path/codex-model/
+> codex-reasoning/codex-parallel/codex-quota-cooldown-min` 五键随 config.json 删除。**无新安装物**
+> （codex.exe 属 Codex 桌面版自带，非本桥安装）；用户级 `~/.zcode/AGENTS.md` 标记块随 install-user/
+> self-install 刷新为五 lane 口径（卸载时 uninstall-user/self-uninstall 照旧整块移除）。
 
 ## 〇、全局形态卸载（装过 self-install 才需要）
 
@@ -40,12 +46,12 @@ node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" self-uninstall --purge  #
 | `~/.zcode/commands/wbx.md` | `/wbx` 斜杠命令 |
 | `~/.zcode/AGENTS.md` | `<!-- wbx:begin/end -->` 标记块（文件只剩它时连文件删除，其余内容保留） |
 | `~/.zcode/cli/config.json` | **仅当装过 `ui --install-autostart`**：`hooks` 键里我们追加的 SessionStart 钩子（`--remove-autostart` / `self-uninstall` 摘除；其余键从未被改写） |
-| `~/.wbx/` | 运行时：sessions/product **凭证**、config.json、jobs/ 历史、**cline-home/（可选 lane 隔离数据与 OAuth 凭证）**、cline-free-models.json（免费清单缓存，无凭证）、run/（ui.json 守护状态，含随机 token，无账号凭证）、logs/（ui.log 控制台日志）（仅 `--purge` 删；不 purge 时 run/logs 留着无害） |
+| `~/.wbx/` | 运行时：sessions/product **凭证**、config.json、jobs/ 历史、**cline-home/（可选 lane 隔离数据与 OAuth 凭证）**、**codex-home/（可选第五 lane 隔离数据：auth.json 凭证副本+work/，与 codex-quota.json 冷却态）**、cline-free-models.json（免费清单缓存，无凭证）、run/（ui.json 守护状态，含随机 token，无账号凭证）、logs/（ui.log 控制台日志）（仅 `--purge` 删；不 purge 时 run/logs 留着无害） |
 
 卸载后项目桥自动回到项目形态（运行时根变回 `<项目>/.wbx/`）。
 若全局桥已被手动删除，用下面项目桥路径运行亦可：`node "<项目>\.zcode\skills\wb-bridge\scripts\wbx.mjs" self-uninstall`。
 
-## 一、完整卸载（项目形态：桥 + 四 lane + 分派体系全删）
+## 一、完整卸载（项目形态：桥 + 五 lane + 分派体系全删）
 
 ```powershell
 # PowerShell（或资源管理器手动删）

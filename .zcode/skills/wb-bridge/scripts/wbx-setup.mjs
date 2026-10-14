@@ -124,7 +124,7 @@ export function wbxCommandText() {
   const gscript = globalBridgeScript();
   return [
     '---',
-    'description: 把任务描述经 wbx 桥分派给外部算力（四 lane：WorkBuddy 双 lane DeepSeek V4.1 Flash + 可选 Cline CLI + 可选豆包桌面端）执行并汇总',
+    'description: 把任务描述经 wbx 桥分派给外部算力（五 lane：可选 Codex CLI（ChatGPT Plus 质量优先档，单发默认优先）+ WorkBuddy 双 lane DeepSeek V4.1 Flash + 可选 Cline CLI + 可选豆包桌面端）执行并汇总',
     'argument-hint: <任务描述>',
     'skills: wb-bridge',
     '---',
@@ -150,9 +150,10 @@ export function installReadmeText() {
   const L = [
     '# wbx 桥安装说明（v' + WBX_VERSION + '）',
     '',
-    '把合适的子任务并行分派给外部算力（四 lane）：WorkBuddy 双 lane 的 DeepSeek V4.1 Flash',
-    '（国际版 x0.00 免费 / 国内版 x0.03 近免费）+ 可选 Cline CLI lane（免费额度轮换模型组）',
-    '+ 可选豆包桌面端 lane（耗会员额度；免费 lane 优先，回退链最末），',
+    '把合适的子任务并行分派给外部算力（五 lane）：可选 Codex CLI lane（ChatGPT Plus 质量优先档，',
+    '单发默认优先、额度耗尽自动冷却让位）+ WorkBuddy 双 lane 的 DeepSeek V4.1 Flash（国际版 x0.00',
+    '免费 / 国内版 x0.03 近免费）+ 可选 Cline CLI lane（免费额度轮换模型组）+ 可选豆包桌面端 lane',
+    '（耗会员额度；免费 lane 优先，回退链最末），',
     '由 ZCode 会话编排与校验。',
     '',
     '## 前提（缺一不可）',
@@ -214,7 +215,7 @@ export function installReadmeText() {
     '| ' + B + '~/.zcode/skills/wb-bridge/' + B + ' | 用户级 skill（遮蔽同名项目级 skill，内容一致） |',
     '| ' + B + '~/.zcode/commands/wbx.md' + B + ' | /wbx 斜杠命令 |',
     '| ' + B + '~/.zcode/AGENTS.md' + B + ' | ' + B + '<!-- wbx:begin/end -->' + B + ' 标记块 |',
-    '| ' + B + '~/.wbx/' + B + ' | 运行时：sessions/product 凭证、config.json、jobs/ 历史、cline-home/（可选 lane 隔离主目录） |',
+    '| ' + B + '~/.wbx/' + B + ' | 运行时：sessions/product 凭证、config.json、jobs/ 历史、cline-home/（可选 lane 隔离主目录）、codex-home/（可选第五 lane 隔离：auth.json 副本+work/） |',
     '',
     '绝不写 ' + B + '~/.workbuddy' + B + '、' + B + '~/.workbuddy-ai' + B + '、' + B + '~/.cline' + B + '（用户自己的 Cline 状态）、桌面版安装目录、系统环境变量。',
     '',

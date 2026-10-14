@@ -30,8 +30,16 @@
   {
     "id": "code-with-files-field",
     "effort": "medium",
-    "files": ["lib/slugify.js", "types.ts"],
+    "files": [
+      "lib/slugify.js",
+      "types.ts"
+    ],
     "prompt": "你是一名 Node.js (CommonJS) 资深工程师。任务：实现 lib/format-bytes.js 这一个文件。\n你没有任何工具，不能联网、不能读写文件、不能执行代码，仅凭下面的契约与材料作答。\n\n【接口契约】\n- 导出：module.exports = function formatBytes(n) ，输入 number，输出 string（如 1536 -> \"1.5 KB\"）\n- 非法输入（负数、NaN、非数字）返回 null\n\n【输出要求】\n- 只输出一份完整代码，包在 ```js 围栏中，无解释前后缀；风格与【输入材料·文件】中的样例一致\n- 未覆盖细节用 // TODO(原因) 标注，绝不编造\n（v4 说明：本任务演示 files 字段——桥会把 lib/slugify.js 与 types.ts 内容按段落拼进本提示词的【输入材料·文件】区，相对路径基于 tasks.json 所在目录）"
+  },
+  {
+    "id": "review-named-codex",
+    "as": "codex",
+    "prompt": "你是一名 Node.js 资深评审工程师。任务：审查下面这一段代码，只输出问题清单。\n你没有任何工具，不能联网、不能读写文件，仅凭下面的材料作答。\n\n【输入材料】\nfunction add(a, b) { return a + b }\n\n【输出要求】\n- 只输出问题清单（无问题输出 NO_ISSUES），每条：位置 → 问题 → 严重度[阻断|建议] → 最小修复\n- 语言：中文；收尾不要总结、不要客套\n（v21 说明：本任务演示 as=codex 点名第五 lane（ChatGPT Plus 质量档）——单发 ask 缺省即 codex 优先，fanout 批量缺省免费池、点名才投 codex；模型恒取 config codex-model（≥GPT-6 护栏），长任务建议 --timeout 600）"
   },
   {
     "id": "variant-cline-lane",

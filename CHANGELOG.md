@@ -2,6 +2,34 @@
 
 本文件记录 zcode-wbx-bridge 的版本变更，格式参考 Keep a Changelog。
 
+## 6.10.0 - 2026-10-14
+
+新增（v21 Codex 第五 lane 轮：Codex CLI 接入为**第五 lane（ChatGPT Plus 质量优先档）**，达成「单发默认优先、批量默认免费、额度耗尽自动冷却让位」路由三分。授权=用户 2026-10-14 立项原话（「Codex 的编码能力肯定要比你好……先优先调用 Codex」「额度用完了，我们就不用它去做桥接了」「不要用 GPT 5.6 及以下的模型」「前端 UI 也记得要改」）+ 三问对齐裁决（路由=单发优先+批量免费+任务级点名；凭证=一次性只读复制 `~/.codex/auth.json` 入桥隔离目录；默认模型=gpt-6.1-sol+≥GPT-6 底线护栏）。执行提示词 GOAL-V21-PROMPT，调研底稿 RESEARCH-V21，探针留档 `internal/archive/v21/v21p1-p0~p3` + T8/T7 评审记录）
+
+### Added
+- **codex lane 运行时（wbx-core）**：`resolveCodexPath()`（WBX_CODEX env → config codex-path → `%LOCALAPPDATA%/OpenAI/Codex/bin/*/codex.exe` 按 **exe 自身存在+mtime 最新**解析——探针 P0 实证存在无 codex.exe 的 hash 目录，不得按目录 mtime）；`codexSpawnEnv()`（CODEX_HOME=<运行时根>/codex-home 隔离，绝不指向 ~/.codex）；`validateCodexModel()` 单点护栏（^gpt-(\d+) 且主版本 ≥6，否则 `codex-model-floor`——config set 与 askOnceCodex 读取同源，loadConfig 容错把非法存量值归一回 gpt-6.1-sol）；`parseCodexJsonl()` 纯函数（正文=item.completed(item.type=agent_message).text、usage 只取 input_tokens/output_tokens——**实测流无 total_tokens**（探针 P2 勘误二手来源）、turn.failed/error 首个命中）；`askOnceCodex()`（spawn 形状 `exec --ephemeral --ignore-user-config --skip-git-repo-check --color never -s read-only -m <config codex-model> -c model_reasoning_effort=<档> --json -o <tmp>`，>STDIN_THRESHOLD 走 stdin `-`；**收割绝不信任退出码**——-o 文件为权威正文+事件流判失败（turn.failed/error/无 turn.completed 且无 -o 正文）；JSONL 全文随 rawStream 落盘 `ask.codex-stream.jsonl`/`<task>.codex-stream.jsonl`（流文件名按产出 lane 泛化，cline 字节兼容）；模型恒取 config（任务级 model 不生效——Plus 额度保护），任务级 effort low/medium/high 直通推理档；caps 仅 ∅（非空集报 caps-lane-mismatch，五处枚举：askOnce 分流/直调/runAskJob/runFanoutJob/UI 400）。
+- **额度冷却状态机（D-039）**：`markCodexQuota()`（检测 `/you('|’)ve hit your usage limit|usage limit (has been )?reached|rate limit|429/i`，扫 stdout+stderr+JSONL error 三处；`try again at <时间>` 可解析且未来则用作截止，否则 now+codex-quota-cooldown-min 分钟）→ `<runtime>/codex-quota.json`；`codexQuotaState()`（缺失/损坏/过期=inactive，过期文件 best-effort 清理）；`codexReady()`（二进制+auth.json+!冷却）——冷却期 laneReady=false，auto 路由/回退链/fanout 缺省池**自动让位**；显式 `--as codex`/`"as":"codex"` 照放行（runAskJob/runTask 打 `[WARN] 额度冷却中（剩余约 Xm）`）。
+- **路由三分（D-036）**：`LANE_ORDER=['codex','ai','cn','cline','doubao']`（codex 首位=单发 ask auto「codex ready 即默认」）；新常量 `FANOUT_DEFAULT_POOL=['ai','cn','cline','doubao']`（fanout 缺省池过滤此池，**调度池=缺省池∪任务级点名 lane**——`as:"codex"` 点名才并入，Plus 额度不进批量缺省池）；`FALLBACK_ORDER=['cn','ai','cline','codex','doubao']`（fb(codex)='cn' 免费优先；免费三 lane 失败不自动烧 Plus 额度，codex 只被前三全不可用时到达且先于 doubao）。config 五键：codex-path/codex-model（默认 gpt-6.1-sol）/codex-reasoning（默认 medium；xhigh 仅 config 可设）/codex-parallel（默认 1，Plus 单账号保护）/codex-quota-cooldown-min（默认 30）。
+- **凭证收割（D-037）**：`wbx login --identity codex` 一次性只读复制 `~/.codex/auth.json` → codex-home（mkdir+copy+校验；源不存在→指引先登录桌面版/CLI；已收割幂等提示、--force 重收割）——「不动桌面版文件」红线的**唯一显式授权例外**（单文件、只读、一次；除它外 ~/.codex 零读取零写入；凭证内容绝不展示/入日志/入库）。
+- **doctor 第 9 段（免额度探测，D-002 同类）**：二进制+版本、隔离 CODEX_HOME `codex login status`（**实测输出在 stderr**——判定扫双流）、模型与冷却状态；**绝不做 tiny-ask**（Plus 5h 滚动窗口额度保护）。余额 state='na'+hint「Plus 额度以 ChatGPT 网页端 Settings→Usage 为准」（无本地端点，诚实降级）。`wbx models` codex 守卫（模型经 config 管理，不做逐个探测——同样耗额度）。
+- **v21-regression（新增第十一套件，55 断言）**：路由三分常量逐字锁（LANE_ORDER/FALLBACK_ORDER/FANOUT_DEFAULT_POOL+池⊂序）；fallbackLane 期望（fb(codex)='cn'/前三禁用 fb(ai)='codex' 先于 doubao/fb(doubao)=null/冷却让位）；fanout 调度池功能（沙箱 fake bin：无 as 批量不含 codex、as:codex 并入且独占 worker、--lanes codex 直投+**运行时 spawn argv 证据**——fake bin=node.exe 副本+work 目录无扩展名 `exec` 主脚本承接，Node ≥18 禁无 shell spawn .cmd）；caps×codex 五处；validateCodexModel 15 例拒/放矩阵+config set 同源+loadConfig 归一；额度状态机六态（写入/落位/让位/try-again-at/过期恢复/未命中不触发）+显式放行 WARN 源级；askOnceCodex 源级八锁（旗标/形状逐字/-m 恒 config/退出码零引用/stdin 分流/-o 即删）；login 复制流黑盒六断言（落位一致/源未改/非 auth.json 不读/幂等/缺源指引）。
+- **PROMPTS.md v4.1 → v4.2**：速查表口径「三 lane 几乎免费」→「免费三 lane+付费两 lane（Plus 额度/会员额度）」；新增「GPT-6.1-Sol（codex lane）」模型画像章（定位/写法要点/反模式/effort 映射 low-med-high/lane 特殊性：仅 ∅ L0、单发默认优先+批量点名、额度冷却语义、长任务 --timeout 600 建议、模型经 config 管理任务级不生效）。
+- **UI（内容级，UI-SPEC contract v1.5.0，§5.5 三处同步）**：`codexCardHtml()` 通道卡进 grid（四态徽标 未装/未登录/冷却中/已登录、冷却倒计时行、成本行「ChatGPT Plus 额度」（复用 .neutral 视觉档）、路由说明「单发默认优先·批量需点名」、凭证收割/隔离排障详情）；LANE_LABEL/LANE_TITLE +codex（FROZEN_TERMS 增补 'Codex CLI（ChatGPT Plus·可选通道）' 纯新增三处同步）；路由卡 +「固定 Codex」+自动文案+回退链五元；ask 分段器/fanout 下拉（标注「点名」）+Codex；登录页 Codex 收割说明卡（×4）；/api/ask 枚举与 caps 400、/api/login/start 硬拒、errorHint +额度冷却提示。**token 键集与值零改动（tokens-sha 不变 6e0415da13）**。
+
+### Fixed
+- **T7 评审批判（job 20261014-121904-qoq）1 阻断+3 建议+1 UNKNOWN**：阻断（-o 读成功但空串不回退 parsed.text——改「非空白才算权威正文，空串回退流正文」）与建议#5（spawn catch hint 语义 not-installed→spawn-failed）采纳修复；建议#2（timeout 补 hint）/#3（codexReady 加 floor 校验）驳回有因（兄弟 lane 同形返回无 hint；loadConfig 容错已单点归一非法模型值，冗余防线）；UNKNOWN（parseCapsSet 返回形态）解答为数组无问题。评审记录 internal/archive/v21/v21p1-t7-review.md。
+- **T8 双份择优（job 20261014-115825-xco）**：A 份（可读性侧重）为基底，并入 B 份三处（额度检测先于超时判定+理由、失败 hint 区分 incomplete-stream、reason 整行提取）；两份 spawn 形状/收割不变量互证一致。评审记录 internal/archive/v21/v21p1-t8-review.md。
+
+### Changed
+- WBX_VERSION → 6.10.0；HELP/文件头五 lane 化（lane 行/默认路由三分/回退链/--as 枚举/config 清单/tasks.json 格式/WBX_CODEX env）；hintText +codex-quota/codex-model-floor；userBlockText 五 lane 版（~/.zcode/AGENTS.md 标记块随 install-user 刷新）；ensureDirs +codex-home/work；doctor route/caps 文案五 lane 口径；usage 说明 codex 无端点。
+- 门禁同步：v14 ③d（4→5 lane）；v13 ①c/①g/②期望值/⑥a-⑥f 文案正则/⑧c 五元渲染+沙箱 codex 读性伪造；v19 ③a/③b 矩阵 +codex（caps-lane-mismatch 拒绝侧）；v6 ④ 实测不撞（fb(cline)='cn' 保持）。
+
+### 验证
+- 探针四连（internal/archive/v21/v21p1-*，可复跑）：P0 二进制/旗标/login status 三态（空 home=Not logged in exit 1）；P1 伪造 auth.json 复制流；P2 **真实 tiny exec**（授权消耗：exit=0、-o=OK、JSONL 4 事件实测 schema、--ephemeral 无 sessions 残留、read-only 零 scratch 写入、隔离 home 副作用全困桥目录；**usage 无 total_tokens 勘误**）；P3 护栏矩阵 15/15。
+- 真实 smoke（授权消耗）：`--as codex` tiny ask 成功（lane=codex、usage in/out=16261/5、codex-stream.jsonl 落盘）；`config set codex-model gpt-5.6-sol` 报 codex-model-floor；`--caps L1 --as codex` 报 caps-lane-mismatch；resolveDefaultLane auto=codex；真实 2 任务 fanout（缺省池 ai,cn,cline,doubao+点名 codex 并入；named 任务独占 codex worker 13.9s 成功、free 任务走 ai）。
+- 门禁终态：**v21 55 + v6 35 + v7 50 + v8 22 + v11.3 38 + v13 52 + v19 76 + ui-contract 24 + 红测通过 + tokens-sha 108=6e0415da13（不变）+ v14-consistency 27——十套件+第十一套件全绿**。
+- 凭证红线：auth.json 复制为唯一显式授权例外（单文件/只读/一次/gitignore 运行时）；探针/门禁全走沙箱 fake（零真实额度消耗，仅 P2 与 smoke 两次授权真实调用）。
+
 ## 6.9.0 - 2026-10-12
 
 重构+新增（v19 caps 能力矩阵轮：caps 从三档枚举还原为**能力集合**（L0/L1 降格为别名）+ write/readDirs 探针 STOP 缓期 + 超时根因修复。授权=用户 2026-10-12 立项原话（「每一个项目窗口在调用 WBX 桥的时候，能不能让这个窗口自行选择这些功能？……是否可以联网、是否可以读取本地文件、是否可以写入等等」）+ 四项对齐裁决（沙箱写+主力集成 / 本轮不交付命令执行 / 播种制+按任务附加只读目录 / 授权解冻 FROZEN 二.8 升级能力矩阵治理）+ 三原则重申。**探针终局（STOP 分支）**：P1 写工具实名 `Write` 确认；P2 acceptEdits 档 headless 可自动放行写；P3 越界写**逃逸**（acceptEdits 放行范围为全局 edit 类而非 cwd 限定——沙箱写安全前提破裂）；P4 `--add-dir` 在 headless 不授权读+disallowedTools 路径围栏对 Write 双形态写穿（信任边界不可证）→ **write 与 readDirs 本轮不交付**（总闸未设未置、冒烟未跑、沙箱写管道/artifacts 无死代码），能力集契约/超时根因修复/观测面按计划交付。执行提示词 GOAL-V19-PROMPT，调研底稿 RESEARCH-V19（探针裁决与勘误已回填），探针脚本与输出 `internal/archive/v19/v19p0-p1~p5` 可复跑）
