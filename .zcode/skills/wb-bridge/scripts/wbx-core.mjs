@@ -21,7 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '6.12.0';
+export const WBX_VERSION = '6.13.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -427,6 +427,104 @@ export function markCodexQuota(text, { now = Date.now(), re = CODEX_QUOTA_RE } =
 // 显式 --as codex / 任务级 as:"codex" 照放行（调用侧打 WARN）。
 export function codexReady() {
   return !!resolveCodexPath() && fs.existsSync(path.join(CODEX_HOME, 'auth.json')) && !codexQuotaState().active;
+}
+
+// ---------- cn lane 夜间免费档（v24）：纯时钟函数非状态机 ----------
+// 上游口径（官方公告转述，以官方为准）：腾讯混元 Hy4 preview 每日 23:00–次日 08:00 免费（北京时间），
+// 现行活动截止 2026-10-31。设计定案（RESEARCH-V24 §三 D-2）：时钟函数非状态机——判定单点、每次投递
+// 现算（不缓存窗口判定，防「07:59 判定 08:05 才发」）、展示层（doctor/stderr/UI）只消费单对象不自算；
+// 与 codex 事件驱动冷却（codexQuotaState）互补：无扫描、无状态落盘。
+const NIGHT_TZ = 'Asia/Shanghai';   // 窗口=北京时间为上游口径（中国无 DST；ECMA-402 内置时区，判定不随宿主漂移）
+const NIGHT_TZ_FMT = new Intl.DateTimeFormat('en-CA', {
+  timeZone: NIGHT_TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+});
+const NIGHT_WINDOW_RE = /^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$/;
+const NIGHT_EXPIRES_RE = /^\d{4}-\d{2}-\d{2}$/;
+const NIGHT_EFFORT_VALUES = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];   // CodeBuddy --effort 全档（2.156.0 --help 实测）
+const NIGHT_CONTEXT_RE = /^(auto|\d+[km]?)$/i;   // --autocompact 取值：auto|<数字>[km]（CLI 侧钳制 100k-1M）
+
+// 夜间窗 'HH:MM-HH:MM' 解析单点（loadConfig 容错与 nightWindowState 同源；支持跨午夜；start==end 视为非法）
+function parseNightWindow(s) {
+  const m = NIGHT_WINDOW_RE.exec(String(s || '').trim());
+  if (!m) return null;
+  const hh = (v) => { const n = Number(v); return Number.isInteger(n) && n >= 0 && n <= 23 ? n : null; };
+  const mm = (v) => { const n = Number(v); return Number.isInteger(n) && n >= 0 && n <= 59 ? n : null; };
+  const h1 = hh(m[1]), m1 = mm(m[2]), h2 = hh(m[3]), m2 = mm(m[4]);
+  if (h1 == null || m1 == null || h2 == null || m2 == null) return null;
+  const startMin = h1 * 60 + m1, endMin = h2 * 60 + m2;
+  return startMin === endMin ? null : { startMin, endMin };
+}
+
+// 北京时间墙上分解（formatToParts：与宿主时区无关——RD2 假时钟断言承重点）
+function bjParts_(d) {
+  const parts = {};
+  for (const p of NIGHT_TZ_FMT.formatToParts(d)) parts[p.type] = p.value;
+  return { y: +parts.year, mo: +parts.month, d: +parts.day, hh: (+parts.hour) % 24, mm: +parts.minute };
+}
+// 北京墙上时刻 -> UTC ms（北京=UTC+8 恒定无 DST；越界边界由「不早于 now 顺延一天」规则兜住）
+function bjWallMs_(y, mo, d, totalMin) { return Date.UTC(y, mo - 1, d, Math.floor(totalMin / 60), totalMin % 60) - 8 * 3600000; }
+
+/**
+ * 夜间免费窗判定单点（纯函数；now 缺省=当前时刻，单测注入假时钟）。返回单对象：
+ *   { inWindow, active, expired, window, expires, model, nextSwitchAt, remainingMin }
+ * inWindow=北京时刻落在 [start,end) 半开区间（跨午夜翻转）；expired=北京日期已过 night-expires
+ * （截止日全天仍有效；空串=无截止）；active=inWindow && !expired；nextSwitchAt=下次边界 ISO；
+ * remainingMin=距下次边界分钟数。配置解析失败（loadConfig 已容错，理论不可达）一律 inactive 诚实降级。
+ */
+export function nightWindowState(now = new Date()) {
+  const cfg = loadConfig();
+  const expiresRaw = String(cfg['night-expires'] ?? '').trim();
+  const expires = NIGHT_EXPIRES_RE.test(expiresRaw) ? expiresRaw : null;
+  const win = parseNightWindow(cfg['night-window']);
+  if (!win) {
+    return { inWindow: false, active: false, expired: false, window: String(cfg['night-window'] || ''), expires, model: cfg['night-model'], nextSwitchAt: null, remainingMin: null };
+  }
+  const bj = bjParts_(now);
+  const curMin = bj.hh * 60 + bj.mm;
+  const cross = win.startMin > win.endMin;
+  const inWindow = cross ? (curMin >= win.startMin || curMin < win.endMin) : (curMin >= win.startMin && curMin < win.endMin);
+  const expired = !!expires && (bj.y * 10000 + bj.mo * 100 + bj.d) > Number(expires.replace(/-/g, ''));
+  // 下次边界：窗内→end、窗外→start（跨午夜窗内取「今晨已过则明晨」、窗外取「今晚已过则明晚」，统一顺延一天）
+  const edgeMin = inWindow ? win.endMin : win.startMin;
+  let edgeMs = bjWallMs_(bj.y, bj.mo, bj.d, edgeMin);
+  if (edgeMs <= now.getTime()) edgeMs += 86400000;
+  return {
+    inWindow, active: inWindow && !expired, expired,
+    window: cfg['night-window'], expires, model: cfg['night-model'],
+    nextSwitchAt: new Date(edgeMs).toISOString(),
+    remainingMin: Math.max(0, Math.ceil((edgeMs - now.getTime()) / 60000)),
+  };
+}
+
+/**
+ * ai/cn 唯一模型策略出口（D-2/D-3）：白天/夜间「模型+思考+上下文预算」收敛为纯函数单点，
+ * resolveModel 的取值链并入（白天链=任务级>WBX_MODEL env>config model>常量）。
+ * 优先级按维度独立（D-2/D-8 兼容锁）：model/effort=任务级显式 > env > 窗口内夜间档 > 白天档；
+ * context 无任务级/env 键，只随窗（夜=night-context、昼=config context）。
+ * 下发矩阵（D-3，lane 能力，约束「不显式时」的缺省）：effort=cn 夜间 night-effort/白天 config effort、
+ * ai 恒 null（国际版思考不可调——用户口径 UNKNOWN 不猜测）；context=cn 双档、ai config context。
+ * 任务级显式 effort 在 ai 仍原样直通（v6.12 兼容行为，FROZEN 二.6）。
+ * cline/doubao/codex 不经此（各走既有单点），返回 null。
+ */
+export function resolveModelPolicy(lane, { model = null, effort = null } = {}, now = new Date()) {
+  if (lane !== 'ai' && lane !== 'cn') return null;
+  const cfg = loadConfig();
+  const win = nightWindowState(now);
+  const night = lane === 'cn' && win.active;   // 夜间档仅 cn（用户裁决：ai lane 不做夜间档——国际版无「夜间窗」活动口径，RESEARCH-V24 §2.4 t4）
+  return {
+    model: model || process.env.WBX_MODEL || (night ? cfg['night-model'] : null) || cfg.model || FALLBACK_MODEL,
+    effort: effort || (night ? cfg['night-effort'] : (lane === 'cn' ? cfg.effort : null)),
+    context: night ? cfg['night-context'] : cfg.context,
+    window: win,
+  };
+}
+
+// 夜间档 stderr 一行（D-5 ②）：消费 nightWindowState 单对象格式化，绝不自行重算时间逻辑
+export function nightWindowLine(w = nightWindowState()) {
+  const base = `cn 夜间免费档（官方活动口径${w.expires ? `至 ${w.expires}` : '、无截止日期'}，以官方为准）`;
+  if (w.expired) return `[NIGHT] ${base}：已过期（${w.expires} 已过，恒白天档；如官方延期：wbx config set night-expires <日期>）`;
+  if (w.active) return `[NIGHT] ${base}：生效中（${w.window} · ${w.model} · 距窗尾约 ${w.remainingMin}m）`;
+  return `[NIGHT] ${base}：窗外（白天档；免费窗 ${w.window}，约 ${w.remainingMin}m 后开窗）`;
 }
 
 // ---------- cline 免费模型清单（recommended-models 端点） ----------
@@ -868,10 +966,40 @@ export const CONFIG_DEFS = {
     type: 'int', min: 1, max: 720, default: 30,
     desc: 'Plus 额度耗尽后的冷却分钟数（检测到 usage limit 即写 codex-quota.json 冷却让位；冷却期 auto 路由跳过 codex，显式点名放行）',
   },
+  // v24 夜间免费档七键（ai/cn 模型策略 D-1；下发矩阵见 resolveModelPolicy——ai 恒不下发 effort）
+  'effort': {
+    type: 'enum', values: NIGHT_EFFORT_VALUES, default: 'max',
+    desc: 'cn lane 白天思考档（CodeBuddy --effort 直通；DeepSeek 极致=max。ai lane 恒不下发 effort——国际版思考不可调，用户口径；任务级显式 --effort 仍最高优先）',
+  },
+  'context': {
+    type: 'string', default: '1m',
+    desc: 'ai/cn 白天上下文预算（CodeBuddy --autocompact：auto|<数字>[km]，CLI 钳制 100k-1M；DeepSeek V4.1 Flash 上下文 1M）',
+  },
+  'night-model': {
+    type: 'string', default: 'hy4-preview',
+    desc: 'cn 夜间免费档模型 id（官方 models.json 片段一手+P0 探针实证 2026-10-18；仅夜间窗内替代 config model，任务级显式 --model 恒最高优先）',
+  },
+  'night-effort': {
+    type: 'enum', values: NIGHT_EFFORT_VALUES, default: 'high',
+    desc: 'cn 夜间档思考档（Hy4 API 仅 high/none、默认 high；任务级显式 --effort 恒最高优先）',
+  },
+  'night-context': {
+    type: 'string', default: '960k',
+    desc: 'cn 夜间档上下文预算（Hy4 1M 上下文=最大输入 960K+最大输出 64K；格式同 --autocompact）',
+  },
+  'night-window': {
+    type: 'string', default: '23:00-08:00',
+    desc: 'cn 夜间免费窗 HH:MM-HH:MM（北京时间，半开区间 [start,end)，支持跨午夜；解析失败容错回默认。纯时钟判定：每次投递现算，不缓存）',
+  },
+  'night-expires': {
+    type: 'string', default: '2026-10-31',
+    desc: '夜间免费活动截止 YYYY-MM-DD（北京日期，截止日全天仍有效；空串=无截止；过期恒白天档，doctor/WARN 提示。官方公告转述，以官方为准）',
+  },
 };
 
-// 每次直读（~1KB JSON，成本可忽略）：mtime 失效键在 OS 时钟粒度下无法区分同一 tick 的连续写
-//（v23 实测：进程内 setConfig 后同 tick 读会命中陈旧缓存，门禁亦非确定红）——缓存本身就是缺陷，移除即根因
+// loadConfig 不缓存（D-048）：每次直读（~1KB JSON，成本可忽略）——mtime 失效键在 OS 时钟粒度下无法
+// 区分同一 tick 的连续写（v23 实测：进程内 setConfig 后同 tick 读会命中陈旧缓存，门禁亦非确定红）——
+// 缓存本身就是缺陷，移除即根因
 export function loadConfig() {
   let raw = {};
   try { raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch { /* 无配置文件 */ }
@@ -928,6 +1056,17 @@ export function loadConfig() {
   if (!Number.isInteger(out['codex-parallel']) || out['codex-parallel'] < 1 || out['codex-parallel'] > 8) out['codex-parallel'] = 1;
   if (!Number.isInteger(out['codex-quota-cooldown-min']) || out['codex-quota-cooldown-min'] < 1 || out['codex-quota-cooldown-min'] > 720) {
     out['codex-quota-cooldown-min'] = 30;
+  }
+  // v24 夜间档七键：类型/格式容错一律回缺省（config set 时已校验，这里兜住存量坏值——既有行为不回归）
+  if (!NIGHT_EFFORT_VALUES.includes(out.effort)) out.effort = 'max';
+  if (typeof out.context !== 'string' || !NIGHT_CONTEXT_RE.test(out.context)) out.context = '1m';
+  if (typeof out['night-model'] !== 'string' || !out['night-model'].trim()) out['night-model'] = CONFIG_DEFS['night-model'].default;
+  if (!NIGHT_EFFORT_VALUES.includes(out['night-effort'])) out['night-effort'] = 'high';
+  if (typeof out['night-context'] !== 'string' || !NIGHT_CONTEXT_RE.test(out['night-context'])) out['night-context'] = '960k';
+  if (!parseNightWindow(out['night-window'])) out['night-window'] = '23:00-08:00';
+  {
+    const ne = String(out['night-expires'] ?? '').trim();
+    if (ne !== '' && !NIGHT_EXPIRES_RE.test(ne)) out['night-expires'] = '2026-10-31';
   }
   return { ...out };
 }
@@ -1455,8 +1594,10 @@ function normalizeResult(j) {
  * 不生效（工具自管理豆包 2.1 Pro + 推理高）。
  * v21：lane=codex 走 askOnceCodex（Codex CLI exec 非交互）；任务级 model 不生效（恒取 config
  * codex-model——Plus 额度保护），任务级 effort low/medium/high 直通映射推理档。
+ * v24：context（上下文预算）由调度层经 resolveModelPolicy 解析后传入（--autocompact 条件拼装；
+ * 任务级无此键，config effort/context/night-* 缺省全在策略单点，本函数只忠实下发）。
  */
-export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000, caps = 'L0', scratchDir = null, maxTurns = null }) {
+export async function askOnce({ lane, prompt, model, effort, context = null, timeoutMs = 300000, caps = 'L0', scratchDir = null, maxTurns = null }) {
   if (lane === 'cline') return askOnceCline({ prompt, model, timeoutMs, caps });
   if (lane === 'doubao') return askOnceDoubao({ prompt, model, timeoutMs, caps });   // 分流在 caps 校验之前（对齐 cline 先例），caps 契约由 askOnceDoubao 内部执行
   if (lane === 'codex') return askOnceCodex({ prompt, effort, timeoutMs, caps });    // 分流在 caps 校验之前（对齐 cline/doubao 先例），caps 契约由 askOnceCodex 内部执行
@@ -1482,6 +1623,7 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000,
     ...capsArgs,
   ];
   if (effort) args.push('--effort', effort);
+  if (context) args.push('--autocompact', context);   // v24：上下文预算（策略单点解析；stdin 路径同参共用本数组）
 
   // 非 ∅ 能力集工作目录 = 空 scratch（读边界：cwd 外绝对路径读取被审批拒绝（v10 P2c+P4））；
   // ∅（L0）同样用专用空目录——spawnBin 缺省 cwd=RUNTIME_ROOT（sessions/product 凭证所在），
@@ -2154,10 +2296,10 @@ export function buildSummaryMd({ type, tasks, results, totalMs, laneKeys, lanePa
   }
   lines.push(`- 结果：成功 ${okCount} / 失败 ${tasks.length - okCount}（成功率 ${(okCount / tasks.length * 100).toFixed(0)}%）`);
   lines.push(`- 总耗时：${fmtMs(totalMs)}`, '');
-  lines.push('| id | lane | caps | 状态 | 耗时 | 尝试 | 模型 |', '|---|---|---|---|---|---|---|');
+  lines.push('| id | lane | caps | 状态 | 耗时 | 尝试 | 模型 | 思考 | 上下文 |', '|---|---|---|---|---|---|---|---|---|');
   for (const r of results) {
     const lane = r.fallbackFrom ? `${r.fallbackFrom}→${r.lane}` : r.lane;
-    lines.push(`| ${r.id} | ${lane} | ${r.caps || 'L0'} | ${r.status === 'success' ? '✅' : '❌'} ${r.status} | ${fmtMs(r.durationMs)} | ${r.attempts} | ${r.model} |`);
+    lines.push(`| ${r.id} | ${lane} | ${r.caps || 'L0'} | ${r.status === 'success' ? '✅' : '❌'} ${r.status} | ${fmtMs(r.durationMs)} | ${r.attempts} | ${r.model} | ${r.effort || '—'} | ${r.context || '—'} |`);
   }
   const failed = results.filter((r) => r.status !== 'success');
   if (failed.length) {
@@ -2243,7 +2385,7 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
   // 持久化边界单点（v23 包 A）：ephemeral=真实执行零调度留痕——job=null 让下游全部落盘点自然跳过
   //（不建 job 目录/manifest/任务记录/summary/attempt dump；回退/重试/超时/caps 逻辑原样复用，
   // 绝不另起平行执行路径）。L1 任务仍需 scratch 工作目录（读边界机制前提），以 eph- 前缀命名。
-  const job = ephemeral ? null : await createJob('ask', { promptPreview: brief(prompt, 120), as: as || 'auto', model: resolveModel(model), effort, timeoutS: effTimeoutS, ...(capsSet.length ? { caps: capsNorm } : {}) }, { lanes: chain, tasksInput: [{ id: 'ask', prompt, ...(capsSet.length ? { caps: capsNorm } : {}), ...(mt != null ? { maxTurns: mt } : {}) }], jobId });
+  const job = ephemeral ? null : await createJob('ask', { promptPreview: brief(prompt, 120), as: as || 'auto', model: resolveModel(model), effort, timeoutS: effTimeoutS, ...(capsSet.length ? { caps: capsNorm } : {}), ...(['ai', 'cn'].includes(primary) ? { policy: ((p) => ({ model: p.model, effort: p.effort || null, context: p.context || null, windowActive: !!p.window.active }))(resolveModelPolicy(primary, { model, effort })) } : {}) }, { lanes: chain, tasksInput: [{ id: 'ask', prompt, ...(capsSet.length ? { caps: capsNorm } : {}), ...(mt != null ? { maxTurns: mt } : {}) }], jobId });
   const capsScratch = capsSet.length ? ensureScratch(job ? 'job-' + job.id : 'eph-ask-' + stamp()) : null;
 
   // 显式点名 codex 且额度冷却中：放行但打 WARN（auto 路由不会解析到冷却中的 codex——laneReady=false）
@@ -2251,14 +2393,24 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
     const qs = codexQuotaState();
     if (qs.active) console.error(`[WARN] codex 额度冷却中（剩余约 ${qs.remainingMin}m，${qs.reason || 'usage limit'}）——显式点名放行，失败将按回退链改投`);
   }
+  // 夜间免费档 stderr 一行（D-5 ②）：链含 cn 才相关；消费 nightWindowState 单对象，每次投递现算
+  if (chain.includes('cn')) console.error(nightWindowLine());
 
   const jobT0 = Date.now();
   let usedLane = null, res = null, resLane = null, attempts = 0, clineHeal = null;
   let attemptSeq = 0;   // 全局尝试序号：跨回退 lane 连续（attempt 落盘编号与 rec.attempts 同源）
+  let lastPolicy = null;   // 最近一次投递的策略解析（ai/cn 才有值；成功 attempt 即实际下发面）
   for (const lane of chain) {
     const run = await runAttempts({
       lane,
-      call: (m) => askOnce({ lane, prompt, model: m, effort, timeoutMs: effTimeoutS * 1000, caps: capsNorm || 'L0', scratchDir: capsScratch, maxTurns: mt }),
+      call: (m) => {
+        // 回退链换 lane 按新 lane 重解析（D-4）；每次投递现算，不缓存窗口判定（W2 反模式）。
+        // 非 ai/cn（cline/doubao/codex）策略返回 null——走既有单点原样透传，绝不改道。
+        const pol = resolveModelPolicy(lane, { model: m, effort }, new Date());
+        if (!pol) return askOnce({ lane, prompt, model: m, effort, timeoutMs: effTimeoutS * 1000, caps: capsNorm || 'L0', scratchDir: capsScratch, maxTurns: mt });
+        lastPolicy = pol;
+        return askOnce({ lane, prompt, model: pol.model, effort: pol.effort, context: pol.context, timeoutMs: effTimeoutS * 1000, caps: capsNorm || 'L0', scratchDir: capsScratch, maxTurns: mt });
+      },
       dump: job ? (r) => dumpFailedAttempt(job.dir, 'ask', ++attemptSeq, r) : async () => {},
       say: (msg) => console.error(msg),
       usedModel: model,
@@ -2272,16 +2424,22 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
     if (lane !== primary) break;
     if (fb) console.error(`[WARN] lane ${lane} 失败（kind=${res.kind}），自动改投 lane ${fb}…`);
   }
+  // 策略快照（D-5 ④）：实际下发面 model/effort/context + 窗口态（ai/cn 专属；其余 lane 走既有单点）
+  const recPolicy = lastPolicy ? { model: lastPolicy.model, effort: lastPolicy.effort || null, context: lastPolicy.context || null, windowActive: !!lastPolicy.window.active } : null;
   const rec = {
     id: 'ask',
     lane: res?.ok ? usedLane : primary,
     status: res?.ok ? 'success' : 'failed',
     attempts,
     durationMs: res?.durationMs ?? 0,
-    model: res?.ok ? res.model : resolveModel(model),
-    effort: effort || null,
+    model: res?.ok ? res.model : (lastPolicy?.model ?? resolveModel(model)),
+    effort: lastPolicy ? (lastPolicy.effort || null) : (effort || null),   // 实际下发面（策略 lane）；其余 lane 保持任务级语义
     caps: capsNorm || 'L0',
   };
+  if (recPolicy) {
+    rec.policy = recPolicy;
+    if (recPolicy.context) rec.context = recPolicy.context;
+  }
   if (clineHeal && usedLane === 'cline') rec['cline-model-healed'] = `${clineHeal.from}→${clineHeal.to}`;   // 结果 meta：旧→新（仅 heal 重投真正产出结果时标注）
   if (res?.autostart) rec['doubao-autostart'] = res.autostart;                     // 结果 meta：launched|restarted|online|failed
   if (res?.ok) rec.result = res.text; else { rec.error = `${res?.kind}: ${res?.error || ''}`; if (res?.hint) rec.hint = res.hint; if (res?.resetIn) rec.resetIn = res.resetIn; }
@@ -2338,6 +2496,10 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
   }
   const disabledHit = laneKeys.filter((k) => isLaneDisabled(k));
   if (disabledHit.length) throw new Error(`lane ${disabledHit.join(',')} 已被 disabled-lanes 硬禁用。启用：wbx config set disabled-lanes []`);
+
+  // 夜间免费档 stderr 一行（D-5 ②）：批含 cn 才相关；批次级窗口快照入 manifest（逐任务策略在任务记录）
+  if (laneKeys.includes('cn')) say(nightWindowLine());
+  const nwSnap = nightWindowState();
 
   const seen = new Set();
   // 缺省能力集：config default-caps（别名/集合串均合法；'L2' 值合法但语义=每任务声明即报未交付）
@@ -2428,7 +2590,7 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
   //（调度/回退/重试/播种逻辑原样复用，绝不另起平行执行路径）。L1 scratch 以 eph-<run>-<task> 命名防并发碰撞。
   const ephTag = stamp();
   const job = ephemeral ? null : await createJob('fanout',
-    { lanes: laneKeys, parallel: laneParallel, timeoutS: timeoutS ?? null, timeoutPolicy: timeoutS != null ? 'explicit' : 'auto', retry: retryN, count: tasks.length },
+    { lanes: laneKeys, parallel: laneParallel, timeoutS: timeoutS ?? null, timeoutPolicy: timeoutS != null ? 'explicit' : 'auto', retry: retryN, count: tasks.length, nightWindow: { inWindow: nwSnap.inWindow, active: nwSnap.active, expired: nwSnap.expired, remainingMin: nwSnap.remainingMin } },
     { lanes: laneKeys, tasksInput: tasks, jobId });
 
   say(`开始：${tasks.length} 个任务，lanes ${laneKeys.join(',')}，每 lane 并发 ${laneKeys.map((k) => `${k}=${laneParallelOf(k)}`).join(' ')}，超时 ${timeoutDisplay}，重试 ${retryN}`);
@@ -2497,9 +2659,15 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       return;
     }
     let attemptSeq = 0;   // 全局尝试序号：跨重试/自愈/回退连续（attempt 落盘编号与 rec.attempts 同源）
+    let recPol = null;   // 最终投递 lane 的策略解析（ai/cn 才有值；每次投递现算，不缓存）
     const run = await runAttempts({
       lane,
-      call: (m) => askOnce({ lane, prompt: task.prompt, model: m, effort: task.effort, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null }),
+      call: (m) => {
+        const pol = resolveModelPolicy(lane, { model: m, effort: task.effort }, new Date());
+        if (!pol) return askOnce({ lane, prompt: task.prompt, model: m, effort: task.effort, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });
+        recPol = pol;
+        return askOnce({ lane, prompt: task.prompt, model: pol.model, effort: pol.effort, context: pol.context, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });
+      },
       dump: job ? (r) => dumpFailedAttempt(job.dir, task.id, ++attemptSeq, r) : async () => {},
       say,
       retryN,
@@ -2516,7 +2684,9 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       if (fb) {
         attempts = run.attempts + 1;
         say(`${task.id}@${lane} 用尽重试（${res.kind}），跨 lane 回退 -> ${fb}`);
-        res = await askOnce({ lane: fb, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });
+        const polFb = resolveModelPolicy(fb, { model: mdl, effort: task.effort }, new Date());   // 回退链换 lane 按新 lane 重解析（D-4；非 ai/cn 返回 null 走既有单点）
+        recPol = polFb;
+        res = await askOnce({ lane: fb, prompt: task.prompt, model: polFb ? polFb.model : mdl, effort: polFb ? polFb.effort : task.effort, context: polFb ? polFb.context : null, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });
         if (!res.ok && job) await dumpFailedAttempt(job.dir, task.id, attempts, res);   // 回退 attempt 同样落盘
         if (res.ok) { usedLane = fb; fallbackFrom = lane; }
       }
@@ -2528,10 +2698,14 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       status: res.ok ? 'success' : 'failed',
       attempts,
       durationMs: Date.now() - started,
-      model: res.ok ? res.model : resolveModel(mdl),
-      effort: task.effort || null,
+      model: res.ok ? res.model : (recPol?.model ?? resolveModel(mdl)),
+      effort: recPol ? (recPol.effort || null) : (task.effort || null),   // 实际下发面（策略 lane）；其余 lane 保持任务级语义
       caps: task.effCaps,
     };
+    if (recPol) {
+      rec.policy = { model: recPol.model, effort: recPol.effort || null, context: recPol.context || null, windowActive: !!recPol.window.active };   // 策略快照（D-5 ④）
+      if (recPol.context) rec.context = recPol.context;
+    }
     if (clineHeal && usedLane === 'cline') rec['cline-model-healed'] = `${clineHeal.from}→${clineHeal.to}`;   // 结果 meta：旧→新（仅 heal 重投真正产出结果时标注）
     if (res.autostart) rec['doubao-autostart'] = res.autostart;                      // 结果 meta：launched|restarted|online|failed
     if (task.filesMode === 'reference') { rec.filesMode = 'reference'; rec.seededFiles = seededFiles; }   // scratch 播种快照记入 job
@@ -2768,9 +2942,29 @@ export async function doctorStatus({ probe = true, onLine = null, quick = false 
     }
     say(`[OK]   凭证     已登录（${info.nickname || '昵称未知'}${info.uinMasked ? ` · uin ${info.uinMasked}` : ''}，凭证约 ${info.expiresInDays ?? '?'} 天后过期）`);
     steps.push({ name: `lane-${key}`, good: true, detail: `已登录（${info.nickname || '?'}，${info.expiresInDays ?? '?'} 天后过期）` });
+    // 夜间免费档（v24 D-5 ①）：cn 专属行，--quick 亦显示（纯时钟零额度，D-043 合规）；
+    // 三态=在窗内/窗外/过期 WARN；消费 nightWindowState 单对象，绝不自行重算
+    if (key === 'cn') {
+      const nw = nightWindowState();
+      const srcNote = `官方活动口径${nw.expires ? `至 ${nw.expires}` : '、无截止日期'}，以官方为准`;
+      if (nw.expired) {
+        const detail = `已过期（${nw.expires} 已过，恒白天档；如官方延期：wbx config set night-expires <日期>；${srcNote}）`;
+        steps.push({ name: 'night-window', good: null, detail });
+        say(`[WARN] 夜间免费档 ${detail}`);
+      } else if (nw.active) {
+        const detail = `生效中（${nw.window} · ${nw.model} · 距窗尾约 ${nw.remainingMin}m；${srcNote}）`;
+        steps.push({ name: 'night-window', good: true, detail });
+        say(`[OK]   夜间免费档 ${detail}`);
+      } else {
+        const detail = `窗外（白天档；免费窗 ${nw.window}，约 ${nw.remainingMin}m 后开窗；${srcNote}）`;
+        steps.push({ name: 'night-window', good: true, detail });
+        say(`[OK]   夜间免费档 ${detail}`);
+      }
+    }
     if (!probe) { laneRows.push({ ...info, probe: null }); continue; }
     say(`${LANE_BRAND[key]} 模型探测中（tiny ask）…`);
-    const p = await askOnce({ lane: key, prompt: '请只回复两个字符：OK', effort: 'low', timeoutMs: 120000 });
+    const pol = resolveModelPolicy(key, {}, new Date());   // 探「真实将跑」的模型/思考/上下文（D-4：ai/cn 探针同走策略）
+    const p = await askOnce({ lane: key, prompt: '请只回复两个字符：OK', model: pol.model, effort: pol.effort, context: pol.context, timeoutMs: 120000 });
     if (p.ok) {
       const detail = `${p.model} 可用，${fmtMs(p.durationMs)}`;
       steps.push({ name: `lane-${key}-probe`, good: true, detail });
@@ -2964,6 +3158,7 @@ export async function doctorStatus({ probe = true, onLine = null, quick = false 
   return {
     ok: fail === 0, fail, form, runtimeRoot: RUNTIME_ROOT, version: WBX_VERSION,
     cliPath, steps, lanes: laneRows, config: cfg, readyLanes: ready,
+    nightWindow: nightWindowState(),   // v24：结构化窗口字段（UI /api/doctor 消费，与 cn 段行同源）
   };
 }
 

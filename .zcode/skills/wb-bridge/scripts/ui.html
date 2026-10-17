@@ -846,10 +846,10 @@ function laneCardsHtml(s){
     if(l.key==='cline')return clineCardHtml(l,s);
     if(l.key==='doubao')return doubaoCardHtml(l);   // 豆包 lane 卡渲染进 grid
     if(l.key==='codex')return codexCardHtml(l);     // codex lane 卡（第五 lane·Plus 质量档）渲染进 grid
-    return wbCardHtml(l);
+    return wbCardHtml(l,s);
   }).join('');
 }
-function wbCardHtml(l){
+function wbCardHtml(l,s){
   const t=laneTier(l);
   const badge='<span class="badge '+t.cls+'">'+esc(t.label)+'</span>';
   const costCls=l.key==='ai'?'acc':'neutral', costTxt=l.key==='ai'?'免费':'近免费';
@@ -861,6 +861,20 @@ function wbCardHtml(l){
     exp='<span class="'+(EXP_COLOR[e.t]||'c-ok')+'">'+(d<=0?'已过期':'约 '+d+' 天后过期')+'（'+date+'）</span>'+act;
   }
   const acct=(l.nickname||'')+(l.uinMasked?(' · uin '+l.uinMasked):'');
+  // 夜间免费档行（v24 D-6）：仅 cn 卡；消费 /api/status nightWindow 单对象，前端只格式化不重算时间。
+  // 复用既有组件类与 :root token（零新增 token）；官方口径注记走 title 提示。
+  const nightRow=(l.key==='cn'&&s&&s.nightWindow)
+    ?(function(){
+      const w=s.nightWindow;
+      const src='官方活动口径'+(w.expires?('至 '+w.expires):'、无截止日期')+'，以官方为准';
+      const mins=(w.remainingMin!=null)?w.remainingMin:'?';
+      let v;
+      if(w.expired)v='<span class="c-warn">已过期（'+esc(w.expires||'—')+'）</span><span class="hint"> · 恒白天档；如官方延期可改 config night-expires</span>';
+      else if(w.active)v='<span class="c-ok">生效中</span><span class="vtxt"> · '+esc(w.model||'—')+' · 距窗尾约 '+mins+'m</span>';
+      else v='<span class="vtxt">窗外（白天档）</span><span class="hint"> · 免费窗 '+esc(w.window||'—')+' · 约 '+mins+'m 后开窗</span>';
+      return '<span class="k">夜间免费档</span><span class="v" title="'+esc(src)+'">'+v+'</span>';
+    })()
+    :'';
   // 余额行（仅 WorkBuddy 双 lane 有余额数据源；值由 paintBalance() 从 /api/balance 双向回填）
   const balRow=(l.key==='ai'||l.key==='cn')
     ?'<span class="k">余额</span><span class="v" id="lane-balance-'+l.key+'"><span class="hint">检测中…</span></span>'
@@ -872,6 +886,7 @@ function wbCardHtml(l){
     +'<div class="card__bd"><div class="kv">'
     +'<span class="k">成本</span><span class="v"><span class="cost '+costCls+'" title="'+esc(l.cost)+'">'+costTxt+'</span></span>'
     +'<span class="k">模型</span><span class="v"><span class="vtxt">DeepSeek V4.1 Flash</span></span>'
+    + nightRow
     +'<span class="k">能力档</span><span class="v"><span class="vtxt" title="v19 能力矩阵：∅=纯文本零回退；net,read（L1 别名）=联网+只读；含 write 未交付">∅(L0) 纯文本 · net,read(L1) 联网+只读 · write 未交付</span></span>'
     + balRow
     +'<span class="k">凭证到期</span><span class="v">'+exp+'</span>'

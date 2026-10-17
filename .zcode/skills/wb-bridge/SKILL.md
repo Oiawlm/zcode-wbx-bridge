@@ -24,7 +24,7 @@ AGENTS.md 是常驻最小规则面；本文件承接全部下沉细节，两者�
 |---|---|---|---|---|
 | `codex` | Codex CLI（可选·质量优先档） | **ChatGPT Plus 额度**（5h 滚动窗口+周上限） | `wbx login --identity codex`：一次性只读复制 `~/.codex/auth.json` 入桥隔离目录，绝不回写（唯一显式授权例外） | 默认 gpt-6.1-sol，≥GPT-6 底线护栏（拒 GPT-5.6 及以下）；任务级 `--model` 不生效、`--effort low/medium/high` 直通；额度耗尽自动冷却让位（显式点名放行带 WARN）；长任务建议 `--timeout 600` |
 | `ai` | WorkBuddy AI 国际版 | **x0.00 免费** | SSO 登录流（凭证约 55 天，实测口径） | DeepSeek V4.1 Flash；兜底免费首选 |
-| `cn` | WorkBuddy 国内版 | x0.03 近免费 | SSO 登录流（微信扫码路径稳定） | DeepSeek V4.1 Flash |
+| `cn` | WorkBuddy 国内版 | x0.03 近免费（夜间免费档 23:00–08:00 免费，活动口径至 2026-10-31，转述以官方为准） | SSO 登录流（微信扫码路径稳定） | 白天 DeepSeek V4.1 Flash（effort=max/上下文 1m）；夜间窗自动切 Hy4 preview（high/960k），任务级显式 --model/--effort 恒最高优先；ai lane 恒不下发 effort |
 | `cline` | Cline CLI（可选） | 免费（`cline-free/` 免费孪生，限时轮换+每日配额） | 浏览器 OAuth 设备授权 | DeepSeek V4.1 Flash；thinking=xhigh/compaction=off；清单 `wbx models --as cline --free`；未装/未登录自动跳过 |
 | `doubao` | 豆包桌面端（可选，Windows-only） | **会员额度**（耗速快于普通对话，官方口径） | 客户端 GUI 自理，桥侧零凭证 | 模型自管理豆包 2.1 Pro·推理高；调试口 9225（launch.ps1 拉起，`doubao-autostart` 默认自动）；任务级 `--model`/`--effort` 不生效；仅 L0 |
 
@@ -100,6 +100,7 @@ AGENTS.md 是常驻最小规则面；本文件承接全部下沉细节，两者�
 | doubao | `doubao-parallel=1`（上限 2，单客户端串行保护）、`doubao-autostart=true`（CDP 不可达时经 launch.ps1 自动拉起/-Force 重启） |
 | codex | `codex-model=gpt-6.1-sol`（≥GPT-6 护栏）、`codex-reasoning=medium`、`codex-parallel=1`、`codex-quota-cooldown-min=30` |
 | caps | `caps-l1-max-turns=24`、`caps-l2-enabled=false` |
+| 夜间档（v24） | `effort=max`（cn 白天思考档）、`context=1m`（ai/cn 白天上下文预算）、`night-model=hy4-preview`、`night-effort=high`、`night-context=960k`、`night-window=23:00-08:00`（北京时间，支持跨午夜）、`night-expires=2026-10-31`（空串=无截止） |
 
 （表列分组速览；全集与键数以 `wbx config list` / CONFIG_DEFS 单点为准。）
 

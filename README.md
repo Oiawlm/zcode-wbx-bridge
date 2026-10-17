@@ -8,6 +8,8 @@
 
 wbx 是本地命令行桥：把一次提问或一批任务按既定策略分派给**五条外部 AI 通道**（当作 ZCode 的子代理高频调用）——**codex**=Codex CLI（ChatGPT Plus 质量优先档，单发默认优先、额度耗尽自动让位）；**ai**=WorkBuddy 国际版（免费）；**cn**=国内版（近免费）；**cline**=Cline CLI（免费孪生）；**doubao**=豆包桌面端（会员额度）。免费与近免费 lane 底座为 DeepSeek V4.1 Flash。
 
+**cn lane 夜间免费档（v24）**：每日 23:00–08:00（北京时间）cn 通道免费窗内自动切混元 Hy4 preview、窗外自动回落 DeepSeek V4.1 Flash——本条为**官方免费活动的转述，随活动截止（现口径 2026-10-31）自动回落，一切以官方公告为准**。
+
 两个常见澄清（定义拆开说，避免混淆）：
 
 - **「codex 优先」指单发路由**：`wbx ask` 缺省 auto=codex 就绪即投（质量档优先）；codex 未就绪或失败时按 ai→cn→cline→doubao 顺序让位。

@@ -45,7 +45,7 @@ import {
   redact, loadConfig, setConfig, parseLane, parseCapsSet,
   laneStatusInfo, resolveDefaultLane, newJobId, getJob, listJobs,
   runAskJob, runFanoutJob, doctorStatus, fetchClineFreeModels,
-  laneBalance, ensureDoubao,
+  laneBalance, ensureDoubao, nightWindowState,
   startLogin, pollLoginToken, fetchAccountInfo, persistLogin,
   openBrowser, ensureDirs,
 } from './wbx-core.mjs';
@@ -336,7 +336,7 @@ async function hStatus(req, res, m, u) {
     config: cfg, defaultLane: cfg['default-lane'], effectiveLane: resolveDefaultLane(),
     readyCount: lanes.filter((l) => l.ready && !l.disabled).length,
     lanes, clineFreeModels, clineFreeModelsNote,
-
+    nightWindow: nightWindowState(),   // v24：cn 夜间免费档窗口字段（UI cn 卡消费，判定单点同源）
   });
 }
 async function hDoctor(req, res, m, u) {

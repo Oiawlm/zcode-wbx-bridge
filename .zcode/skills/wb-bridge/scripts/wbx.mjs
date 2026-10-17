@@ -837,7 +837,11 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                                                    default-caps=∅(L0)|net,read(L1)|能力集串（缺省能力集，默认 L0）、
                                                    caps-l1-max-turns=24（能力任务缺省回合上限，键名沿用，v19 起
                                                    语义=任何非 ∅ 能力集）、
-                                                   caps-l2-enabled=true|false（L2 总闸，默认 false，未交付留位）
+                                                   caps-l2-enabled=true|false（L2 总闸，默认 false，未交付留位）、
+                                                   effort/context（cn 白天思考档/ai+cn 上下文预算）与
+                                                   night-model/night-effort/night-context/night-window/
+                                                   night-expires（v24 cn 夜间免费档五键：夜间窗内自动切
+                                                   hy4-preview+high+960k，窗外白天档；纯时钟判定每次投递现算）
                                                    （存 <运行时根>/config.json）
   node wbx.mjs history [--last 10]                 历史列表（时间/类型/任务数/成功率/lane 分布/目录）
   node wbx.mjs history <jobId> [--task <id>]       完整回放一次 job 的双向对话（prompt+回复全文）

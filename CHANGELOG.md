@@ -3,6 +3,15 @@
 本文件只记**用户可感知**的变更，每版 ≤15 行；格式参考 Keep a Changelog（新增/变更/修复）。
 历史版本（6.10.0 及更早）的完整条目已原文迁入 [HISTORY.md](HISTORY.md)（v22 历史外置定案），不在本文件重复维护。
 
+## [6.13.0] - 2026-10-18
+
+v24 轮：cn lane 夜间免费档 + 模型策略单点 + 免费窗可视化 + 模型画像沉淀（定案=internal/RESEARCH-V24.md；夜间路由语义=A「只换模型不动路由」，AskUserQuestion 2026-10-18）。
+
+- **新增** cn lane 夜间免费档：每日 23:00–08:00（北京时间）免费窗内自动切 Hy4 preview（思考=高、上下文 960k），窗外/过期恒白天档 DeepSeek V4.1 Flash（effort=max、上下文 1m）；纯时钟判定单点 nightWindowState，每次投递现算不缓存，展示层只消费不自算。ai lane 恒不下发 effort 且不参与夜间档（用户口径）。
+- **新增** config 七键：effort / context / night-model / night-effort / night-context / night-window / night-expires（非法值容错回默认；活动截止 2026-10-31 可配，空串=无截止）。
+- **新增** 四处免费窗可视化：doctor cn 段行（--quick 亦显示，三态=在窗内/窗外/过期 WARN）、ask/fanout stderr [NIGHT] 行、/api/status 与 /api/doctor nightWindow 字段、manifest/任务记录 policy 快照；控制台 cn 卡新增「夜间免费档」行（内容级，tokens-sha 不变）。
+- **变更** 回退链换 lane 按新 lane 重解析模型策略；summary 表增「思考/上下文」列；PROMPTS.md 新增 Hy4 preview 画像章（T8 双稿+T7 评审）与 DeepSeek 章 v24 增补，预算 ≤760→≤880。
+
 ## [6.12.0] - 2026-10-18
 
 v23 轮：历史净化 + 用量 token 整链删除 + 前端资产化（授权=用户 2026-10-18 立项原话；六域评审分派与 triage 见 internal/archive/v23/）。

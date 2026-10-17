@@ -48,6 +48,14 @@
 - 冷却期 `laneReady(codex)=false`：auto 路由/回退链/批量缺省池自动跳过；显式点名照放行并打 WARN。
 - 时长：优先解析报错里的 "try again at" 时间，否则 `codex-quota-cooldown-min`（默认 30 分钟）；期满自动恢复候选。
 
+### 2.4 cn 夜间免费档（v24）
+
+- 语义：每日 23:00–08:00（北京时间）免费窗内，凡 cn lane 被调度到（fanout 并行/回退链/显式 --as cn）自动切夜间模型 Hy4 preview（思考 night-effort=high、上下文 night-context=960k）；窗外/过期恒白天档 DeepSeek V4.1 Flash（effort=max、上下文 1m）。**只换模型不动路由**（用户裁决 A）：LANE_ORDER/FANOUT_DEFAULT_POOL/FALLBACK_ORDER 零变化。
+- 判定：纯时钟函数单点 `nightWindowState(now)`（半开区间、跨午夜翻转、时区钉 Asia/Shanghai、活动截止 night-expires），**每次投递现算不缓存**，展示层（doctor/stderr/UI）只消费单对象不自算；与 §2.3 事件驱动冷却互补，无扫描无状态落盘。
+- 下发矩阵：effort=cn 双档/ai 恒不下发（国际版思考不可调，用户口径）；context=cn 双档/ai config context；cline/doubao/codex 各走既有单点不经策略。
+- 可视化四出口：doctor cn 段行（--quick 亦显示；三态=在窗内/窗外/过期 WARN）、ask/fanout stderr [NIGHT] 行、/api/status 与 /api/doctor nightWindow 字段、manifest/任务记录 policy 快照。
+- 配置：config `effort`/`context`/`night-model`/`night-effort`/`night-context`/`night-window`/`night-expires`（七键，非法值容错回默认）；任务级显式 --model/--effort 恒最高优先；活动截止官方口径 2026-10-31（转述，以官方为准）。
+
 ## 3 运行时布局
 
 根解析优先级：`WBX_HOME` env → `~/.wbx/`（全局形态，装过 `wbx self-install` 即全局）→ 项目内 `.wbx/`；命中即止。全局形态桥本体在 `~/.zcode/wbx-bridge/`。
