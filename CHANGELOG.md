@@ -3,9 +3,14 @@
 本文件只记**用户可感知**的变更，每版 ≤15 行；格式参考 Keep a Changelog（新增/变更/修复）。
 历史版本（6.10.0 及更早）的完整条目已原文迁入 [HISTORY.md](HISTORY.md)（v22 历史外置定案），不在本文件重复维护。
 
-## [Unreleased]
+## [6.12.0] - 2026-10-18
 
-（无——下一轮立项后在此登记）
+v23 轮：历史净化 + 用量 token 整链删除 + 前端资产化（授权=用户 2026-10-18 立项原话；六域评审分派与 triage 见 internal/archive/v23/）。
+
+- **新增** `wbx ask|fanout --ephemeral`：真实执行（回退/重试/超时/caps 原样）但零落盘——不建 job 不入历史；连通性验证/功能测试一律用它，测试流量不再出现在历史记录。fanout 零落盘时结果以 JSON 走 stdout。
+- **变更** 用量 token 数整链删除（非隐藏）：前端 chip/「Token 数」行/历史合计、CLI stderr/--json `usage` 字段/history 回放、doctor 探测 detail、summary.md tokens 列全部移除，落盘记录不再保留用量（存量磁盘记录不受影响，读取侧自然兼容）。
+- **变更** 控制台前端模板整体外置为 `ui.html`（单一事实源；运行时读取+占位符注入，渲染结果与改造前逐字节一致）；`GET /` 增 `X-Frame-Options: DENY` 与 CSP `frame-ancestors 'none'` 防点击劫持。
+- **修复**（六域评审采纳，摘要）：凭证脱敏漏 Bearer/JWT（已全吞+加锁）；codex 额度检测不再被「模型正文引用 429」误触发冷却；spawn 中文输出跨 chunk 断裂与超时悬挂；config set 不再实体化改写整份 config.json；fanout 单任务内部异常不再卡死整批；`--help`/doctor/UNINSTALL 等十余处文档与提示失真校正。
 
 ## [6.11.0] - 2026-10-17
 

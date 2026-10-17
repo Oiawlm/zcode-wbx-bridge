@@ -4,7 +4,7 @@ description: >-
   通过 wbx 桥把自包含子任务并行分派给外部算力（五 lane：Codex CLI lane——ChatGPT Plus 质量优先档，
   gpt-6.1-sol，单发 ask 默认优先、额度耗尽自动冷却让位；WorkBuddy 双 lane 的 DeepSeek V4.1 Flash
   ——国际版免费、国内版近免费；可选 Cline CLI lane——免费额度轮换模型组；可选豆包桌面端 lane——
-  耗会员额度，调试口 9225，第四 lane）执行，五个外部 Agent 当作
+  耗会员额度，调试口 9225，可选 lane）执行，五个外部 Agent 当作
   ZCode 的子代理高频、放量调用（免费 lane 几乎免费，默认分派不必省着用）。
   当出现以下任一情形时主动使用：需要调研或对比对象（竞品、软件、开源库、技术选型，单个或多个均可）、
   收集参考素材或做法、批量生成/处理文本（翻译、摘要、改写、变体、结构化抽取、分类打标）、
@@ -50,6 +50,7 @@ AGENTS.md 是常驻最小规则面；本文件承接全部下沉细节，两者�
 - **T7 评审批判**：代码模块集成前默认过一道批判评审——多一次免费调用换质量下限。
 - **编排侧子代理消费**：fanout ≥6 任务或结果很长时，用 ZCode 子代理管理整批（构造 tasks.json → 跑 → 逐份校验 → 只回传摘要+关键引用），主会话不吞全文；层级 ≤2。
 - **不留本地**的反例：需探索式多轮交互（开放式架构探索、边跑边看的多轮调试）不外包；接口先定清楚、材料可贴的编码任务适合外包。
+- **冒烟纪律（v23）**：连通性验证/功能测试/探针类 ask·fanout 一律加 `--ephemeral`（真实执行零落盘，测试流量绝不入历史）；真实调度任务才落盘。UI 发起的调用永远是真实调度（不暴露 ephemeral）。
 - 超长提示词 >12k 字符自动走 stdin 通道（实测 60k+ 可用），无命令行长度限制。
 
 ## 4 caps 能力矩阵（v19；能力原语 net/read/write 为本体，L0/L1 是预设别名）
@@ -73,10 +74,10 @@ AGENTS.md 是常驻最小规则面；本文件承接全部下沉细节，两者�
 |---|---|
 | `wbx doctor [--quick] [--no-probe]` | 自检向导。`--quick`：<10s 静态检查零探测零额度（node/CLI 路径/凭证存在性/config）——常规自检用它；`--no-probe` 跑全量静态段但跳过模型探测（零额度）；全量含模型探测与豆包/codex 段，排障用 |
 | `wbx login [--identity cn\|ai\|cline\|codex] [--force]` | 登录引导（默认 cn 微信扫码；ai 有 state 修补锦囊；cline 浏览器 OAuth；codex 一次性只读复制；doubao 客户端自理无登录流程） |
-| `wbx ask --file p.txt \| --text "…" [--as codex\|ai\|cn\|cline\|doubao] [--model M] [--effort low] [--caps 能力集] [--max-turns N] [--timeout S] [--json] [--stdin]` | 单次调用：stdout=结果、stderr=lane/用量；失败自动跨 lane 回退；落盘 job 可回放 |
-| `wbx fanout --file t.json [--lanes codex,ai,cn,cline,doubao] [--parallel 2] [--timeout 300] [--retry 1]` | 多 lane 并发池批量（缺省池不含 codex，点名才投）；结果落 `<运行时根>/jobs/<jobId>/`（summary.md 掌全局 → 各 `<id>.json` 取内容 → 校验后汇总） |
-| `wbx history [--last 10]` / `wbx history <jobId> [--task id]` | 历史列表 / 完整回放双向对话（含旧 tasks/ 兼容与全量 token 用量合计） |
-| `wbx config list\|get\|set` | 配置（28 键，见 §6） |
+| `wbx ask --file p.txt \| --text "…" [--as codex\|ai\|cn\|cline\|doubao] [--model M] [--effort low] [--caps 能力集] [--max-turns N] [--timeout S] [--json] [--stdin] [--ephemeral]` | 单次调用：stdout=结果、stderr=lane/耗时；失败自动跨 lane 回退；落盘 job 可回放；`--ephemeral`=真实执行零落盘（不建 job 不入历史） |
+| `wbx fanout --file t.json [--lanes codex,ai,cn,cline,doubao] [--parallel 2] [--timeout S] [--retry 1] [--ephemeral]` | 多 lane 并发池批量（缺省池不含 codex，点名才投）；结果落 `<运行时根>/jobs/<jobId>/`（summary.md 掌全局 → 各 `<id>.json` 取内容 → 校验后汇总）；`--ephemeral`=零落盘、结果 JSON 走 stdout |
+| `wbx history [--last 10]` / `wbx history <jobId> [--task id]` | 历史列表 / 完整回放双向对话（含旧 tasks/ 兼容） |
+| `wbx config list\|get\|set` | 配置（键集与缺省见 §6；权威=`wbx config list`） |
 | `wbx models [--as cn\|ai\|cline] [--free]` | 模型探测 + 产品配置清单；`--as cline --free` 列当前免费组（codex/doubao 无模型清单概念，明确报错指路） |
 | `wbx usage [--json] [--force]` | 各 lane 余额（WorkBuddy 双 lane 社区端点显式标非官方；cline/doubao/codex 如实标无端点；TTL 缓存） |
 | `wbx ui [--port 7788] [--detach\|--stop\|--status\|--install-autostart\|--remove-autostart]` | 本地 Web 控制台（127.0.0.1）：五 lane 状态/路由/ask/fanout/历史/登录；守护幂等复用绝不新起 |
@@ -89,7 +90,7 @@ AGENTS.md 是常驻最小规则面；本文件承接全部下沉细节，两者�
 
 （`wbx` = `node .zcode/skills/wb-bridge/scripts/wbx.mjs`；装过 self-install 后任何目录可用全局入口。）
 
-## 6 config 键（28 键；权威=`wbx config list` / CONFIG_DEFS）
+## 6 config 键（权威=`wbx config list` / CONFIG_DEFS 单点）
 
 | 组 | 键=默认 |
 |---|---|
@@ -100,7 +101,7 @@ AGENTS.md 是常驻最小规则面；本文件承接全部下沉细节，两者�
 | codex | `codex-model=gpt-6.1-sol`（≥GPT-6 护栏）、`codex-reasoning=medium`、`codex-parallel=1`、`codex-quota-cooldown-min=30` |
 | caps | `caps-l1-max-turns=24`、`caps-l2-enabled=false` |
 
-（表列分组速览；全集以 `wbx config list` 为准——CONFIG_DEFS 28 键单点。）
+（表列分组速览；全集与键数以 `wbx config list` / CONFIG_DEFS 单点为准。）
 
 ## 7 worker 提示词模板（骨架；完整模板/原则/画像/经验条目见 [PROMPTS.md](PROMPTS.md)）
 

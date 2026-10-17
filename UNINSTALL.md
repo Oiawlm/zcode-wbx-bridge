@@ -1,6 +1,6 @@
 # UNINSTALL — wbx 联动桥卸载手册（五 lane；兼容全部历史形态）
 
-> **一键还原承诺**：全局形态 `wbx self-uninstall` 一键移除全部安装物（`--purge` 连 `~/.wbx/` 凭证一起删，默认保留）；项目形态删项目目录即净。桥有两种形态——**项目形态**（一切都在项目文件夹内）与**全局形态**（`wbx self-install` 之后：`~/.zcode/` 四处 + `~/.wbx/` 运行时）。两个桌面版 App（WorkBuddy 国内版/国际版）与用户自己的 Cline 状态（`~/.cline`）**从头到尾没有被写入过任何文件**，不受影响。`fanout files`/长提示词 stdin/余额查询/双主题/PWA 均为运行时行为，零新增磁盘安装物。各版本新增物的**完整登记见下方各表**（逐版本说明的历史原文见 HISTORY.md）。
+> **一键还原承诺**：全局形态 `wbx self-uninstall` 一键移除全部安装物（`--purge` 连 `~/.wbx/` 凭证一起删，默认保留）；项目形态删项目目录即净。桥有两种形态——**项目形态**（一切都在项目文件夹内）与**全局形态**（`wbx self-install` 之后：`~/.zcode/` 四处 + `~/.wbx/` 运行时）。两个桌面版 App（WorkBuddy 国内版/国际版）与用户自己的 Cline 状态（`~/.cline`）**从头到尾没有被写入过任何文件**，不受影响。`fanout` 的 `files` 字段/长提示词 stdin/余额查询/双主题/PWA 均为运行时行为，零新增磁盘安装物。各版本新增物的**完整登记见下方各表**（逐版本说明的历史原文见 HISTORY.md）。
 
 ## 〇、全局形态卸载（装过 self-install 才需要）
 
@@ -17,13 +17,13 @@ node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" self-uninstall --purge  #
 
 | 位置 | 内容 |
 |---|---|
-| `~/.zcode/wbx-bridge/` | 桥本体（scripts 五模块（wbx/wbx-core/wbx-ui/wbx-setup/wbx-daemon）+ PROMPTS.md + examples + docs 副本 + doubao/ 豆包桥副本（v6.3 起，含 node_modules/playwright-core，可选） |
+| `~/.zcode/wbx-bridge/` | 桥本体（scripts 六件（wbx/wbx-core/wbx-ui/wbx-setup/wbx-daemon + **ui.html** 前端模板资产，v23 起）+ PROMPTS.md + examples + docs 副本 + doubao/ 豆包桥副本（v6.3 起，含 node_modules/playwright-core，可选） |
 | `~/.zcode/skills/wb-bridge/` | 用户级 skill（SKILL.md + PROMPTS.md，遮蔽同名项目级 skill） |
 | `~/.zcode/commands/wbx.md` | `/wbx` 斜杠命令 |
 | `~/.zcode/AGENTS.md` | `<!-- wbx:begin/end -->` 标记块（文件只剩它时连文件删除，其余内容保留） |
 | `~/.zcode/cli/config.json` | **仅当装过 `ui --install-autostart`**：`hooks` 键里我们追加的 SessionStart 钩子（摘除后与安装前逐字节一致；其余键从未被改写） |
 | `~/.zcode/skills/glm-prompt-crafter/` | v17 起的用户级提示词工艺库部署副本（见 §四；不随 self-uninstall 删，单独删目录即净） |
-| `~/.wbx/`（仅 `--purge` 删） | 运行时：sessions/product **凭证**、config.json（28 键）、jobs/ 历史、scratch/（能力任务工作目录）、**cline-home/**（可选 lane 隔离数据与 OAuth 凭证）、**codex-home/**（可选第五 lane：auth.json 凭证副本+work/）、codex-quota.json（冷却态，无凭证）、cline-free-models.json（免费清单缓存，无凭证）、run/（ui.json 守护状态，含随机 token）、logs/（ui.log）。不 purge 时 run/logs 留着无害 |
+| `~/.wbx/`（仅 `--purge` 删） | 运行时：sessions/product **凭证**、config.json（键集以 `wbx config list` 为准）、jobs/ 历史、scratch/（能力任务工作目录）、**cline-home/**（可选 lane 隔离数据与 OAuth 凭证）、**codex-home/**（可选第五 lane：auth.json 凭证副本+work/）、codex-quota.json（冷却态，无凭证）、cline-free-models.json（免费清单缓存，无凭证）、run/（ui.json 守护状态，含随机 token）、logs/（ui.log）。不 purge 时 run/logs 留着无害 |
 
 卸载后项目桥自动回到项目形态（运行时根变回 `<项目>/.wbx/`）。全局桥已被手动删除时，用项目桥路径运行等价：`node "<项目>\.zcode\skills\wb-bridge\scripts\wbx.mjs" self-uninstall`。
 
@@ -36,12 +36,14 @@ Remove-Item -Recurse -Force ".wbx"                          # 项目运行时（
 Remove-Item -Force "AGENTS.md"                              # 项目级常驻指令（有非 wbx 内容则只删 wbx 段）
 Remove-Item -Force "README.md","WBX.md","HISTORY.md","UI-SPEC.md","UNINSTALL.md","LICENSE","SECURITY.md","CONTRIBUTING.md","CHANGELOG.md"
 Remove-Item -Recurse -Force "tools\doubao-bridge"           # 豆包桥工具（含其 node_modules）
+Remove-Item -Recurse -Force ".zcode\skills\glm-prompt-crafter"  # 提示词工艺库项目部署（v17）
+Remove-Item -Force "tools\install-glm-prompt-crafter.mjs"       # 工艺库部署脚本（v17）
 # 文档与工具全清单以 CONTRIBUTING.md 白名单为准（tools/doubao-bridge 与 docs 副本随上述命令覆盖）；根 .gitignore 的 `.wbx/` 行按需清理
 ```
 
-## 二、用户级全局指令（仅 install-user 装过；self-install 用户走第〇节）
+## 二、用户级全局指令（install-user 与 self-install 都会写；本节=手动清理指引）
 
-仅当你运行过 `wbx install-user`（v2 遗留方式），`~/.zcode/AGENTS.md` 里才有 wbx 标记块：`wbx uninstall-user` 移除（文件只剩块时连文件删，其余保留；或手动删除 `<!-- wbx:begin -->` 到 `<!-- wbx:end -->` 整块）。`self-uninstall` 会顺带做同一件事。
+`wbx install-user`（v2 遗留方式）与 `wbx self-install` 都会写 `~/.zcode/AGENTS.md` 的 wbx 标记块：`self-uninstall` 一并摘除；legacy 路径 `wbx uninstall-user` 只摘块（文件只剩块时连文件删）。手动清理=删除 `<!-- wbx:begin -->` 到 `<!-- wbx:end -->` 整块。
 
 ## 三、可选 lane 的安装物与数据（全部可选、相互独立）
 
@@ -82,4 +84,4 @@ Remove-Item -Recurse -Force "tools\doubao-bridge"           # 豆包桥工具（
 
 ## 七、只停用、不删除（临时停用）
 
-会话级：正常使用不触发任务即可（分派是行为规则，无后台进程）。项目级：删/注释项目 AGENTS.md 分派段。全局停用：`wbx self-uninstall`（凭证保留）。只停一条 lane：`disabled-lanes` 或删该 lane 凭证文件（doctor 显示 [SKIP]）。wbx 无任何常驻进程/服务/定时任务，不删也不耗资源。
+会话级：正常使用不触发任务即可（分派是行为规则，无后台进程）。项目级：删/注释项目 AGENTS.md 分派段。全局停用：`wbx self-uninstall`（凭证保留）。只停一条 lane：`disabled-lanes` 或删该 lane 凭证文件（doctor 显示 [SKIP]）。默认无常驻进程；装过 `ui --install-autostart`（SessionStart 钩子）先 `wbx ui --remove-autostart`，起过守护先 `wbx ui --stop`。彻底移除安装物=`wbx self-uninstall`（见第〇节）。

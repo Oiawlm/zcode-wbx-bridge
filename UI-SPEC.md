@@ -86,12 +86,14 @@
 
 ### 5.5 变更程序
 
-1. 用户在新窗口提示词中显式授权（引用 FROZEN.md「UI 契约冻结」项）。
+1. 用户（=项目维护者）在新窗口提示词中显式授权（引用 FROZEN.md「UI 契约冻结」项；FROZEN.md 在 internal/，仅维护者本地可见——外部贡献者按本节程序执行）。
 2. 同步改三处：UI-SPEC（§1 表 + §6 记录）→ ui-contract 断言/快照 → 代码。
 3. 红测重跑（正向变异红 + 负向对照绿 + 恢复自证），ui-contract/ui-redtest/daemon-lifecycle 门禁全绿。
 4. 证据回填：HISTORY.md 对应条目（v22 起历史外置）。
 
 ## 6. 变更记录（按 contract version 单调排序；全文叙事见 HISTORY.md 各桥版本条）
+
+> 注：本表及全文的「用户」=项目维护者本人（个人项目，无终端用户面）；「用户原话」=维护者立项/裁决原话（沉淀于 internal/MEMORY.md）。
 
 | contract version | 日期 | tokens-sha | 变更摘要 |
 |---|---|---|---|

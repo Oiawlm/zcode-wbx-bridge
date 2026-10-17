@@ -27,7 +27,7 @@ const USAGE = [
   'doubao.mjs send <text...> | --file <path>',
   'doubao.mjs read [--wait-ms 180000] [--poll-ms 3000] [--index -1]',
   'doubao.mjs ask <text...> | --file <path>',
-  'global: --cdp-url <url> --timeout-ms <n>',
+  'global: --cdp-url <url> --timeout-ms <n> [--model <name>] [--reasoning <低|中|高>]（send/ask 生效，发送前自动重配）',
 ].join('\n');
 
 class CliError extends Error {
@@ -504,6 +504,7 @@ async function doRead(page, opts) {
   let stablePolls = 0;
   let lastCount = 0;
   let sawReply = false;
+  let boundsChecked = false;
   const deadline = startedAt + opts.waitMs;
 
   for (;;) {
@@ -512,6 +513,10 @@ async function doRead(page, opts) {
       sawReply = true;
       lastCount = count;
       const index = opts.index < 0 ? count + opts.index : opts.index;
+      if (!boundsChecked && index >= 0 && index >= count) {
+        boundsChecked = true;
+        throw new CliError(`--index ${opts.index} 越界（当前回复数 ${count}；负数=从末位倒数）`, EXIT.GENERIC, { usage: USAGE });
+      }
       if (index >= 0 && index < count) {
         const messageLocator = page.locator(sel).nth(index);
         const text = await extractMessageText(messageLocator, opts.timeoutMs);

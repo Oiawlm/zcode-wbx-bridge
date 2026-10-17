@@ -6,7 +6,7 @@
 
 ## 这是什么
 
-wbx 是本地命令行桥：把一次提问或一批任务按既定策略分派给**五条外部 AI 通道**（当作 ZCode 的子代理高频调用）——**codex**=Codex CLI（ChatGPT Plus 质量优先档，单发默认优先、额度耗尽自动让位）；**ai**=WorkBuddy 国际版（免费）；**cn**=国内版（近免费）；**cline**=Cline CLI（免费孪生）；**doubao**=豆包桌面端（会员额度）。三免费 lane 底座为 DeepSeek V4.1 Flash。
+wbx 是本地命令行桥：把一次提问或一批任务按既定策略分派给**五条外部 AI 通道**（当作 ZCode 的子代理高频调用）——**codex**=Codex CLI（ChatGPT Plus 质量优先档，单发默认优先、额度耗尽自动让位）；**ai**=WorkBuddy 国际版（免费）；**cn**=国内版（近免费）；**cline**=Cline CLI（免费孪生）；**doubao**=豆包桌面端（会员额度）。免费与近免费 lane 底座为 DeepSeek V4.1 Flash。
 
 两个常见澄清（定义拆开说，避免混淆）：
 
@@ -40,7 +40,7 @@ node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" doctor --quick
 | 命令 | 用途 |
 |---|---|
 | `wbx ask --file p.txt` | 单发（stdout=结果；`--as codex\|ai\|cn\|cline\|doubao` 点名；`--caps "net,read"` 联网只读） |
-| `wbx fanout --file tasks.json` | 批量并行（任务可用 `files:[路径]` 拼材料、`"as":"codex"` 点名；结果落 `~/.wbx/jobs/<jobId>/`） |
+| `wbx fanout --file tasks.json` | 批量并行（任务可用 `files:[路径]` 拼材料、`"as":"codex"` 点名；结果落 `<运行时根>/jobs/<jobId>/`（默认 `~/.wbx/`；未跑 self-install 时为项目 `.wbx/`）） |
 | `wbx doctor [--quick]` | 自检（`--quick` 秒级快检；全量含各 lane 模型探测） |
 | `wbx ui --detach` | 本地控制台 http://127.0.0.1:7788（状态/调用/历史/登录四页签，浅深双主题） |
 
@@ -61,7 +61,7 @@ node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" doctor --quick
 
 ## 安全与卸载（一句话版）
 
-- 凭证只存 `~/.wbx/`（gitignore），绝不入日志/文档/导出包；不写 `~/.workbuddy*`、不读写 `~/.cline`；涉密不外包。
+- 凭证只存 `<运行时根>`（默认 `~/.wbx/`），绝不入日志/文档/导出包；不写 `~/.workbuddy*`、不读写 `~/.cline`；涉密不外包。
 - 一键还原：`wbx self-uninstall [--purge]`；安装物登记表见 [UNINSTALL.md](UNINSTALL.md)。
 
 ## 更多文档

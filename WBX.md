@@ -11,7 +11,7 @@
 | lane | 通道 | 档位 | 模型与关键约束 |
 |---|---|---|---|
 | codex | Codex CLI（可选·质量优先档） | **ChatGPT Plus 质量优先档** | 默认 gpt-6.1-sol，≥GPT-6 底线护栏（拒 GPT-5.6 及以下）；任务级 `--model` 不生效、`--effort low/medium/high` 直通；5h 滚动窗口+周上限，耗尽自动冷却让位 |
-| ai | WorkBuddy AI 国际版 | x0.00 免费 | DeepSeek V4.1 Flash；兜底免费首选 |
+| ai | WorkBuddy AI 国际版 | x0.00 免费 | DeepSeek V4.1 Flash；免费兜底次选（回退链 cn 之后首个免费档） |
 | cn | WorkBuddy 国内版 | x0.03 近免费 | DeepSeek V4.1 Flash；微信扫码登录路径稳定 |
 | cline | Cline CLI（可选） | 免费（cline-free/ 免费孪生） | DeepSeek V4.1 Flash；限时轮换+每日配额；thinking=xhigh、compaction=off |
 | doubao | 豆包桌面端（可选，Windows-only） | 会员额度 | 模型自管理豆包 2.1 Pro·推理高；调试口 9225（launch.ps1）；任务级 `--model`/`--effort` 不生效 |
@@ -26,7 +26,7 @@
 
 1. **临时工具**：本桥仅在免费期/低价期成立，结束即废弃，不承诺长期维护与向后兼容。
 2. **平台局限**：豆包 lane 为 Windows-only，未在其他平台验证；其余 lane 跨平台行为同样不作承诺。
-3. **非官方端点**：`usage` 余额走社区 billing 端点（非官方，可能随上游改版失效）；失败优雅降级，不影响主链路。
+3. **非官方工具**：豆包 lane 走 Chromium 官方调试开关（CDP）驱动已登录客户端，与字节跳动无关、不属于任何受支持的集成方式；`usage` 余额的社区 billing 端点同为非官方（随上游改版可能失效）。两者失败均优雅降级，不影响主链路。
 
 ## 2 路由与回退
 
@@ -64,13 +64,15 @@
 | `run/` | 守护状态 ui.json（pid/port/token/version） |
 | `logs/` | ui.log（守护日志，不含凭证） |
 
+其余根级文件（codex-quota.json / cline-free-models.json / l0-cwd/ 等）与完整登记见 UNINSTALL.md 第〇节登记表。
+
 **凭证边界**：sessions/product/providers.json/auth.json 内容绝不进日志、文档、HTTP 响应、导出包；`.wbx/` 与 `~/.wbx/` 均 gitignore。
 
 ## 4 命令指针
 
-唯一权威源=`wbx --help`。一句话清单：`doctor [--quick]`（自检向导）/ `login --identity cn|ai|cline|codex` / `ask` / `fanout` / `history` / `config list|get|set` / `models` / `usage` / `ui`（守护与自启钩子）/ `doubao <子命令>`（豆包桥手工直通，零落盘旁路）/ `export-bundle`（零凭证分发 zip）/ `self-install` / `self-uninstall` / `install-user` / `uninstall-user`（legacy）。
+唯一权威源=`wbx --help`。一句话清单：`doctor [--quick]`（自检向导）/ `login --identity cn|ai|cline|codex` / `ask [--ephemeral]` / `fanout [--ephemeral]` / `history` / `config list|get|set` / `models` / `usage` / `ui`（守护与自启钩子）/ `doubao <子命令>`（豆包桥手工直通，零落盘旁路）/ `export-bundle`（零凭证分发 zip）/ `self-install` / `self-uninstall` / `install-user` / `uninstall-user`（legacy）。`--ephemeral`（v23）=真实执行零落盘：回退/重试/超时/caps 原样，不建 job 不入历史（冒烟/连通性验证专用；fanout 结果 JSON 走 stdout；UI 发起的调用永远是真实调度）。
 
-**质量门禁（六域常青套件，internal/）**：core-matrix（lane/caps/回退/错误分类/冷却矩阵）、cli-blackbox（假 CLI 沙箱黑盒）、ui-contract（UI 设计契约 + `--print-sha`）、ui-redtest（护栏红测）、daemon-lifecycle（守护与安全面）、docs-governance（文档治理），共用 test-helpers.mjs；旧 11 套件断言迁移台账见 `internal/archive/v22/suite-migration-map.md`。
+**质量门禁（六域常青套件，internal/）**：core-matrix（lane/caps/回退/错误分类/冷却矩阵）、cli-blackbox（假 CLI 沙箱黑盒）、ui-contract（UI 设计契约 + `--print-sha`）、ui-redtest（护栏红测）、daemon-lifecycle（守护与安全面）、docs-governance（文档治理），共用 test-helpers.mjs；旧 11 套件断言迁移台账见 `internal/archive/v22/suite-migration-map.md`（门禁=维护者本地面：internal/ 不入库、无 CI，外部贡献验收走全命令回归——见 CONTRIBUTING）。
 
 ## 5 认证（口径单点：全文只此一处展开）
 
@@ -97,7 +99,7 @@
 
 ### 6.2 UI 契约
 
-控制台 `http://127.0.0.1:7788`（四页签：总览/调用/历史/登录；浅深双主题；Host/Origin/token 安全面；PWA 离线）。设计契约 contract **v2.0.0** 冻结：108 token 双主题，**tokens-sha=6e0415da13**；权威载体 UI-SPEC.md；复算 `node internal/ui-contract.mjs --print-sha`。
+控制台 `http://127.0.0.1:7788`（四页签：状态/调用/历史/登录；浅深双主题；Host/Origin/token 安全面；PWA 离线）。设计契约 contract **v2.0.0** 冻结：108 token 双主题，**tokens-sha=6e0415da13**；权威载体 UI-SPEC.md；复算 `node internal/ui-contract.mjs --print-sha`。
 
 ### 6.3 退出码
 
@@ -105,7 +107,7 @@ CLI：0 成功 / 1 失败（含参数校验错误）。特例：`usage` 自然�
 
 ### 6.4 config 键集
 
-共 **28 键**，权威=`wbx config list` 与 CONFIG_DEFS（默认值速览：default-lane=auto、parallel-per-lane=2、model=deepseek-v4.1-flash、default-caps=L0、caps-l1-max-turns=24、caps-l2-enabled=false、cline-thinking=xhigh、cline-compaction=off、cline-parallel=1、cline-auto-heal=true、doubao-parallel=1、doubao-autostart=true、codex-model=gpt-6.1-sol、codex-reasoning=medium、codex-parallel=1、codex-quota-cooldown-min=30、cline-provider=cline、cline-model=cline-free/deepseek-v4.1-flash；其余为路径键 cli-path/cline-path/cline-data-dir/codex-path）。
+键集与键数权威=`wbx config list` 与 CONFIG_DEFS（默认值速览：default-lane=auto、parallel-per-lane=2、model=deepseek-v4.1-flash、default-caps=L0、caps-l1-max-turns=24、caps-l2-enabled=false、cline-thinking=xhigh、cline-compaction=off、cline-parallel=1、cline-auto-heal=true、doubao-parallel=1、doubao-autostart=true、codex-model=gpt-6.1-sol、codex-reasoning=medium、codex-parallel=1、codex-quota-cooldown-min=30、cline-provider=cline、cline-model=cline-free/deepseek-v4.1-flash；其余为路径键 cli-path/cline-path/cline-data-dir/codex-path）。
 
 ### 6.5 lane 集合
 

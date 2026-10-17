@@ -21,7 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '6.11.0';
+export const WBX_VERSION = '6.12.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -284,7 +284,8 @@ export const CODEX_WORK_DIR = path.join(CODEX_HOME, 'work');
 const CODEX_QUOTA_FILE = path.join(RUNTIME_ROOT, 'codex-quota.json');
 
 // 额度耗尽特征（不区分大小写）；命中即进入冷却并驱动路由跳过（D-039）
-const CODEX_QUOTA_RE = /you('|’)ve hit your usage limit|usage limit (has been )?reached|rate limit|429/i;
+const CODEX_QUOTA_RE = /you('|’)ve hit your usage limit|usage limit (has been )?reached|rate limit|429/i;   // 结构化通道（stderr/JSONL error）
+export const CODEX_QUOTA_STRONG_RE = /you('|’)ve hit your usage limit|usage limit (has been )?reached/i;   // stdout 面：只扫官方强特征——弱信号会命中「模型正文引用 429」的正常成功输出（v23 评审实证）
 
 // 从失败/错误事件取可读文案：error?.message ?? message ?? error 字符串 ?? JSON 截断 200
 function codexErrorText_(obj) {
@@ -347,11 +348,10 @@ export function validateCodexModel(id) {
 
 // parseCodexJsonl —— 解析 codex exec --json 的 stdout JSONL 全文（纯函数，任何输入不抛异常）。
 // 实测 schema（v21p1-p2 权威，二手来源仅参考）：成功流 thread.started → turn.started →
-// item.completed(item.type=agent_message, item.text=正文) → turn.completed(usage)；usage 无
-// total_tokens 字段（只有 input/cached_input/cache_write_input/output/reasoning_output）。
+// item.completed(item.type=agent_message, item.text=正文) → turn.completed（完整性判定信号）。
 // 正文裁决：-o 文件为最终权威（askOnceCodex 内），parsed.text 仅回退来源。
 export function parseCodexJsonl(text) {
-  const out = { events: 0, text: null, usage: null, error: null, hasTurnCompleted: false };
+  const out = { events: 0, text: null, error: null, hasTurnCompleted: false };
   if (typeof text !== 'string' || !text.length) return out;
   const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;   // BOM 容忍
   const chunks = [];
@@ -366,8 +366,6 @@ export function parseCodexJsonl(text) {
       if (typeof obj.item.text === 'string') chunks.push(obj.item.text);
     } else if (obj.type === 'turn.completed') {
       out.hasTurnCompleted = true;
-      const u = obj.usage && typeof obj.usage === 'object' ? obj.usage : {};
-      out.usage = { in: u.input_tokens ?? null, out: u.output_tokens ?? null };
     } else if (out.error === null && (obj.type === 'turn.failed' || obj.type === 'error')) {
       out.error = codexErrorText_(obj);   // 首个命中为准
     }
@@ -399,9 +397,9 @@ export function codexQuotaState() {
 
 // 扫描文本，命中额度耗尽即落盘冷却状态；未命中返回 null。返回与 codexQuotaState() 同构
 //（按刚写入值计算，不重读文件）。检测窗口=stdout+stderr+JSONL error 三处（askOnceCodex 调用侧）。
-export function markCodexQuota(text, { now = Date.now() } = {}) {
+export function markCodexQuota(text, { now = Date.now(), re = CODEX_QUOTA_RE } = {}) {
   if (typeof text !== 'string' || !text.length) return null;
-  const m = CODEX_QUOTA_RE.exec(text);
+  const m = re.exec(text);
   if (!m) return null;
   // 冷却截止：优先解析 "try again at <时间>"（截到 " or " 或行尾；解析失败/过去 → config 兜底分钟数）
   let until = null;
@@ -570,7 +568,7 @@ export function parseCapsSet(v) {
   if (!raw) return { ok: false, kind: 'caps-invalid' };
   const up = raw.toUpperCase();
   if (up === 'L2') return { ok: false, kind: 'caps-l2-not-delivered' };
-  if (up in CAPS_ALIASES) return { ok: true, set: [...CAPS_ALIASES[up]], normalized: CAPS_ALIASES[up].join(',') };
+  if (Object.hasOwn(CAPS_ALIASES, up)) return { ok: true, set: [...CAPS_ALIASES[up]], normalized: CAPS_ALIASES[up].join(',') };
   const seen = new Set();
   for (const part of raw.split(',')) {
     const tok = part.trim().toLowerCase();
@@ -647,6 +645,8 @@ export function resolveCapsTimeoutS(explicitTimeoutS, capsSet) {
 
 // L1 的空 scratch 工作目录（读边界：白名单无写工具 + cwd 外绝对路径读取被进程级拒绝）
 export const SCRATCH_ROOT = path.join(RUNTIME_ROOT, 'scratch');
+const L0_CWD_DIR = path.join(RUNTIME_ROOT, 'l0-cwd');   // L0 专用空 cwd（常驻共享：worker 零写入，并发安全）
+function ensureL0Cwd() { try { fs.mkdirSync(L0_CWD_DIR, { recursive: true }); } catch { /* 竞态容错 */ } return L0_CWD_DIR; }
 export function ensureScratch(name) {
   const d = path.join(SCRATCH_ROOT, sanitizeId(name));
   fs.mkdirSync(d, { recursive: true });
@@ -690,8 +690,9 @@ export function ansiStrip(s) { return String(s || '').replace(/\x1b\[[0-9;]*[A-Z
 
 export function redact(s) {
   return String(s || '')
-    .replace(/((?:token|password|passwd|secret|api[-_]?key|authorization)["';:=\s]+)[^\s"',}]+/gi, '$1[REDACTED]')
-    .replace(/(x-access-token["';:=\s]+)[^\s"',}]+/gi, '$1[REDACTED]');
+    .replace(/((?:token|password|passwd|secret|api[-_]?key|authorization)["';:=\s]+(?:(?:bearer|basic|token)\s+)?)[^\s"',}]+/gi, '$1[REDACTED]')
+    .replace(/(x-access-token["';:=\s]+)[^\s"',}]+/gi, '$1[REDACTED]')
+    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[REDACTED_JWT]');   // 裸 JWT 兜底（错误文案/URL 内）
 }
 
 export function fmtMs(ms) { return (ms / 1000).toFixed(1) + 's'; }
@@ -777,7 +778,7 @@ export function readStdin() {
 export const CONFIG_DEFS = {
   'default-lane': {
     type: 'enum', values: ['auto', ...LANE_ORDER], default: 'auto',
-    desc: 'ask 默认路由：auto=ai 优先（免费），或固定 ai / cn / cline / doubao',
+    desc: 'ask 默认路由：auto=codex 就绪即质量档优先，否则 ai 免费优先；或固定 codex / ai / cn / cline / doubao',
   },
   'disabled-lanes': {
     type: 'lanes', default: [],
@@ -869,12 +870,9 @@ export const CONFIG_DEFS = {
   },
 };
 
-// 读缓存：mtime 未变直接复用（外部改写 config 会被 stat 察觉，无陈旧风险）；返回浅拷贝防调用方误改缓存
-let configCache_ = { mtimeMs: NaN, val: null };
+// 每次直读（~1KB JSON，成本可忽略）：mtime 失效键在 OS 时钟粒度下无法区分同一 tick 的连续写
+//（v23 实测：进程内 setConfig 后同 tick 读会命中陈旧缓存，门禁亦非确定红）——缓存本身就是缺陷，移除即根因
 export function loadConfig() {
-  let mtimeMs = 0;
-  try { mtimeMs = fs.statSync(CONFIG_FILE).mtimeMs; } catch { /* 无配置文件 */ }
-  if (configCache_.val && configCache_.mtimeMs === mtimeMs) return { ...configCache_.val };
   let raw = {};
   try { raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch { /* 无配置文件 */ }
   const out = {};
@@ -931,7 +929,6 @@ export function loadConfig() {
   if (!Number.isInteger(out['codex-quota-cooldown-min']) || out['codex-quota-cooldown-min'] < 1 || out['codex-quota-cooldown-min'] > 720) {
     out['codex-quota-cooldown-min'] = 30;
   }
-  configCache_ = { mtimeMs, val: out };
   return { ...out };
 }
 
@@ -980,11 +977,14 @@ export function parseConfigValue(key, valueStr) {
 
 export async function setConfig(key, valueStr) {
   const v = parseConfigValue(key, valueStr);
-  const cfg = loadConfig();
-  cfg[key] = v;
+  // 只补丁目标键：归一化视图回写会把 ~25 个缺省键实体化进 config.json、丢弃未知键并固化其它键的
+  // 静默「改正」值——归一化只属于内存视图（v23 评审 P2）
+  let raw = {};
+  try { raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch { /* 无/坏配置：从空起写 */ }
+  raw[key] = v;
   fs.mkdirSync(RUNTIME_ROOT, { recursive: true });
-  await fsp.writeFile(CONFIG_FILE, JSON.stringify(cfg, null, 2), 'utf8');
-  return { key, value: v, config: cfg };
+  await fsp.writeFile(CONFIG_FILE, JSON.stringify(raw, null, 2), 'utf8');
+  return { key, value: v, config: loadConfig() };
 }
 
 // ---------- CLI 路径与模型解析 ----------
@@ -1311,7 +1311,11 @@ export function spawnBin(bin, args, { env, timeoutMs, stdin, cwd } = {}) {
       return;
     }
     let stdout = '', stderr = '', timedOut = false, settled = false;
-    const timer = timeoutMs ? setTimeout(() => { timedOut = true; killTree(child); }, timeoutMs) : null;
+    const KILL_GRACE_MS = 3000;   // killTree 后 close 的兜底回迁窗口（win32 孙进程继承管道时 close 永不触发）
+    const timer = timeoutMs ? setTimeout(() => {
+      timedOut = true; killTree(child);
+      setTimeout(() => { if (!settled) { settled = true; resolve({ code: -1, stdout, stderr, timedOut }); } }, KILL_GRACE_MS);
+    }, timeoutMs) : null;
     if (stdin != null) {
       // stdin 通道：超长提示词经 stdin 传入，绕过命令行长度上限（CLI -p 无位置参数时读 stdin）
       child.stdin.on('error', () => { /* EPIPE 等忽略，主进程退出码会反映失败 */ });
@@ -1323,8 +1327,12 @@ export function spawnBin(bin, args, { env, timeoutMs, stdin, cwd } = {}) {
       child.stdin.on('error', () => { /* EPIPE 忽略 */ });
       child.stdin.end();
     }
-    child.stdout.on('data', (b) => { stdout += b.toString('utf8'); });
-    child.stderr.on('data', (b) => { stderr += b.toString('utf8'); });
+    // setEncoding('utf8')：多字节字符跨 chunk 边界由 Node 内部缓冲补齐（逐 chunk toString 会产出
+    // U+FFFD——中文答案（本工具主场景）静默损坏，v23 评审 P1 实证）
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
+    child.stdout.on('data', (b) => { stdout += b; });
+    child.stderr.on('data', (b) => { stderr += b; });
     child.on('error', (err) => {
       if (settled) return; settled = true;
       if (timer) clearTimeout(timer);
@@ -1421,13 +1429,6 @@ function extractJson(text) {
   return null;
 }
 
-function usageOf(j) {
-  const u = (j && j.usage) || {};
-  const inp = u.input_tokens ?? u.inputTokens ?? u.prompt_tokens ?? null;
-  const out = u.output_tokens ?? u.outputTokens ?? u.completion_tokens ?? null;
-  return { in: inp, out: out };
-}
-
 function normalizeResult(j) {
   if (Array.isArray(j)) {
     const r = j.filter((x) => x && typeof x === 'object' && x.type === 'result').pop();
@@ -1444,7 +1445,7 @@ function normalizeResult(j) {
  *   含 write = 本轮未交付（探针 P3 沙箱前提破裂，spawn 前报 caps-write-disabled）。
  * maxTurns（契约 A）：任务级回合上限（整数 1-64，任何非 ∅ 能力集生效；∅ 无回合概念零影响）。
  * 返回：
- *   成功 { ok:true, text, usage, durationMs, model, raw, caps?, toolTrace?, rawTranscript?, scratchDir? }
+ *   成功 { ok:true, text, durationMs, model, raw, caps?, toolTrace?, rawTranscript?, scratchDir? }
  *   失败 { ok:false, kind, error, durationMs, hint? }
  * kind: timeout | cli-error | unparseable | l1-turns-exhausted | result-error | auth |
  *       caps-l2-not-delivered | caps-invalid | caps-lane-mismatch | caps-write-disabled
@@ -1467,7 +1468,8 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000,
   if (writeBlocked) return writeBlocked;   // write 门（本轮 STOP）：含 write 集合 spawn 前显式报错
   const capsSet = parsed.set;
   const hasCaps = capsSet.length > 0;
-  const laneKey = IDENTITIES[lane] ? lane : 'cn';   // lane 已上游 parseLane 校验，兜底仅防御
+  if (!IDENTITIES[lane]) return { ok: false, kind: 'unknown-lane', error: `未知 lane ${lane}（上游 parseLane 校验漏网；支持 ${LANE_ORDER.join('/')}）`, combined: '' };
+  const laneKey = lane;
   // 超长提示词（>STDIN_THRESHOLD）改走 stdin 通道（-p 不带位置参数），短提示词保持位置参数路径
   const useStdin = prompt.length > STDIN_THRESHOLD;
   const mdl = resolveModel(model);
@@ -1481,8 +1483,10 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000,
   ];
   if (effort) args.push('--effort', effort);
 
-  // 非 ∅ 能力集工作目录 = 空 scratch（读边界：cwd 外绝对路径读取被审批拒绝（v10 P2c+P4））
-  const scratch = hasCaps ? (scratchDir || ensureScratch('l1-' + stamp())) : null;
+  // 非 ∅ 能力集工作目录 = 空 scratch（读边界：cwd 外绝对路径读取被审批拒绝（v10 P2c+P4））；
+  // ∅（L0）同样用专用空目录——spawnBin 缺省 cwd=RUNTIME_ROOT（sessions/product 凭证所在），
+  // --tools 白名单一旦上游回归即凭证暴露（v23 评审 P1）
+  const scratch = hasCaps ? (scratchDir || ensureScratch('l1-' + stamp())) : ensureL0Cwd();
 
   const t0 = Date.now();
   const r = await spawnNode(args, { env: baseEnv(laneKey), timeoutMs, stdin: useStdin ? prompt : null, cwd: scratch || undefined });
@@ -1540,11 +1544,11 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000,
   // 非 ∅ 能力集附加：规范化集合串 + 工具轨迹摘要（function_call 事件计数+参数截断）+ 原始 transcript（落盘回放）
   if (hasCaps) {
     return {
-      ok: true, text, usage: usageOf(j), durationMs, model: j.model || mdl, raw: j,
+      ok: true, text, durationMs, model: j.model || mdl, raw: j,
       caps: parsed.normalized, toolTrace: extractToolTrace(parsedFull), rawTranscript: stdout, scratchDir: scratch,
     };
   }
-  return { ok: true, text, usage: usageOf(j), durationMs, model: j.model || mdl, raw: j };
+  return { ok: true, text, durationMs, model: j.model || mdl, raw: j };
 }
 
 // ---------- cline lane：NDJSON 解析 + 一次性调用 ----------
@@ -1555,7 +1559,7 @@ export async function askOnce({ lane, prompt, model, effort, timeoutMs = 300000,
 // 4074 恰为末块，全块拼接 5789 为完整答案）。落盘完整性的唯一出口在解析层，ask 返回值/
 // fanout 任务记录/UI 历史共用此结果。
 function makeEmptyClineResult() {
-  return { events: 0, text: null, finishReason: null, usage: { in: null, out: null }, model: null, durationMs: null, error: null, hasRunResult: false };
+  return { events: 0, text: null, finishReason: null, model: null, durationMs: null, error: null, hasRunResult: false };
 }
 function isPlainObject_(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 function asNonEmptyString_(value) { return typeof value === 'string' && value.trim() !== '' ? value : null; }
@@ -1607,12 +1611,6 @@ export function parseClineNdjson(text) {
   if (lastRunResult !== null) {
     out.text = asNonEmptyString_(lastRunResult.text);
     out.finishReason = asNonEmptyString_(lastRunResult.finishReason);
-    const u = isPlainObject_(lastRunResult.usage) ? lastRunResult.usage : null;
-    out.usage = {
-      in: u === null ? null : asFiniteNumber_(u.inputTokens),
-      out: u === null ? null : asFiniteNumber_(u.outputTokens),
-      cost: u === null ? null : asFiniteNumber_(u.totalCost),   // 名义计价（免费模型实测为 0）
-    };
     out.model = isPlainObject_(lastRunResult.model) ? asNonEmptyString_(lastRunResult.model.id) : null;
     out.durationMs = asFiniteNumber_(lastRunResult.durationMs);
   }
@@ -1711,7 +1709,7 @@ export async function askOnceCline({ prompt, model = null, timeoutMs = 300000, c
   }
   return {
     ok: true, text: parsed.text,
-    usage: parsed.usage, durationMs: durationMs,
+    durationMs: durationMs,
     model: parsed.model || mdl || `${provider}(默认)`,
     raw: { finishReason: parsed.finishReason, events: parsed.events },
     rawStream,
@@ -1800,7 +1798,7 @@ export function parseDoubaoPayload(stdoutText) {
  * 对 doubao 不生效（工具自管理豆包 2.1 Pro + 推理高，ask 每次发送前自动重验配置），model 参数仅保持签名兼容。
  * caps：仅 L0；L1/L2 明确报错（caps-lane-mismatch——豆包桌面 agent 不受桥控、无法承诺
  * L1 只读语义，对齐 cline 先例），绝不静默降档。
- * 成功 → { ok:true, text, model:modelAtSend, usage:null（桌面端不走 API 计量）, durationMs, raw }；
+ * 成功 → { ok:true, text, model:modelAtSend, durationMs, raw }；
  * 失败 → kind=timeout|cli-error + fix-hint（hint=doubao-launch 指向 launch.ps1 与 doctor）。
  */
 export async function askOnceDoubao({ prompt, model = null, timeoutMs = 300000, caps = 'L0' }) {
@@ -1858,7 +1856,7 @@ export async function askOnceDoubao({ prompt, model = null, timeoutMs = 300000, 
       };
     }
     return {
-      ok: true, text: a.payload.text, usage: null, durationMs: a.durationMs,
+      ok: true, text: a.payload.text, durationMs: a.durationMs,
       model: typeof a.payload.modelAtSend === 'string' && a.payload.modelAtSend ? a.payload.modelAtSend : '豆包 2.1 Pro',
       raw: a.payload,
     };
@@ -1893,7 +1891,7 @@ export async function askOnceDoubao({ prompt, model = null, timeoutMs = 300000, 
  * low/medium/high 直通映射推理档，其余（含 null）用 config codex-reasoning。
  * 提示词 >STDIN_THRESHOLD 字符走 stdin（`-` 位置参数），与 cline 先例同阈值语义。
  * 收割（关键不变量）：**进程退出码绝不参与成功/失败判定**（实测失败路径退出码不可信）——
- * -o 文件全文为最终权威正文；JSONL 只供 usage/error/完整性判定（turn.failed/error 事件=
+ * -o 文件全文为最终权威正文；JSONL 只供 error/完整性判定（turn.failed/error 事件=
  * 失败；无 turn.completed 且无 -o 正文=失败）。JSONL 全文随 rawStream 返回供 job 落盘回放。
  * caps：仅 ∅；非空能力集明确报 caps-lane-mismatch（codex exec 沙箱与工具面不受桥控，
  * 无法承诺只读语义，对齐 cline/doubao 先例），绝不静默降档。
@@ -1944,7 +1942,9 @@ export async function askOnceCodex({ prompt, effort = null, timeoutMs = 300000, 
   const combined = stdout + '\n' + stderr;   // 失败 attempt 全量输出（随失败结果返回，编排器落盘）
 
   // 额度检测先于超时判定（T8-B 理由：配额耗尽的调用不该被误判为「只是慢」而继续消耗额度）
-  const quota = markCodexQuota(stdout) || markCodexQuota(stderr) || markCodexQuota(parsed.error || '');
+  // 额度检测先于超时判定（T8-B：配额耗尽不该被误判为「只是慢」）。面分域（v23 评审 P0）：
+  // stdout 只扫强特征——stdout 含模型正文，弱信号（rate limit|429）会把「正文引用 429」的成功输出误判冷却。
+  const quota = markCodexQuota(stderr) || markCodexQuota(parsed.error || '') || markCodexQuota(stdout, { re: CODEX_QUOTA_STRONG_RE });
   if (quota) {
     return {
       ok: false, kind: 'cli-error',
@@ -1973,7 +1973,7 @@ export async function askOnceCodex({ prompt, effort = null, timeoutMs = 300000, 
     return { ok: false, kind: 'cli-error', error: brief(msg), durationMs, hint: parsed.error !== null ? 'codex-error' : 'incomplete-stream', rawStream: stdout, combined };
   }
   return {
-    ok: true, text, usage: parsed.usage, durationMs, model: mdl,
+    ok: true, text, durationMs, model: mdl,
     raw: { hasTurnCompleted: parsed.hasTurnCompleted, events: parsed.events },
     rawStream: stdout,
   };
@@ -2088,7 +2088,7 @@ export function summarizeJob(id, dir, { legacy = false } = {}) {
   };
 }
 
-// job 目录三根枚举（新 jobs + 两个 legacy 只读根）单源：listJobs/tokenTotals 共用，seen 去重防双计
+// job 目录三根枚举（新 jobs + 两个 legacy 只读根）单源：listJobs 共用，seen 去重防双计
 function* jobRoots() {
   const seen = new Set();
   for (const root of [JOBS_DIR, LEGACY_TASKS_DIR, LEGACY_JOBS_DIR]) {
@@ -2112,42 +2112,6 @@ export function listJobs() {
   }
   rows.sort((a, b) => String(b.id).localeCompare(String(a.id)));
   return rows;
-}
-
-// ---------- 全量 token 用量汇总（历史页/总览展示；与 listJobs 同源遍历，只读） ----------
-// 口径：任务记录 rec.usage（usageOf 同款字段回退）；usage=null 的成功记录（如 doubao 桌面端无
-// API 计量）计入 unknownUsage（诚实展示，不猜数）；`wbx doubao` 手工直通零落盘不产生记录。
-const usageNumOf = (u, keys) => {
-  for (const k of keys) {
-    const v = u ? u[k] : null;
-    if (typeof v === 'number' && Number.isFinite(v)) return v;
-  }
-  return null;
-};
-
-export function tokenTotals() {
-  let tasks = 0, okTasks = 0, tokensIn = 0, tokensOut = 0, unknownUsage = 0;
-  for (const { dir } of jobRoots()) {
-    let files = [];
-    try { files = fs.readdirSync(dir); } catch { continue; }
-    for (const f of files) {
-      if (!isTaskRecordFile(f)) continue;
-      let rec = null;
-      try { rec = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { continue; }
-      if (!rec || typeof rec !== 'object') continue;
-      tasks++;
-      if (rec.status === 'success') okTasks++;
-      const fin = usageNumOf(rec.usage, ['in', 'input_tokens', 'inputTokens', 'prompt_tokens']);
-      const fout = usageNumOf(rec.usage, ['out', 'output_tokens', 'outputTokens', 'completion_tokens']);
-      if (fin == null && fout == null) {
-        if (rec.status === 'success') unknownUsage++;
-        continue;
-      }
-      tokensIn += fin || 0;
-      tokensOut += fout || 0;
-    }
-  }
-  return { tasks, okTasks, tokensIn, tokensOut, unknownUsage };
 }
 
 export async function getJob(jobId) {
@@ -2180,8 +2144,6 @@ export async function getJob(jobId) {
 // ---------- 汇总 markdown ----------
 export function buildSummaryMd({ type, tasks, results, totalMs, laneKeys, laneParallel, timeoutS, retry, jobId }) {
   const okCount = results.filter((r) => r.status === 'success').length;
-  const tin = results.reduce((s, r) => s + (r.usage?.in || 0), 0);
-  const tout = results.reduce((s, r) => s + (r.usage?.out || 0), 0);
   const rl = results.filter((r) => isRateLimit(r.error)).length;
   const lines = [];
   lines.push(`# WBX ${type} 汇总`, '');
@@ -2191,11 +2153,11 @@ export function buildSummaryMd({ type, tasks, results, totalMs, laneKeys, lanePa
     lines.push(`- 任务数：${tasks.length}；lanes：${laneKeys.join(',')}；每 lane 并发：${laneParallel}（总并发 ${laneParallel * laneKeys.length}）；单任务超时：${timeoutS != null ? `${timeoutS}s（显式）` : 'auto（∅=300s / 能力任务=600s）'}；重试：${retry}（+跨 lane 回退 1 次）`);
   }
   lines.push(`- 结果：成功 ${okCount} / 失败 ${tasks.length - okCount}（成功率 ${(okCount / tasks.length * 100).toFixed(0)}%）`);
-  lines.push(`- 总耗时：${fmtMs(totalMs)}；tokens：in ${tin} / out ${tout}`, '');
-  lines.push('| id | lane | caps | 状态 | 耗时 | tokens(in/out) | 尝试 | 模型 |', '|---|---|---|---|---|---|---|---|');
+  lines.push(`- 总耗时：${fmtMs(totalMs)}`, '');
+  lines.push('| id | lane | caps | 状态 | 耗时 | 尝试 | 模型 |', '|---|---|---|---|---|---|---|');
   for (const r of results) {
     const lane = r.fallbackFrom ? `${r.fallbackFrom}→${r.lane}` : r.lane;
-    lines.push(`| ${r.id} | ${lane} | ${r.caps || 'L0'} | ${r.status === 'success' ? '✅' : '❌'} ${r.status} | ${fmtMs(r.durationMs)} | ${r.usage?.in ?? '-'}/${r.usage?.out ?? '-'} | ${r.attempts} | ${r.model} |`);
+    lines.push(`| ${r.id} | ${lane} | ${r.caps || 'L0'} | ${r.status === 'success' ? '✅' : '❌'} ${r.status} | ${fmtMs(r.durationMs)} | ${r.attempts} | ${r.model} |`);
   }
   const failed = results.filter((r) => r.status !== 'success');
   if (failed.length) {
@@ -2220,9 +2182,9 @@ async function runAttempts({ lane, call, dump, say, retryN = 0, usedModel = null
     attempts = a + 1;
     res = await call(usedModel);
     if (res.ok) return { res, attempts, healed };
+    const rl = res.hint === 'ratelimit' || isRateLimit(res.error);   // 限流判定先于落盘（注释与实现一致化，v23 评审 P3）
     await dump(res);
     if (a < retryN) {
-      const rl = res.hint === 'ratelimit' || isRateLimit(res.error);   // 限流判定先于落盘（指针路径文本不得污染判定）
       say(`${tag}失败（${res.kind}），${rl ? '5s' : '2s'} 后重试 ${a + 1}/${retryN}`);
       await sleep(rl ? 5000 : 2000);
     }
@@ -2240,9 +2202,9 @@ async function runAttempts({ lane, call, dump, say, retryN = 0, usedModel = null
 }
 /**
  * runAskJob：单条 ask，含回退链与 job 落盘。返回：
- *   { ok, jobId, jobDir, lane, fallbackFrom, model, usage, durationMs, text|error, kind }
+ *   { ok, jobId, jobDir, lane, fallbackFrom, model, durationMs, text|error, kind }
  */
-export async function runAskJob({ prompt, as = null, model = null, effort = null, timeoutS = null, jobId = null, caps = null, maxTurns = null }) {
+export async function runAskJob({ prompt, as = null, model = null, effort = null, timeoutS = null, jobId = null, caps = null, maxTurns = null, ephemeral = false }) {
   ensureDirs();
   const cfg = loadConfig();
   // caps 契约（v19 能力矩阵）：不合法 / L2 未交付 / 含 write 未交付 / 能力×lane 不匹配 -> 明确报错，
@@ -2278,8 +2240,11 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
   // 超时单点决策：显式 --timeout 最高优先；缺省非 ∅ 600s / ∅ 300s（ask 与 fanout 同源 resolveCapsTimeoutS）
   const effTimeoutS = resolveCapsTimeoutS(timeoutS, capsSet);
 
-  const job = await createJob('ask', { promptPreview: brief(prompt, 120), as: as || 'auto', model: resolveModel(model), effort, timeoutS: effTimeoutS, ...(capsSet.length ? { caps: capsNorm } : {}) }, { lanes: chain, tasksInput: [{ id: 'ask', prompt, ...(capsSet.length ? { caps: capsNorm } : {}), ...(mt != null ? { maxTurns: mt } : {}) }], jobId });
-  const capsScratch = capsSet.length ? ensureScratch('job-' + job.id) : null;
+  // 持久化边界单点（v23 包 A）：ephemeral=真实执行零调度留痕——job=null 让下游全部落盘点自然跳过
+  //（不建 job 目录/manifest/任务记录/summary/attempt dump；回退/重试/超时/caps 逻辑原样复用，
+  // 绝不另起平行执行路径）。L1 任务仍需 scratch 工作目录（读边界机制前提），以 eph- 前缀命名。
+  const job = ephemeral ? null : await createJob('ask', { promptPreview: brief(prompt, 120), as: as || 'auto', model: resolveModel(model), effort, timeoutS: effTimeoutS, ...(capsSet.length ? { caps: capsNorm } : {}) }, { lanes: chain, tasksInput: [{ id: 'ask', prompt, ...(capsSet.length ? { caps: capsNorm } : {}), ...(mt != null ? { maxTurns: mt } : {}) }], jobId });
+  const capsScratch = capsSet.length ? ensureScratch(job ? 'job-' + job.id : 'eph-ask-' + stamp()) : null;
 
   // 显式点名 codex 且额度冷却中：放行但打 WARN（auto 路由不会解析到冷却中的 codex——laneReady=false）
   if (chain.includes('codex')) {
@@ -2294,7 +2259,7 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
     const run = await runAttempts({
       lane,
       call: (m) => askOnce({ lane, prompt, model: m, effort, timeoutMs: effTimeoutS * 1000, caps: capsNorm || 'L0', scratchDir: capsScratch, maxTurns: mt }),
-      dump: (r) => dumpFailedAttempt(job.dir, 'ask', ++attemptSeq, r),
+      dump: job ? (r) => dumpFailedAttempt(job.dir, 'ask', ++attemptSeq, r) : async () => {},
       say: (msg) => console.error(msg),
       usedModel: model,
       healNote: (to) => `cline auto-heal -> ${to}，重投一次`,
@@ -2316,43 +2281,49 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
     model: res?.ok ? res.model : resolveModel(model),
     effort: effort || null,
     caps: capsNorm || 'L0',
-    usage: res?.usage || null,
   };
   if (clineHeal && usedLane === 'cline') rec['cline-model-healed'] = `${clineHeal.from}→${clineHeal.to}`;   // 结果 meta：旧→新（仅 heal 重投真正产出结果时标注）
   if (res?.autostart) rec['doubao-autostart'] = res.autostart;                     // 结果 meta：launched|restarted|online|failed
   if (res?.ok) rec.result = res.text; else { rec.error = `${res?.kind}: ${res?.error || ''}`; if (res?.hint) rec.hint = res.hint; if (res?.resetIn) rec.resetIn = res.resetIn; }
   if (res?.ok && res.toolTrace) rec.toolTrace = res.toolTrace;   // L1 工具轨迹摘要（工具名+次数+参数截断）
-  if (res?.rawStream) {
+  if (job && res?.rawStream) {
     // 流式 lane（cline/codex）原始事件流全文落盘，供回放与解析器迭代；文件名按产出 lane 泛化（cline 字节兼容）
     await fsp.writeFile(path.join(job.dir, `ask.${resLane || usedLane || primary}-stream.jsonl`), res.rawStream, 'utf8');
   }
-  if (res?.rawTranscript) {
+  if (job && res?.rawTranscript) {
     // L1 原始 transcript 落盘（联网内容不可冻结复现，轨迹全文留档供回放核对）
     await fsp.writeFile(path.join(job.dir, 'ask.transcript.json'), res.rawTranscript, 'utf8');
   }
-  await writeTaskRecord(job.dir, rec);
-  await finalizeJob(job.dir, { total: 1, ok: res?.ok ? 1 : 0, durationMs: Date.now() - jobT0 });
-  const md = buildSummaryMd({ type: 'ask', tasks: [{ id: 'ask' }], results: [rec], totalMs: Date.now() - jobT0, jobId: job.id });
-  await fsp.writeFile(path.join(job.dir, 'summary.md'), md, 'utf8');
+  if (job) {
+    await writeTaskRecord(job.dir, rec);
+    await finalizeJob(job.dir, { total: 1, ok: res?.ok ? 1 : 0, durationMs: Date.now() - jobT0 });
+    const md = buildSummaryMd({ type: 'ask', tasks: [{ id: 'ask' }], results: [rec], totalMs: Date.now() - jobT0, jobId: job.id });
+    await fsp.writeFile(path.join(job.dir, 'summary.md'), md, 'utf8');
+  }
 
   if (res?.ok) {
-    return { ok: true, jobId: job.id, jobDir: job.dir, lane: usedLane, fallbackFrom: usedLane !== primary ? primary : null, model: res.model, usage: res.usage, durationMs: res.durationMs, text: res.text, caps: capsNorm || 'L0', ...(res.toolTrace ? { toolTrace: res.toolTrace } : {}), ...((clineHeal && usedLane === 'cline') ? { clineModelHealed: clineHeal } : {}) };
+    return { ok: true, jobId: job ? job.id : null, jobDir: job ? job.dir : null, lane: usedLane, fallbackFrom: usedLane !== primary ? primary : null, model: res.model, durationMs: res.durationMs, text: res.text, caps: capsNorm || 'L0', ...(res.toolTrace ? { toolTrace: res.toolTrace } : {}), ...((clineHeal && usedLane === 'cline') ? { clineModelHealed: clineHeal } : {}) };
   }
-  return { ok: false, jobId: job.id, jobDir: job.dir, lane: primary, kind: res?.kind, error: res?.error, hint: res?.hint, caps: capsNorm || 'L0', ...(res?.resetIn ? { resetIn: res.resetIn } : {}) };
+  return { ok: false, jobId: job ? job.id : null, jobDir: job ? job.dir : null, lane: primary, kind: res?.kind, error: res?.error, hint: res?.hint, caps: capsNorm || 'L0', ...(res?.resetIn ? { resetIn: res.resetIn } : {}) };
 }
 
 /**
  * runFanoutJob：批量并发（双 lane 动态均衡 + 重试 + 跨 lane 回退 + job 落盘）。
  * tasksIn: [{id, prompt, as?, model?, effort?}]；返回 { jobId, jobDir, okCount, total, results }。
  */
-export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, timeoutS = null, retry = null, log = null, jobId = null }) {
+export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, timeoutS = null, retry = null, log = null, jobId = null, ephemeral = false }) {
   ensureDirs();
   const cfg = loadConfig();
   const say = log || (() => {});
 
   let laneKeys;
   if (lanes && lanes.length) {
-    laneKeys = lanes;
+    laneKeys = [...new Set(lanes)];   // 去重：重复 lane 会起双倍 worker 击穿并发上限（v23 评审 P2）
+    for (const k of laneKeys) {
+      const parsedLane = parseLane(k);
+      if (!parsedLane) throw new Error(`lanes 只支持 ${LANE_ORDER.join(',')}（收到 ${k}）`);
+    }
+    laneKeys = laneKeys.map((k) => parseLane(k));
   } else {
     // 路由三分（v21 D-036）：批量缺省池=FANOUT_DEFAULT_POOL（免费+会员档，不含 codex——Plus 额度
     // 保护，付费档不是批量回退目标）；任务级 as 点名的 lane 并入调度池（调度池=缺省池∪点名 lane，
@@ -2420,6 +2391,8 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
         const dl = resolveDefaultLane();
         lane = (dl === 'ai' || dl === 'cn') ? dl : 'ai';
       }
+      // 钉 lane 不在执行池：createJob 之前报错（校验后置会留下永久 running 的幽灵 job，v23 评审 P2）
+      if (!laneKeys.includes(lane)) throw new Error(`任务 ${t.id ?? id}：caps ${effNorm} 需要可用且未禁用的 ai/cn lane（lane ${lane} 不在本次执行 lanes [${laneKeys.join(',')}] 内）。修复：--lanes 纳入 ${lane}，或任务改 --as`);
     }
     // filesMode 任务契约：reference=材料播种（含 read 的 worker 自读），缺省 inline=既有拼装（字节兼容）。
     // reference 强制任务级 caps 显式声明且含 read（D-009 演进：L1 别名天然含 read；∅ 无工具无法自读——
@@ -2451,7 +2424,10 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
   const timeoutDisplay = timeoutS != null ? `${timeoutS}s（显式）` : 'auto（∅=300s / 能力任务=600s）';
   const retryN = Math.max(0, retry ?? 1);
 
-  const job = await createJob('fanout',
+  // 持久化边界单点（v23 包 A）：ephemeral=真实执行零调度留痕——job=null 让下游全部落盘点自然跳过
+  //（调度/回退/重试/播种逻辑原样复用，绝不另起平行执行路径）。L1 scratch 以 eph-<run>-<task> 命名防并发碰撞。
+  const ephTag = stamp();
+  const job = ephemeral ? null : await createJob('fanout',
     { lanes: laneKeys, parallel: laneParallel, timeoutS: timeoutS ?? null, timeoutPolicy: timeoutS != null ? 'explicit' : 'auto', retry: retryN, count: tasks.length },
     { lanes: laneKeys, tasksInput: tasks, jobId });
 
@@ -2462,10 +2438,8 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
   tasks.forEach((task, i) => {
     task.index = i;
     if (task.lane && laneKeys.includes(task.lane)) laneBuckets.get(task.lane).push(task);
-    else if (task.lane && task.effSet.length) {
-      // 能力任务钉死 lane 后该 lane 未启用：明确报错（进公共队列可能落到 cline worker = 静默改路）
-      throw new Error(`任务 ${task.id}：caps ${task.effCaps} 需要可用且未禁用的 ai/cn lane（lane ${task.lane} 不在本次执行 lanes [${laneKeys.join(',')}] 内）。修复：--lanes 纳入 ${task.lane}，或任务改 --as`);
-    } else {
+    else {
+      // 能力任务钉 lane 不在执行池已在任务校验层报错；此处只余非能力绑定 lane 未启用的回退
       if (task.lane) say(`${task.id} 绑定 lane ${task.lane} 未启用，改投公共队列`);
       sharedQueue.push(task);
     }
@@ -2484,8 +2458,8 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     const mdl = task.model; // 传给 askOnce 的显式模型（null -> core 按配置解析）
     // 超时单点决策（resolveCapsTimeoutS）：显式 --timeout 最高优先；缺省按任务能力集 ∅=300s / 非 ∅=600s
     const taskTimeoutMs = resolveCapsTimeoutS(timeoutS, task.effSet) * 1000;
-    // 非 ∅ 能力集任务级独立 scratch（读边界）
-    const capsScratch = task.effSet.length ? ensureScratch(`job-${job.id}-${task.id}`) : null;
+    // 非 ∅ 能力集任务级独立 scratch（读边界）；ephemeral 时以 eph-<run>-<task> 命名（不挂 job id）
+    const capsScratch = task.effSet.length ? ensureScratch(job ? `job-${job.id}-${task.id}` : `eph-${ephTag}-${task.id}`) : null;
     // 材料播种：reference 任务把 files 复制进 scratch（保持相对路径结构，rel 已在任务校验防越界），
     // 提示词材料区只有清单+路径——worker 用 Read 工具自行读取（重试复用同一 scratch，不重复播种判断）
     let seededFiles = null;
@@ -2514,11 +2488,11 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
         id: task.id, lane, status: 'failed', attempts: 0,
         durationMs: Date.now() - started,
         model: resolveModel(task.model), effort: task.effort || null,
-        caps: task.effCaps, usage: null, error: seedError,
+        caps: task.effCaps, error: seedError,
         ...(task.filesMode === 'reference' ? { filesMode: 'reference' } : {}),
       };
       results[task.index] = rec;
-      await writeTaskRecord(job.dir, rec);
+      if (job) await writeTaskRecord(job.dir, rec);
       say(`${task.id}@${lane} -> failed（${seedError}）`);
       return;
     }
@@ -2526,24 +2500,24 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     const run = await runAttempts({
       lane,
       call: (m) => askOnce({ lane, prompt: task.prompt, model: m, effort: task.effort, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null }),
-      dump: (r) => dumpFailedAttempt(job.dir, task.id, ++attemptSeq, r),
+      dump: job ? (r) => dumpFailedAttempt(job.dir, task.id, ++attemptSeq, r) : async () => {},
       say,
       retryN,
       usedModel: mdl,
       tag: `${task.id}@${lane} `,
       healNote: (to) => `${task.id}@cline auto-heal -> ${to}，重投一次`,
     });
-    let res = run.res, attempts = attemptSeq, clineHeal = run.healed;
+    let res = run.res, attempts = run.attempts, clineHeal = run.healed;   // attempts=真实尝试次数（dump 计数只作落盘编号——末次成功时旧算法少计 1，v23 评审 P1）
     let usedLane = lane, fallbackFrom = null;
     if (!res.ok) {
       // L1 跨 lane 回退只在 ai/cn 之间（cline/doubao 不承载 L1，不得进入回退目标）
       let fb = fallbackLane(lane);
       if (task.effSet.length && fb !== 'ai' && fb !== 'cn') fb = null;
       if (fb) {
-        attempts = ++attemptSeq;
+        attempts = run.attempts + 1;
         say(`${task.id}@${lane} 用尽重试（${res.kind}），跨 lane 回退 -> ${fb}`);
         res = await askOnce({ lane: fb, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });
-        if (!res.ok) await dumpFailedAttempt(job.dir, task.id, attempts, res);   // 回退 attempt 同样落盘
+        if (!res.ok && job) await dumpFailedAttempt(job.dir, task.id, attempts, res);   // 回退 attempt 同样落盘
         if (res.ok) { usedLane = fb; fallbackFrom = lane; }
       }
     }
@@ -2557,7 +2531,6 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       model: res.ok ? res.model : resolveModel(mdl),
       effort: task.effort || null,
       caps: task.effCaps,
-      usage: res.usage || null,
     };
     if (clineHeal && usedLane === 'cline') rec['cline-model-healed'] = `${clineHeal.from}→${clineHeal.to}`;   // 结果 meta：旧→新（仅 heal 重投真正产出结果时标注）
     if (res.autostart) rec['doubao-autostart'] = res.autostart;                      // 结果 meta：launched|restarted|online|failed
@@ -2565,16 +2538,16 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     if (res.ok) rec.result = res.text;
     else rec.error = `${res.kind}: ${res.error || ''}`;
     if (res.ok && res.toolTrace) rec.toolTrace = res.toolTrace;   // L1 工具轨迹摘要
-    if (res.rawStream) {
+    if (job && res.rawStream) {
       // 流式 lane（cline/codex）：原始事件流全文落盘，供回放与解析器迭代；文件名按产出 lane 泛化（cline 字节兼容）
       await fsp.writeFile(path.join(job.dir, `${sanitizeId(task.id)}.${usedLane}-stream.jsonl`), res.rawStream, 'utf8');
     }
-    if (res.rawTranscript) {
+    if (job && res.rawTranscript) {
       // L1：codebuddy transcript 全文落盘（联网内容不可冻结复现，轨迹留档供回放核对）
       await fsp.writeFile(path.join(job.dir, `${sanitizeId(task.id)}.transcript.json`), res.rawTranscript, 'utf8');
     }
     results[task.index] = rec;
-    await writeTaskRecord(job.dir, rec);
+    if (job) await writeTaskRecord(job.dir, rec);
     say(`${task.id}${fallbackFrom ? `（${fallbackFrom}→${usedLane} 回退）` : `@${usedLane}`} -> ${rec.status}（${fmtMs(rec.durationMs)}，尝试 ${attempts}${task.effSet.length ? `，caps ${task.effCaps}` : ''}）`);
   }
 
@@ -2582,7 +2555,12 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     for (;;) {
       const task = sharedQueue.shift() ?? laneBuckets.get(lane).shift();
       if (!task) return;
-      await runTask(task, lane);
+      try { await runTask(task, lane); }
+      catch (e) {
+        // 单任务内部异常（播种/落盘 IO 等）降级为该任务失败记录，绝不终止整批（finalizeJob 必达，v23 评审 P1）
+        results[task.index] = { id: task.id, lane, status: 'failed', attempts: 0, durationMs: 0, model: resolveModel(task.model), effort: task.effort || null, caps: task.effCaps, error: `internal: ${brief(String((e && e.message) || e), 300)}` };
+        say(`${task.id}@${lane} -> failed（internal error 已落失败记录）`);
+      }
     }
   }
 
@@ -2594,11 +2572,13 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
   await Promise.all(workers);
 
   const totalMs = Date.now() - t0;
-  const okCount = results.filter((r) => r.status === 'success').length;
-  await finalizeJob(job.dir, { total: tasks.length, ok: okCount, durationMs: totalMs });
-  const md = buildSummaryMd({ type: 'fanout', tasks, results, totalMs, laneKeys, laneParallel, timeoutS, retry: retryN, jobId: job.id });
-  await fsp.writeFile(path.join(job.dir, 'summary.md'), md, 'utf8');
-  return { jobId: job.id, jobDir: job.dir, okCount, total: tasks.length, results };
+  const okCount = results.filter((r) => r && r.status === 'success').length;
+  if (job) {
+    await finalizeJob(job.dir, { total: tasks.length, ok: okCount, durationMs: totalMs });
+    const md = buildSummaryMd({ type: 'fanout', tasks, results, totalMs, laneKeys, laneParallel, timeoutS, retry: retryN, jobId: job.id });
+    await fsp.writeFile(path.join(job.dir, 'summary.md'), md, 'utf8');
+  }
+  return { jobId: job ? job.id : null, jobDir: job ? job.dir : null, okCount, total: tasks.length, results };
 }
 
 // ---------- 登录（SSO 协议，分步可被 UI 复用） ----------
@@ -2699,7 +2679,7 @@ export async function persistLogin(ctx, authToken, account) {
     type: 'custom-token',
     attributes: { ...attrs, token: authToken.accessToken },
   };
-  await fsp.writeFile(id.productPath, JSON.stringify(cfg), 'utf8');
+  await fsp.writeFile(id.productPath, JSON.stringify(cfg), { encoding: 'utf8', mode: 0o600 });   // 含 accessToken，与 sessions/<lane>.json 同权（v23 评审 P1）
 }
 
 // ---------- doctor（结构化，CLI 与 UI 共用） ----------
@@ -2755,7 +2735,7 @@ export async function doctorStatus({ probe = true, onLine = null, quick = false 
   // 4b) caps 能力矩阵（v19）：键合法性 + 交付面
   const dcParsed = parseCapsSet(cfg['default-caps']);
   const dcIsL2 = !dcParsed.ok && dcParsed.kind === 'caps-l2-not-delivered';
-  const capsValid = (dcParsed.ok || dcIsL2) && typeof cfg['caps-l2-enabled'] === 'boolean';
+  const capsValid = dcParsed.ok || dcIsL2;   // caps-l2-enabled 类型已由 loadConfig 归一（typeof 恒真死条件删除，v23 评审 P3）
   step('caps', capsValid ? null : false,
     `default-caps=${dcIsL2 ? 'L2（保留未交付，任务声明即报错）' : (dcParsed.ok ? (dcParsed.normalized || '∅(L0)') : `非法（${JSON.stringify(cfg['default-caps'])}，已按 L0 处理）`)}；能力矩阵：∅(L0)=五 lane 纯文本零回退 | net,read(L1)=仅 ai/cn 联网+只读（--caps "net,read" 或 L1；cline/doubao/codex 不承载） | 含 write=本轮未交付（探针 P3 沙箱前提破裂，声明即报 caps-write-disabled） | readDirs=本轮缓期（探针 P4 add-dir 边界不可证，任务字段声明即报错） | L2=保留未交付（cline 无命令级 deny；声明即报错）`);
 
@@ -2792,7 +2772,7 @@ export async function doctorStatus({ probe = true, onLine = null, quick = false 
     say(`${LANE_BRAND[key]} 模型探测中（tiny ask）…`);
     const p = await askOnce({ lane: key, prompt: '请只回复两个字符：OK', effort: 'low', timeoutMs: 120000 });
     if (p.ok) {
-      const detail = `${p.model} 可用，${fmtMs(p.durationMs)}，tokens in/out = ${p.usage.in ?? '?'}/${p.usage.out ?? '?'}`;
+      const detail = `${p.model} 可用，${fmtMs(p.durationMs)}`;
       steps.push({ name: `lane-${key}-probe`, good: true, detail });
       say(`[OK]   模型探测 ${detail}`);
       laneRows.push({ ...info, probe: { good: true, detail } });
@@ -2865,8 +2845,7 @@ export async function doctorStatus({ probe = true, onLine = null, quick = false 
         say('Cline CLI 模型探测中（tiny ask）…');
         const p = await askOnce({ lane: 'cline', prompt: '请只回复两个字符 OK', timeoutMs: 180000 });
         if (p.ok) {
-          const cost = p.usage && typeof p.usage.cost === 'number' ? p.usage.cost : null;
-          const detail = `${p.model} 可用，${fmtMs(p.durationMs)}，tokens in/out = ${p.usage.in ?? '?'}/${p.usage.out ?? '?'}${cost != null ? `，本次计价 $${cost.toFixed(6)}${cost === 0 ? '（免费）' : ''}` : ''}`;
+          const detail = `${p.model} 可用，${fmtMs(p.durationMs)}`;
           steps.push({ name: 'lane-cline-probe', good: true, detail });
           say(`[OK]   模型探测 ${detail}`);
           laneRows.push({ ...cinfo, probe: { good: true, detail } });
@@ -2980,9 +2959,7 @@ export async function doctorStatus({ probe = true, onLine = null, quick = false 
   }
 
   const ready = loggedLanes().filter((k) => !isLaneDisabled(k));
-  if (!ready.length) fail++;
-  const probeable = laneRows.filter((r) => r.probe);
-  if (ready.length && probe && probeable.length && probeable.every((r) => !r.probe.good)) fail++;
+  if (!ready.length) fail++;   // 探测失败计数只在步骤级（聚合补加会使 ai/cn 失败双计，v23 评审 P3）
 
   return {
     ok: fail === 0, fail, form, runtimeRoot: RUNTIME_ROOT, version: WBX_VERSION,

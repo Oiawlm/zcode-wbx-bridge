@@ -37,7 +37,9 @@ export function zipStore(entries) {
     const lh = Buffer.alloc(30);
     lh.writeUInt32LE(0x04034b50, 0);
     lh.writeUInt16LE(20, 4);            // version needed
-    lh.writeUInt16LE(/^[\x20-\x7e]+$/.test(e.name) ? 0 : 0x0800, 6); // UTF-8 标志（纯 ASCII 名不置位）
+    // UTF-8 旗标：本地/中央目录头必须同值（否则部分解压器按原 OS 编码解非 ASCII 文件名）
+    const nameFlag = /^[\x20-\x7e]+$/.test(e.name) ? 0 : 0x0800;
+    lh.writeUInt16LE(nameFlag, 6);
     lh.writeUInt16LE(0, 8);             // method: store
     lh.writeUInt16LE(dosTime, 10);
     lh.writeUInt16LE(dosDate, 12);
@@ -47,7 +49,7 @@ export function zipStore(entries) {
     lh.writeUInt16LE(nameBuf.length, 26);
     lh.writeUInt16LE(0, 28);
     parts.push(lh, nameBuf, data);
-    central.push({ nameBuf, crc, size: data.length, offset });
+    central.push({ nameBuf, crc, size: data.length, offset, flag: /^[\x20-\x7e]+$/.test(e.name) ? 0 : 0x0800 });
     offset += 30 + nameBuf.length + data.length;
   }
   let centralSize = 0;
@@ -57,7 +59,7 @@ export function zipStore(entries) {
     h.writeUInt32LE(0x02014b50, 0);
     h.writeUInt16LE(20, 4);
     h.writeUInt16LE(20, 6);
-    h.writeUInt16LE(0, 8);
+    h.writeUInt16LE(c.flag, 8);
     h.writeUInt16LE(0, 10);
     h.writeUInt16LE(dosTime, 12);
     h.writeUInt16LE(dosDate, 14);
@@ -87,7 +89,7 @@ export function zipStore(entries) {
 }
 
 // ---------- 模块级清单常量（self-install 完整性检查 / 复制 / export-bundle 共用同一来源） ----------
-const CORE_SCRIPTS = ['wbx.mjs', 'wbx-core.mjs', 'wbx-ui.mjs', 'wbx-setup.mjs', 'wbx-daemon.mjs'];
+const CORE_SCRIPTS = ['wbx.mjs', 'wbx-core.mjs', 'wbx-ui.mjs', 'wbx-setup.mjs', 'wbx-daemon.mjs', 'ui.html'];   // ui.html=前端模板资产（wbx ui 启动期读取，v23）
 const DOC_FILES = ['WBX.md', 'UNINSTALL.md'];
 
 // ---------- 文案模板 ----------
@@ -160,11 +162,11 @@ export function installReadmeText() {
     'node wbx.mjs self-install',
     '',
     ':: 3. 登录两个 lane（各一次，凭证约 55 天有效）',
-    'node scripts\\wbx.mjs login --identity cn   :: 国内版：微信扫码',
-    'node scripts\\wbx.mjs login --identity ai   :: 国际版：邮箱/OneID（输出里有 state 修补锦囊）',
+    'node wbx.mjs login --identity cn   :: 国内版：微信扫码',
+    'node wbx.mjs login --identity ai   :: 国际版：邮箱/OneID（输出里有 state 修补锦囊）',
     F,
     '',
-    '装完自检：' + B + 'node scripts\\wbx.mjs doctor' + B + '，两个 lane 全绿即就绪。',
+    '装完自检：' + B + 'node wbx.mjs doctor' + B + '，两个 lane 全绿即就绪。',
     '',
     '## 可选扩展：cline lane（第三条算力）',
     '',
@@ -253,7 +255,7 @@ export async function selfInstall({ adopt = false, keepProject = true } = {}) {
     if (!fs.existsSync(path.join(srcScripts, f))) throw new Error(`桥源不完整：缺 ${path.join(srcScripts, f)}`);
   }
 
-  // 1. 桥本体 → ~/.zcode/wbx-bridge/（CORE_SCRIPTS 含 wbx-ui.mjs——`wbx ui` 动态依赖，缺文件运行时才崩=必选）
+  // 1. 桥本体 → ~/.zcode/wbx-bridge/（CORE_SCRIPTS 含 wbx-ui.mjs 与 ui.html——`wbx ui` 启动期读取前端模板资产，缺文件运行时才崩=必选）
   await fsp.mkdir(dstScripts, { recursive: true });
   const copiedScripts = [];
   for (const f of CORE_SCRIPTS) {
@@ -492,6 +494,6 @@ export async function exportBundle({ out = null } = {}) {
   return {
     ok: true, outFile, size, count: entries.length,
     entries: entries.map((e) => e.name),
-    selfCheck: `零凭证断言通过（比对 ${knownTokens} 个本地 accessToken 值，均未出现）`,
+    selfCheck: `未发现已知凭证值（比对 ${knownTokens} 个本地 accessToken 值；成员路径无 .wbx 运行时面）`,
   };
 }

@@ -1,0 +1,1393 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wbx 桥控制台</title>
+<meta name="theme-color" content="#f4f6fb">
+<link rel="manifest" href="/manifest.webmanifest">
+<script>try{var t=localStorage.getItem('wbx-theme');document.documentElement.dataset.theme=(t==='dark')?'dark':'light'}catch(e){document.documentElement.dataset.theme='light'}</script>
+<style>
+/* ===== 设计 token（浅/深双主题唯一真源；基线 internal/v8-dark-theme-tokens.md + contract v2.0.0 双调色板） ===== */
+/* @tokens:begin 双主题唯一真源——:root=浅色（默认），[data-theme="dark"]=深色（原深色值原样迁移）。键集与语义以本块为准（浅色键集 66 键；深色仅覆盖随主题变化的 42 色彩键，结构刻度继承 :root）；改动必须同步 UI-SPEC.md（仓库根）并过 internal/ui-contract.mjs（UI 契约冻结，见 internal/FROZEN.md） */
+:root{
+  --bg:#f4f6fb;--panel:#ffffff;--panel-inset:#f0f3f9;--hover:#e9edf5;
+  --line:#e5e9f0;--line-strong:#ccd3df;--line-ctrl:#6f7a8c;
+  --fg:#171b24;--fg-hi:#0d1420;--dim:#5f6776;--dim-hi:#4c5462;
+  --acc:#2563eb;--acc-text:#1d4ed8;--acc-hover:#1d4ed8;
+  --ok:#0b7c46;--warn:#926a00;--warn2:#b55400;--err:#cf2e2e;--neutral:#5f6776;
+  --acc-soft:rgba(37,99,235,.16);--ok-soft:rgba(11,124,70,.16);--warn-soft:rgba(146,106,0,.16);
+  --warn2-soft:rgba(181,84,0,.16);--err-soft:rgba(207,46,46,.16);--neutral-soft:rgba(95,103,118,.16);
+  --acc-line:rgba(37,99,235,.45);--ok-line:rgba(11,124,70,.45);--warn-line:rgba(146,106,0,.45);
+  --warn2-line:rgba(181,84,0,.45);--err-line:rgba(207,46,46,.45);--neutral-line:rgba(95,103,118,.45);
+  --acc-ink:#ffffff;--err-ink:#a61b1b;--err-ctrl:#cf2e2e;
+  --hover-ring:rgba(23,26,35,.12);--hover-soft:rgba(23,26,35,.05);
+  --scrollbar:rgba(23,26,35,.28);--scrollbar-hover:rgba(23,26,35,.45);--panel-fade:rgba(255,255,255,0);
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;
+  --r-sm:4px;--r-md:8px;--r-lg:12px;--r-pill:999px;
+  --fs-xs:12px;--fs-sm:13px;--fs-md:14px;--fs-lg:17px;--fs-xl:20px;
+  --lh-tight:1.3;--lh-base:1.65;--lh-loose:1.75;
+  --shadow-1:0 1px 2px rgba(17,24,39,.06),0 1px 1px rgba(17,24,39,.04);
+  --shadow-2:0 4px 16px rgba(17,24,39,.10),0 2px 6px rgba(17,24,39,.06),0 0 0 1px rgba(23,26,35,.06);
+  --shadow-focus:0 0 0 3px rgba(37,99,235,.30);
+  --t-fast:120ms;--t-base:180ms;--t-slow:280ms;--ease:cubic-bezier(.2,.8,.2,1);
+  --font:system-ui,"Segoe UI","Microsoft YaHei UI","PingFang SC",sans-serif;
+  --mono:ui-monospace,"Cascadia Mono",Consolas,"Courier New",monospace;
+}
+[data-theme="dark"]{
+  --bg:#0f1117;--panel:#171a23;--panel-inset:#1e2230;--hover:#232838;
+  --line:#2a2f40;--line-strong:#3a4160;--line-ctrl:#5c6684;
+  --fg:#e6e9f2;--fg-hi:#ffffff;--dim:#9aa3b8;--dim-hi:#aab2c6;
+  --acc:#5b8cff;--acc-text:#7fa5ff;--acc-hover:#4a7aeb;
+  --ok:#3ecf8e;--warn:#f0b429;--warn2:#ffa94d;--err:#ff6b6b;--neutral:#9aa3b8;
+  --acc-soft:rgba(91,140,255,.14);--ok-soft:rgba(62,207,142,.14);--warn-soft:rgba(240,180,41,.14);
+  --warn2-soft:rgba(255,169,77,.14);--err-soft:rgba(255,107,107,.14);--neutral-soft:rgba(154,163,184,.12);
+  --acc-line:rgba(91,140,255,.35);--ok-line:rgba(62,207,142,.35);--warn-line:rgba(240,180,41,.35);
+  --warn2-line:rgba(255,169,77,.35);--err-line:rgba(255,107,107,.35);--neutral-line:rgba(154,163,184,.35);
+  --acc-ink:#0b1020;--err-ink:#ffb3b3;--err-ctrl:rgba(255,107,107,.45);
+  --hover-ring:rgba(255,255,255,.08);--hover-soft:rgba(255,255,255,.05);
+  --scrollbar:rgba(255,255,255,.14);--scrollbar-hover:rgba(255,255,255,.26);--panel-fade:rgba(23,26,35,0);
+  --shadow-1:0 1px 2px rgba(0,0,0,.35);
+  --shadow-2:0 4px 16px rgba(0,0,0,.45),0 0 0 1px rgba(255,255,255,.04);
+  --shadow-focus:0 0 0 3px rgba(91,140,255,.28);
+}
+/* @tokens:end */
+*{box-sizing:border-box}
+/* [hidden] 属性=唯一隐藏开关：作者类 display（如 .spin 的 inline-block）会压过 UA 的 [hidden] 规则，
+   导致 hidden 元素常显（登录按钮转圈实证）——!important 压过一切作者 display（v23 评审 P1/P2） */
+[hidden]{display:none!important}
+html{scrollbar-gutter:stable}
+*{scrollbar-width:thin;scrollbar-color:var(--scrollbar) transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--scrollbar);border-radius:999px;border:3px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-hover);background-clip:padding-box}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-corner{background:transparent}
+body{margin:0;background:var(--bg);color:var(--fg);font:var(--fs-md)/var(--lh-base) var(--font)}
+a{color:var(--acc-text)}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+.mono{font-family:var(--mono);font-size:var(--fs-xs)}
+.right{margin-left:auto}
+
+/* ===== header / nav（tab 下划线动效） ===== */
+header{padding:0 var(--s5);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:var(--s4);flex-wrap:wrap;min-height:52px}
+header h1{font-size:var(--fs-md);font-weight:600;margin:0;color:var(--fg-hi);letter-spacing:.01em}
+header .meta{color:var(--dim-hi);font-size:var(--fs-xs);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:46vw}
+nav{margin-left:auto;display:flex;gap:var(--s1);align-self:stretch}
+nav button{position:relative;background:transparent;border:0;cursor:pointer;font-family:inherit;font-size:var(--fs-sm);color:var(--dim);padding:0 var(--s3);transition:color var(--t-base) var(--ease)}
+nav button::after{content:"";position:absolute;left:10px;right:10px;bottom:0;height:2px;background:var(--acc);border-radius:1px;transform:scaleX(0);transform-origin:left;transition:transform var(--t-base) var(--ease)}
+nav button:hover{color:var(--fg)}
+nav button.active{color:var(--fg)}
+nav button.active::after{transform:scaleX(1)}
+nav button:focus-visible{outline:none;box-shadow:var(--shadow-focus);border-radius:var(--r-sm)}
+
+/* ===== 主题切换（v2.0.0 双主题；按钮=扩展点组件，浅色显示月图标=点击换深色，深色反之） ===== */
+.theme-toggle{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;flex:none;padding:0;background:transparent;border:1px solid var(--line);border-radius:var(--r-sm);cursor:pointer;color:var(--dim);transition:color var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease),background var(--t-fast) var(--ease)}
+.theme-toggle:hover{color:var(--fg);background:var(--hover-soft);border-color:var(--line-ctrl)}
+.theme-toggle:focus-visible{outline:none;box-shadow:var(--shadow-focus)}
+.theme-toggle .ico-sun{display:none}
+[data-theme="dark"] .theme-toggle .ico-moon{display:none}
+[data-theme="dark"] .theme-toggle .ico-sun{display:block}
+
+main{padding:var(--s5) var(--s5) var(--s6);max-width:1100px;margin:0 auto}
+section{display:none}
+section.on{display:block}
+
+/* ===== 卡片（悬浮微抬升，包 hover:hover 防触屏粘滞） ===== */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);box-shadow:var(--shadow-1);margin-bottom:var(--s4);scroll-margin-top:var(--s4)}
+@media (hover:hover){
+  .card{transition:transform var(--t-base) var(--ease),box-shadow var(--t-base) var(--ease),border-color var(--t-base) var(--ease)}
+  .card:hover{transform:translateY(-1px);box-shadow:var(--shadow-2);border-color:var(--hover-ring)}
+}
+.card__hd{display:flex;align-items:center;gap:var(--s3);min-height:44px;padding:0 var(--s4);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.card__title{font-size:var(--fs-md);font-weight:600;color:var(--fg);letter-spacing:.01em}
+.card__sub{font-size:var(--fs-xs);color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.card__bd{padding:var(--s4)}
+.card.off .card__bd,.card.off .card__title,.card.off .card__sub{opacity:.62}
+
+/* ===== 健康总览条 ===== */
+.ovw{display:flex;align-items:center;gap:var(--s4);flex-wrap:wrap;padding:var(--s3) var(--s4);border-left:3px solid var(--neutral)}
+.ovw.t-ok{border-left-color:var(--ok)}
+.ovw.t-warn{border-left-color:var(--warn)}
+.ovw.t-warn2{border-left-color:var(--warn2)}
+.ovw.t-err{border-left-color:var(--err)}
+.ovw .concl{font-size:var(--fs-md);font-weight:600}
+.ovw.t-err .concl{color:var(--err)}
+.ovw.t-warn2 .concl,.ovw.t-warn .concl{color:var(--warn)}
+.ovw .chips{margin-left:auto;display:flex;gap:var(--s2);flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:var(--r-pill);background:var(--panel-inset);border:1px solid var(--line);color:var(--fg);font-size:var(--fs-xs);text-decoration:none;white-space:nowrap;transition:border-color var(--t-fast),background var(--t-fast)}
+.chip:hover{background:var(--hover);border-color:var(--line-ctrl)}
+.chip .sig{color:var(--dim-hi)}
+.shp{display:inline-block;width:7px;height:7px;flex:none;box-sizing:border-box;font-style:normal}
+.s-dot{border-radius:50%;background:currentColor}
+.s-dia{border-radius:1px;transform:rotate(45deg);background:currentColor}
+.s-sq{border-radius:1px;background:currentColor}
+.s-ring{border-radius:50%;border:1.5px solid currentColor;background:transparent}
+.c-ok{color:var(--ok)}
+.c-warn{color:var(--warn)}
+.c-warn2{color:var(--warn2)}
+.c-err{color:var(--err)}
+.c-neutral{color:var(--neutral)}
+.c-acc{color:var(--acc-text)}
+
+/* ===== 状态徽标（形状+颜色双编码；进行中=空心环呼吸，与●可用静默区分） ===== */
+.badge{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:var(--r-sm);font-size:var(--fs-xs);line-height:18px;font-weight:500;border:1px solid transparent;white-space:nowrap;vertical-align:middle}
+.badge::before{content:"";flex:0 0 auto;box-sizing:border-box;width:6px;height:6px;background:currentColor}
+.badge.ok{color:var(--ok);background:var(--ok-soft);border-color:var(--ok-line)}
+.badge.ok::before{border-radius:50%}
+.badge.warn{color:var(--warn);background:var(--warn-soft);border-color:var(--warn-line)}
+.badge.warn::before{border-radius:1px;transform:rotate(45deg)}
+.badge.warn2{color:var(--warn2);background:var(--warn2-soft);border-color:var(--warn2-line)}
+.badge.warn2::before{border-radius:1px;transform:rotate(45deg)}
+.badge.err{color:var(--err);background:var(--err-soft);border-color:var(--err-line)}
+.badge.err::before{border-radius:1px}
+.badge.neutral{color:var(--neutral);background:var(--neutral-soft);border-color:var(--neutral-line)}
+.badge.neutral::before{background:transparent;border:1.5px solid currentColor;border-radius:50%}
+.badge.acc{color:var(--acc-text);background:var(--acc-soft);border-color:var(--acc-line)}
+.badge.acc::before{border-radius:50%}
+.badge.absent{color:var(--dim-hi);background:transparent;border-style:dashed;border-color:var(--neutral-line)}
+.badge.absent::before{background:transparent;border:1.5px dashed currentColor;border-radius:50%}
+.badge.run::before{background:transparent;border:1.5px solid currentColor;border-radius:50%;animation:wbx-pulse 2s var(--ease) infinite}
+@keyframes wbx-pulse{0%,100%{box-shadow:0 0 0 0 currentColor;opacity:1}50%{box-shadow:0 0 0 4px transparent;opacity:.75}}
+.dot--running{display:inline-block;width:8px;height:8px;border-radius:50%;border:1.5px solid var(--acc);animation:wbx-pulse 2s var(--ease) infinite}
+@media (prefers-reduced-motion:reduce){.badge.run::before,.dot--running{animation:none;opacity:1}}
+
+/* ===== 成本徽标三档（纯胶囊无形状，细则进 title） ===== */
+.cost{display:inline-flex;align-items:center;padding:2px 10px;border-radius:var(--r-pill);font-size:var(--fs-xs);line-height:18px;font-weight:500;white-space:nowrap;cursor:help}
+.cost.acc{color:var(--acc-text);background:var(--acc-soft)}
+.cost.neutral{color:var(--dim-hi);background:var(--neutral-soft)}
+.cost.warn{color:var(--warn);background:var(--warn-soft)}
+
+/* ===== 键值行（96px 标签 + 可截断值；分隔线只画组间） ===== */
+.kv{display:grid;grid-template-columns:96px minmax(0,1fr);gap:3px var(--s3);align-items:baseline}
+.kv .k{color:var(--dim-hi);font-size:var(--fs-xs);letter-spacing:.02em;white-space:nowrap}
+.kv .v{color:var(--fg);font-size:var(--fs-sm);min-width:0;display:flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums}
+.kv .v .vtxt{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.kv .v .badge,.kv .v .cost{flex:none}
+
+/* ===== 段标题（左色条+字距） ===== */
+.sect{display:flex;align-items:center;gap:var(--s2);margin:var(--s4) 0 var(--s2);font-size:var(--fs-xs);font-weight:600;color:var(--dim);letter-spacing:.08em}
+.sect::before{content:"";width:2px;height:12px;border-radius:1px;background:var(--acc);flex:none}
+
+/* ===== 通道卡网格 ===== */
+.grid3{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:var(--s3);margin-bottom:var(--s4)}
+.grid3 .card{margin-bottom:0}
+.pwr{margin-left:auto;display:inline-flex;align-items:center;flex:none}
+
+/* ===== 表格（sticky 表头/行 hover/数字右对齐/无斑马纹） ===== */
+.tbl-wrap{overflow:auto;border:1px solid var(--line);border-radius:var(--r-sm)}
+.tbl{width:100%;border-collapse:separate;border-spacing:0;font-size:var(--fs-sm)}
+.tbl th{position:sticky;top:0;z-index:2;background:var(--panel-inset);border-bottom:1px solid var(--line-strong);height:34px;padding:0 var(--s3);text-align:left;font-size:var(--fs-xs);font-weight:600;color:var(--dim);letter-spacing:.06em;white-space:nowrap}
+.tbl td{height:38px;padding:0 var(--s3);border-bottom:1px solid var(--line);vertical-align:middle}
+.tbl tbody tr:last-child td{border-bottom:none}
+.tbl tbody tr{cursor:pointer;transition:background var(--t-fast)}
+.tbl tbody tr:hover{background:var(--panel-inset)}
+.tbl .num{text-align:right;width:1%;white-space:nowrap}
+.tbl td.mono{color:var(--dim-hi);cursor:copy}
+/* ===== v6.4：历史表 fixed 布局——行内详情（colspan=5）内容不再参与列宽计算，防「点开整表横向胀开」 ===== */
+#hist-table{table-layout:fixed}
+#hist-table th,#hist-table td{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#hist-table tr.job-inline>td{white-space:normal;overflow:hidden;text-overflow:clip}
+
+/* ===== 表单控件（内凹底/聚焦环/纯 CSS select 箭头） ===== */
+input[type=text],select,textarea{height:32px;padding:0 10px;font-family:inherit;font-size:var(--fs-sm);color:var(--fg);background:var(--bg);border:1px solid var(--line-ctrl);border-radius:var(--r-sm);transition:border-color var(--t-fast),box-shadow var(--t-fast)}
+textarea{height:auto;min-height:110px;padding:8px 10px;line-height:var(--lh-base);resize:vertical;font-family:var(--mono);font-size:var(--fs-xs);width:100%}
+input[type=text]:focus-visible,select:focus-visible,textarea:focus-visible{outline:none;border-color:var(--acc);box-shadow:var(--shadow-focus)}
+input::placeholder,textarea::placeholder{color:var(--dim)}
+input:disabled,select:disabled,textarea:disabled{opacity:.55;cursor:not-allowed;color:var(--dim-hi);background:var(--panel-inset)}
+select{appearance:none;-webkit-appearance:none;padding-right:26px;cursor:pointer;background-image:linear-gradient(45deg,transparent 50%,var(--dim) 50%),linear-gradient(135deg,var(--dim) 50%,transparent 50%);background-position:calc(100% - 14px) 14px,calc(100% - 9px) 14px;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+select option{background:var(--panel-inset);color:var(--fg)}
+label{color:var(--dim);font-size:var(--fs-sm)}
+.row{display:flex;gap:var(--s3);align-items:center;flex-wrap:wrap;margin:var(--s3) 0 0}
+.card__bd>.row:first-child,.dbd>.row:first-child{margin-top:0}
+.row label{display:inline-flex;gap:6px;align-items:center}
+
+/* ===== 按钮三档 ===== */
+.btn-primary,.btn-ghost,.btn-danger{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 14px;border-radius:var(--r-sm);font-family:inherit;font-size:var(--fs-sm);font-weight:500;border:1px solid transparent;cursor:pointer;white-space:nowrap;transition:background var(--t-fast) var(--ease),border-color var(--t-fast) var(--ease),color var(--t-fast) var(--ease)}
+.btn-primary{background:var(--acc);color:var(--acc-ink)}
+.btn-primary:hover{background:var(--acc-hover)}
+.btn-ghost{background:transparent;color:var(--fg);border-color:var(--line-strong)}
+.btn-ghost:hover{background:var(--hover-soft);border-color:var(--dim)}
+.btn-danger{background:transparent;color:var(--err);border-color:var(--err-ctrl)}
+.btn-danger:hover{background:var(--err-soft)}
+.btn-primary:focus-visible,.btn-ghost:focus-visible,.btn-danger:focus-visible{outline:none;box-shadow:var(--shadow-focus)}
+.btn-primary:disabled,.btn-ghost:disabled,.btn-danger:disabled{opacity:.5;cursor:not-allowed}
+.btn-block{width:100%;justify-content:flex-start;height:38px;margin-bottom:var(--s2)}
+
+/* ===== 电源开关（纯 CSS 36x20 胶囊；勾选=启用） ===== */
+.power{appearance:none;-webkit-appearance:none;position:relative;width:36px;height:20px;flex:0 0 auto;margin:0;background:var(--panel-inset);border:1px solid var(--line-ctrl);border-radius:var(--r-pill);cursor:pointer;transition:background var(--t-base) var(--ease),border-color var(--t-base) var(--ease)}
+.power::after{content:"";position:absolute;top:50%;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dim);transform:translateY(-50%);transition:transform var(--t-base) var(--ease),background var(--t-fast)}
+.power:checked{background:var(--acc);border-color:var(--acc)}
+.power:checked::after{transform:translate(16px,-50%);background:var(--acc-ink)}
+.power:focus-visible{outline:none;box-shadow:var(--shadow-focus)}
+.power:disabled{opacity:.5;cursor:not-allowed}
+
+/* ===== 分段器 ===== */
+.seg{display:inline-flex;align-items:center;gap:2px;padding:2px;background:var(--panel-inset);border:1px solid var(--line);border-radius:var(--r-pill);flex-wrap:wrap}
+.seg button{appearance:none;height:26px;padding:0 12px;border:1px solid transparent;border-radius:var(--r-pill);background:transparent;font-family:inherit;font-size:var(--fs-xs);font-weight:500;color:var(--dim);cursor:pointer;white-space:nowrap;transition:background var(--t-base) var(--ease),color var(--t-base) var(--ease)}
+.seg button:hover{color:var(--fg);background:var(--hover)}
+.seg button.active{background:var(--acc);color:var(--acc-ink)}
+.seg button:focus-visible{outline:none;box-shadow:var(--shadow-focus)}
+
+/* ===== details / 折叠 ===== */
+details{margin:var(--s3) 0 0;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--panel-inset)}
+summary{cursor:pointer;color:var(--dim-hi);font-size:var(--fs-xs);padding:8px var(--s3);list-style:none;display:flex;align-items:center;gap:6px;user-select:none}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"";width:0;height:0;border-left:4px solid var(--dim);border-top:3.5px solid transparent;border-bottom:3.5px solid transparent;transition:transform var(--t-fast)}
+details[open]>summary::before{transform:rotate(90deg)}
+summary:focus-visible{outline:none;box-shadow:var(--shadow-focus);border-radius:var(--r-sm)}
+summary .adv-sum{margin-left:auto;color:var(--dim-hi);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dbd{padding:var(--s2) var(--s3) var(--s3)}
+
+/* ===== 提示/错误/警示框 ===== */
+.hint{color:var(--dim);font-size:var(--fs-xs)}
+.mini{color:var(--acc-text);font-size:var(--fs-xs);cursor:pointer;background:none;border:none;padding:0;font-family:inherit;text-decoration:underline dotted;white-space:nowrap;flex:none}
+.err-box{background:var(--err-soft);border:1px solid var(--err-line);border-radius:var(--r-sm);padding:10px var(--s3);color:var(--err-ink);font-size:var(--fs-sm);white-space:pre-wrap;display:flex;gap:var(--s2);align-items:flex-start;margin:var(--s2) 0}
+.err-box .etx{flex:1;min-width:0;word-break:break-word}
+.warn-box{background:var(--warn-soft);border:1px solid var(--warn-line);border-radius:var(--r-sm);padding:8px var(--s3);color:var(--warn);font-size:var(--fs-sm);margin-top:var(--s2)}
+.copyline{font-family:var(--mono);font-size:var(--fs-xs);word-break:break-all;background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 10px;margin:var(--s2) 0;display:flex;align-items:center;gap:var(--s2)}
+.copyline .t{flex:1;min-width:0;color:var(--fg)}
+.copybtn{flex:none;height:20px;padding:0 8px;font-size:11px;line-height:1;border-radius:var(--r-sm);border:1px solid var(--line-ctrl);background:transparent;color:var(--dim-hi);cursor:pointer;font-family:inherit;transition:color var(--t-fast),border-color var(--t-fast)}
+.copybtn:hover{color:var(--fg);border-color:var(--dim)}
+
+/* ===== 任务卡 / 结果 ===== */
+.task-card{border:1px solid var(--line);border-radius:var(--r-sm);padding:var(--s3);margin:var(--s3) 0;background:var(--panel-inset)}
+.task-card .hd{display:flex;gap:var(--s3);align-items:center;flex-wrap:wrap;font-size:var(--fs-xs);color:var(--dim)}
+.task-card .hd b{color:var(--fg)}
+.runline{display:flex;align-items:center;gap:var(--s2);color:var(--dim);font-size:var(--fs-sm);margin:var(--s2) 0}
+.md{font-size:var(--fs-sm);line-height:var(--lh-base);overflow-wrap:break-word}
+.md h1,.md h2,.md h3{margin:.7em 0 .35em;font-size:1.05em}
+.md pre{margin:.5em 0}
+.md code{background:var(--panel-inset);padding:1px 5px;border-radius:var(--r-sm);font-family:var(--mono);font-size:.92em}
+.md pre code{background:none;padding:0}
+.md ul{margin:.4em 0;padding-left:1.4em}
+.md a{color:var(--acc-text)}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;overflow:auto;font-size:var(--fs-xs);font-family:var(--mono);margin:var(--s2) 0}
+.mdwrap{position:relative;margin-top:var(--s2)}
+.mdwrap.clamp{max-height:12.5em;overflow:hidden}
+.mdwrap.clamp::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3em;background:linear-gradient(var(--panel-fade),var(--panel))}
+.expand{margin-top:4px}
+
+/* ===== 批量任务行 ===== */
+.fan-row{display:grid;grid-template-columns:140px 110px 86px minmax(0,1fr) 34px;gap:var(--s2);margin-bottom:var(--s2)}
+.fan-row textarea{min-height:44px}
+.fan-row .fan-del{height:32px;padding:0;border:1px solid var(--line-strong);background:transparent;color:var(--dim);border-radius:var(--r-sm);cursor:pointer;font-size:var(--fs-sm)}
+.fan-row .fan-del:hover{color:var(--err);border-color:var(--err-ctrl)}
+
+/* ===== v6：历史行内详情 + L1 工具轨迹 ===== */
+tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var(--panel-inset);border-top:1px dashed var(--line-strong)}
+.job-inline-card{border:1px solid var(--line);border-radius:var(--r-md);background:var(--panel);padding:var(--s2) var(--s3) var(--s3);margin:var(--s1) 0 0;min-width:0;overflow:hidden}
+.trace-box{border:1px dashed var(--line-strong);border-radius:var(--r-sm);padding:6px var(--s3);margin:var(--s2) 0;font-size:var(--fs-xs);color:var(--dim)}
+.trace-box summary{cursor:pointer;color:var(--dim-hi)}
+.trace-box pre{margin:var(--s2) 0 2px;white-space:pre-wrap;word-break:break-all;color:var(--dim)}
+
+/* ===== 空态 / 体检分组 ===== */
+.empty{padding:var(--s5) var(--s4);text-align:center}
+.empty .e1{font-size:var(--fs-md);color:var(--fg);font-weight:500}
+.empty .e2{color:var(--dim);font-size:var(--fs-sm);margin:6px 0 var(--s4)}
+.cnt{display:inline-flex;min-width:18px;height:18px;align-items:center;justify-content:center;padding:0 5px;border-radius:var(--r-pill);font-size:11px;background:var(--neutral-soft);color:var(--dim-hi)}
+.cnt-err{background:var(--err-soft);color:var(--err)}
+.cnt-ok{background:var(--ok-soft);color:var(--ok)}
+.dg-err{border-color:var(--err-line)}
+.dg-err>summary{color:var(--err)}
+.dstep{display:grid;grid-template-columns:minmax(0,190px) minmax(0,1fr) auto;gap:var(--s2);padding:4px 0;font-size:var(--fs-xs);align-items:baseline}
+.dstep .dn{color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dstep .dd{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+
+/* ===== toast ===== */
+.toasts{position:fixed;right:var(--s5);bottom:var(--s5);z-index:9999;display:flex;flex-direction:column;align-items:flex-end;gap:var(--s2);pointer-events:none;max-width:min(420px,calc(100vw - var(--s5)*2))}
+.toast{pointer-events:auto;display:flex;align-items:flex-start;gap:var(--s2);min-width:220px;padding:10px var(--s3);background:var(--panel);color:var(--fg);border:1px solid var(--line-strong);border-left:3px solid var(--dim);border-radius:var(--r-md);box-shadow:var(--shadow-2);font-size:var(--fs-sm);line-height:var(--lh-base);animation:toast-in var(--t-slow) var(--ease) both}
+.toast.info{border-left-color:var(--acc)}
+.toast.success{border-left-color:var(--ok)}
+.toast.error{border-left-color:var(--err)}
+.toast__close{margin-left:auto;padding:0 4px;background:transparent;border:0;color:var(--dim);font-family:inherit;font-size:var(--fs-md);line-height:1;cursor:pointer;border-radius:var(--r-sm)}
+.toast__close:hover{color:var(--fg);background:var(--hover-soft)}
+.toast.leaving{animation:toast-out var(--t-base) var(--ease) both}
+@keyframes toast-in{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes toast-out{from{opacity:1;transform:none}to{opacity:0;transform:translateY(6px) scale(.98)}}
+@media (prefers-reduced-motion:reduce){.toast,.toast.leaving{animation-duration:1ms}.card:hover{transform:none}}
+
+.spin{display:inline-block;width:13px;height:13px;border:2px solid var(--dim);border-top-color:var(--acc);border-radius:50%;animation:sp 1s linear infinite;vertical-align:-2px;flex:none}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+@media (max-width:960px){
+  header{padding:var(--s2) var(--s4)}
+  header .meta{max-width:100%}
+  main{padding:var(--s4) var(--s3) var(--s5)}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>wbx 桥控制台</h1>
+  <span class="meta" id="hdr-meta">加载中…</span>
+  <nav>
+    <button data-tab="status" class="active">状态</button>
+    <button data-tab="run">调用</button>
+    <button data-tab="history">历史</button>
+    <button data-tab="login">登录</button>
+  </nav>
+  <button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换浅色/深色主题" title="切换浅色/深色主题（记忆在本浏览器）"><svg class="ico-moon" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" fill="currentColor"/></svg><svg class="ico-sun" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="4.4" fill="currentColor"/><g stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 2.6v2.4"/><path d="M12 19v2.4"/><path d="M2.6 12h2.4"/><path d="M19 12h2.4"/><path d="M5.3 5.3l1.7 1.7"/><path d="M17 17l1.7 1.7"/><path d="M18.7 5.3L17 7"/><path d="M7 17l-1.7 1.7"/></g></svg></button>
+</header>
+<main>
+
+<section id="tab-status" class="on">
+  <div class="card ovw" id="ovw" hidden></div>
+  <div class="card" id="status-error" hidden><div class="card__bd" id="status-error-bd"></div></div>
+  <!-- 豆包为第四 lane：卡由 doubaoCardHtml() 渲染进 #lane-cards grid（无静态 #doubao-card） -->
+  <div class="grid3" id="lane-cards"></div>
+  <p class="hint" style="margin:0 0 var(--s4)">可安装为桌面应用：浏览器菜单 → 安装应用 / 创建快捷方式，即可像软件一样在独立窗口使用（数据仍只在本机 127.0.0.1）。</p>
+  <div class="card">
+    <div class="card__hd"><span class="card__title">路由</span></div>
+    <div class="card__bd">
+      <div class="row">
+        <span class="seg" id="route-pill">
+          <button data-v="auto">自动（Codex 就绪即优先，否则免费档）</button>
+          __WBX_LANE_ROUTE_BUTTONS__
+        </span>
+      </div>
+      <div class="hint" id="route-hint" style="margin-top:8px"></div>
+      <div class="warn-box" id="route-warn" hidden></div>
+      <div class="hint" style="margin-top:8px">写 <b>config.json</b>（default-lane / disabled-lanes），体检、单条调用、批量并行、回退链即时生效；通道停用开关在各通道卡右上角。路由三分（v21）：单发自动=Codex 就绪即质量档优先；批量缺省=免费池（Codex 不进缺省池，任务级点名才投）；回退链：cn → ai → cline → Codex → 豆包（免费优先，Plus 额度与会员档排后）。</div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card__hd"><span class="card__title">体检</span><span class="card__sub">doctor</span></div>
+    <div class="card__bd" id="doctor-zone"></div>
+  </div>
+
+</section>
+
+<section id="tab-run">
+  <div class="card">
+    <div class="card__hd">
+      <span class="card__title">调用</span>
+      <div class="seg right" id="run-mode">
+        <button data-v="ask" class="active">单条调用（ask）</button>
+        <button data-v="fanout">批量并行（fanout）</button>
+      </div>
+    </div>
+    <div class="card__bd">
+      <div id="ask-pane">
+        <textarea id="ask-prompt" placeholder="提示词（完整 worker 提示词：角色+任务+材料+输出硬约束+无工具声明）"></textarea>
+        <div class="row">
+          <span class="seg" id="ask-lane-seg">
+            <button data-v="" class="active">自动</button>
+            __WBX_LANE_SHORT_BUTTONS__
+          </span>
+          <button class="btn-primary" id="ask-btn">执行单条调用</button>
+        </div>
+        <details id="ask-adv">
+          <summary>高级<span class="adv-sum" id="ask-adv-sum"></span></summary>
+          <div class="dbd">
+            <div class="row">
+              <label>能力集
+                <select id="ask-caps" title="能力集（v19 能力矩阵）：net=联网、read=读 scratch、write=写（本轮未交付）；逗号组合、序无关；L0=∅ 纯文本、L1=net,read">
+                  <option value="L0">L0 纯文本</option>
+                  <option value="L1">L1 = net,read（联网+只读）</option>
+                  <option value="net">net 仅联网</option>
+                  <option value="read">read 仅只读</option>
+                  <option value="net,read">net,read（同 L1）</option>
+                  <option value="net,read,write" disabled title="含 write 本轮未交付：探针 P3 沙箱前提破裂，声明即报 caps-write-disabled">net,read,write（未交付）</option>
+                  <option value="L2" disabled title="L2 本版未交付：上游 cline 无命令级权限管控，六层防护栈缺层不交付">L2（未交付）</option>
+                </select></label>
+              <label>思考档
+                <select id="ask-effort">
+                  <option value="">默认</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option>
+                </select></label>
+              <label>模型 <input type="text" id="ask-model" placeholder="默认取 config.model" style="width:170px"></label>
+              <label>超时(s) <input type="text" id="ask-timeout" value="" placeholder="缺省" style="width:70px" title="留空=桥按能力集缺省（∅=300s / 能力任务=600s）；填数字=显式值最高优先"></label>
+            </div>
+            <p class="hint" id="ask-caps-hint" style="display:none;margin-top:4px">能力集 = net（联网搜索）+ read（只读工具）逗号组合，仅 WorkBuddy AI / 国内版通道；轨迹与来源清单落盘；缺省超时 600s（显式 --timeout 最高优先）。write 本轮未交付（声明即报错）。</p>
+          </div>
+        </details>
+      </div>
+      <div id="fan-pane" hidden>
+        <div id="fan-rows"></div>
+        <div class="row">
+          <button class="btn-ghost" id="fan-add">+ 添加任务行</button>
+          <button class="btn-primary right" id="fan-btn">执行批量并行</button>
+        </div>
+        <details id="fan-adv">
+          <summary>高级<span class="adv-sum" id="fan-adv-sum"></span></summary>
+          <div class="dbd">
+            <div class="row">
+              <label>每通道并发 <input type="text" id="fan-parallel" value="2" style="width:60px"></label>
+              <label>超时(s) <input type="text" id="fan-timeout" value="300" style="width:70px"></label>
+            </div>
+          </div>
+        </details>
+      </div>
+      <div id="run-out"></div>
+    </div>
+  </div>
+</section>
+
+<section id="tab-history">
+  <div class="card">
+    <div class="card__hd">
+      <span class="card__title">任务历史</span>
+      <span class="card__sub">新 jobs/ + 旧 tasks/ 兼容</span>
+      <span class="right" style="display:inline-flex;gap:10px;align-items:center">
+        <span class="hint" id="hist-count"></span>
+        <button class="btn-ghost" id="hist-refresh">刷新</button>
+      </span>
+    </div>
+    <div class="card__bd">
+      <div class="tbl-wrap"><table class="tbl" id="hist-table">
+        <colgroup><col style="width:168px"><col style="width:112px"><col style="width:72px"><col style="width:72px"><col></colgroup>
+        <thead><tr><th>时间</th><th>类型</th><th class="num">任务数</th><th class="num">成功率</th><th>任务 ID</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+      <p class="hint" style="margin-top:8px">点击行内任意位置，详情直接展开在该行下方；再点收起。任务 ID 列点击复制。</p>
+    </div>
+  </div>
+</section>
+
+<section id="tab-login">
+  <div class="card">
+    <div class="card__hd"><span class="card__title">登录引导</span><span class="card__sub">WorkBuddy SSO 凭证约 55 天有效</span></div>
+    <div class="card__bd">
+      <button class="btn-primary btn-block" id="login-ai"><span class="spin" hidden></span><span>登录 WorkBuddy AI（国际版 · 邮箱 / OneID）</span></button>
+      <button class="btn-primary btn-block" id="login-cn"><span class="spin" hidden></span><span>登录 WorkBuddy（国内版 · 微信扫码）</span></button>
+      <div id="login-out"></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card__bd" style="padding:0">
+      <details id="cline-guide">
+        <summary>命令行登录（备用）· Cline CLI（可选通道）</summary>
+        <div class="dbd">
+          <p class="hint">Cline 登录是设备码流程，需在终端里跑（浏览器完成授权，凭证落隔离目录 <b>&lt;运行时根&gt;/cline-home/</b>，与用户 ~/.cline 无关）：</p>
+          <div class="copyline"><span class="t">__WBX_ENTRY_CMD__ login --identity cline</span><button class="copybtn" data-copy='__WBX_ENTRY_CMD__ login --identity cline'>复制</button></div>
+          <p class="hint">登录后默认免费调 DeepSeek（cline-free/deepseek-v4.1-flash 孪生，限时轮换+每日配额）；
+          免费模型可在「状态」页 Cline 卡下拉选择，或 <b>wbx models --as cline --free</b> 查清单后 config set。
+          思考档默认 xhigh / 上下文压缩默认 off / 并发默认 1。
+          隐私注：免费用量可能被 Cline 用于改进模型（官方披露）。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card__bd" style="padding:0">
+      <details id="doubao-guide">
+        <summary>豆包（桌面端）· 无需在此登录</summary>
+        <div class="dbd">
+          <p class="hint">豆包已是第四 lane（可选，耗会员额度，路由/回退/批量调度均可用），但<b>登录仍在豆包桌面客户端内自理、桥侧零凭证</b>——本页与桥都不读写任何豆包账号信息，也没有「登录豆包」流程。桥只需要豆包以调试端口 9225 运行，启动方式：</p>
+          <div class="copyline"><span class="t">__WBX_DOUBAO_LAUNCH_CMD__ -Force</span><button class="copybtn" data-copy='__WBX_DOUBAO_LAUNCH_CMD__ -Force'>复制</button></div>
+          <p class="hint">装过 self-install 后任何项目任何目录可用（上面为 cmd 写法，PowerShell 把 %USERPROFILE% 换成 $env:USERPROFILE、Git Bash 换成 ~；-Force 会在豆包已运行时先结束它们，请先保存未发送的草稿）。连接是否就绪，到「状态」页<b>豆包（桌面端）</b>通道卡看探针（客户端进程 + 调试口 9225）。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card__bd" style="padding:0">
+      <details id="codex-guide">
+        <summary>Codex CLI（ChatGPT Plus·可选通道）· 命令行收割凭证</summary>
+        <div class="dbd">
+          <p class="hint">Codex 是第五 lane（ChatGPT Plus 质量优先档：单发 ask 默认优先；额度耗尽自动冷却让位）。登录在 Codex 桌面版或 codex CLI 里完成（ChatGPT 账号），桥侧只做<b>一次性只读复制</b>凭证（不回写、不展示、不入库；除 auth.json 单文件外不读 ~/.codex 任何内容）：</p>
+          <div class="copyline"><span class="t">__WBX_ENTRY_CMD__ login --identity codex</span><button class="copybtn" data-copy='__WBX_ENTRY_CMD__ login --identity codex'>复制</button></div>
+          <p class="hint">收割后到「状态」页 Codex 通道卡确认已登录（模型 gpt-6.1-sol，仅放行 gpt-6 及以上——用户裁决底线护栏）。Codex 侧令牌刷新导致桥内副本失联时，重跑上面命令加 --force 重新收割即可修复。</p>
+        </div>
+      </details>
+    </div>
+  </div>
+</section>
+
+</main>
+<div class="toasts" id="toasts"></div>
+<script>
+'use strict';
+// ---------- 渲染层中文化映射表（冻结术语：只改排布/密度/编码不改译法；数据值/config 键/API 字段一律不动） ----------
+const LANE_LABEL={codex:'Codex',ai:'WorkBuddy AI',cn:'WorkBuddy',cline:'Cline',doubao:'豆包',auto:'自动'};            // 短称：下拉/表格列/回退
+const LANE_TITLE={codex:'Codex CLI（ChatGPT Plus·可选通道）',ai:'WorkBuddy AI（国际版）',cn:'WorkBuddy（国内版）',cline:'Cline CLI（可选通道）',doubao:'豆包（桌面端）'}; // 全称：卡片标题
+const TYPE_LABEL={ask:'单条调用',fanout:'批量并行',unknown:'未知'};                        // 历史「类型」列（键集=UI 契约 D2 冻结集）
+const TASK_STATUS_LABEL={success:'成功',failed:'失败'};
+const JOB_STATUS_LABEL={done:'已完成',running:'进行中',pending:'等待中'};
+const LANE_ORDER_UI=['__WBX_LANE_ORDER_UI__'];   // 自 core LANE_ORDER 派生（lane 集合唯一来源）
+const FAN_LANE_LABELS=Object.assign({},LANE_LABEL,{codex:'Codex（点名）'});   // 除 codex 点名外全部继承 LANE_LABEL（字典单源化第一步，v23 评审）
+function fanLaneOptions(sel){var o='<option value="">自动（免费池）</option>';LANE_ORDER_UI.forEach(function(k){o+='<option value="'+k+'"'+(sel===k?' selected':'')+'>'+FAN_LANE_LABELS[k]+'</option>'});return o}
+const BS=String.fromCharCode(92); // 反斜杠常量（模板字符串安全，不写反斜杠字面量）
+const WBX_PS='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs'; // 全局入口命令前缀（cmd 写法）
+function lsGet(k){try{return localStorage.getItem(k)}catch(e){return null}}   // 隐私模式等存储不可用：降级不抛
+function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){/* 不阻塞主流程 */}}
+function laneLabel(k){return LANE_LABEL[k]||k||''}
+function laneTitle(k){return LANE_TITLE[k]||LANE_LABEL[k]||k||''}
+function typeLabel(t,legacy){return (legacy?'旧版·':'')+(TYPE_LABEL[t]||t||'')}
+function taskStatusLabel(s){return TASK_STATUS_LABEL[s]||s||''}
+function jobStatusLabel(s){return JOB_STATUS_LABEL[s]||s||''}
+function fallbackText(from,to){return from?(laneLabel(from)+' → '+laneLabel(to)):laneLabel(to)}
+// 超额状态机的 UI 侧提示（与 CLI hintText 同源语义；原始错误原文保留，只追加友好提示）
+function errorHint(text){
+  var t=String(text||'');
+  if(/ChatGPT Plus 额度耗尽|额度冷却/i.test(t))return '（Plus 额度冷却中 → auto 路由已自动改投免费 lane；稍后再试，余额以 ChatGPT 网页端 Settings→Usage 为准）';
+  if(/Daily free model limit reached/i.test(t))return '（Cline 免费额度今日已达上限 → 稍后再试，或到「状态」页 Cline 卡换免费模型）';
+  if(/Free model promotion ended/i.test(t))return '（该免费模型促销已结束/被轮换下线 → 到「状态」页 Cline 卡换当前免费模型）';
+  if(/model not found|not a valid model/i.test(t))return '（模型 id 不存在或已被轮换下线 → 到「状态」页 Cline 卡换当前免费模型）';
+  if(/调试口不可达|CDP 不可达/i.test(t))return '（豆包客户端未以调试口运行 → 到「状态」页豆包卡复制 launch.ps1 拉起，或跑 wbx doctor 看豆包段）';
+  return '';
+}
+// ---------- 基础工具 ----------
+const $=(id)=>document.getElementById(id);
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function fmtMs(ms){return ms==null?'?':(ms/1000).toFixed(1)+'s'}
+function baseName(p){const segs=String(p||'').split(BS).join('/').split('/');return segs[segs.length-1]||String(p||'')}
+function shortRoot(p){const segs=String(p||'').split(BS);return segs.length>1?'…'+BS+segs[segs.length-1]:String(p||'')}
+function copyBtn(t){return '<button class="copybtn" data-copy="'+esc(t)+'">复制</button>'}
+function errBox(t){return '<div class="err-box"><span class="etx">'+esc(t)+'</span>'+copyBtn(t)+'</div>'}
+async function api(method,url,body){
+  const opt={method,headers:{}};
+  if(body!==undefined){opt.headers['content-type']='application/json';opt.body=JSON.stringify(body)}
+  const r=await fetch(url,opt);
+  let j=null;try{j=await r.json()}catch(e){}
+  if(!r.ok)throw new Error((j&&j.error)||('HTTP '+r.status));
+  return j;
+}
+// ---------- toast（替代全部 alert；error 常驻+关闭钮） ----------
+function toast(msg,type){
+  const t=document.createElement('div');
+  t.className='toast '+(type||'info');
+  t.innerHTML='<span>'+esc(msg)+'</span>'+((type==='error')?'<button class="toast__close" aria-label="关闭">×</button>':'');
+  $('toasts').appendChild(t);
+  const kill=()=>{t.classList.add('leaving');setTimeout(()=>t.remove(),320)};
+  if(type!=='error')setTimeout(kill,4000);
+  const c=t.querySelector('.toast__close');if(c)c.onclick=kill;
+}
+async function copyText(t){
+  t=String(t==null?'':t);
+  try{await navigator.clipboard.writeText(t);toast('已复制','success')}
+  catch(e){
+    try{const ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();toast('已复制','success')}
+    catch(e2){toast('复制失败','error')}
+  }
+}
+// ---------- 极简 markdown 渲染（标题/粗斜体/行内代码/围栏代码/链接/列表/引用） ----------
+function md(src){
+  var t=String(src==null?'':src);
+  t=esc(t);
+  var parts=t.split(/\x60\x60\x60/); // 占位：围栏代码
+  var out=[];
+  for(var i=0;i<parts.length;i++){
+    if(i%2===1){out.push('<pre><code>'+parts[i].replace(/^\w*\n/,'')+'</code></pre>');continue}
+    var s=parts[i];
+    s=s.replace(/^(#{1,4})\s+(.+)$/gm,function(m,h,txt){return '<h'+h.length+'>'+txt+'</h'+h.length+'>'});
+    s=s.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+    s=s.replace(/(^|\W)\*([^*\n]+)\*(?=\W|$)/g,'$1<i>$2</i>');
+    s=s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s=s.replace(/(^|\s)\x60([^\x60]+)\x60/g,'$1<code>$2</code>');
+    s=s.replace(/^&gt;\s?(.*)$/gm,'<span class="hint">$1</span>');
+    var lines=s.split(/\n/),buf=[],inUl=false;
+    for(var k=0;k<lines.length;k++){
+      var L=lines[k];
+      var ul=/^\s*[-*]\s+/.exec(L);
+      var ol=/^\s*\d+\.\s+/.exec(L);
+      if(ul||ol){
+        if(!inUl){buf.push('<ul>');inUl=true}
+        buf.push('<li>'+L.replace(/^\s*(?:[-*]|\d+\.)\s+/,'')+'</li>');
+      }else{
+        if(inUl){buf.push('</ul>');inUl=false}
+        if(L.trim()==='')buf.push('');
+        else if(/^<h\d>/.test(L)||/^<(pre|ul|div|span class="hint")/.test(L))buf.push(L);
+        else buf.push('<p>'+L+'</p>');
+      }
+    }
+    if(inUl)buf.push('</ul>');
+    out.push(buf.join('\n'));
+  }
+  return '<div class="md">'+out.join('\n')+'</div>';
+}
+// ---------- 全局交互 ----------
+document.addEventListener('click',function(e){
+  const cb=e.target.closest('.copybtn');
+  if(cb){copyText(cb.getAttribute('data-copy'));return}
+  const g=e.target.closest('[data-goto-login]');
+  if(g){activateTab('login');return}
+});
+// details 折叠态同步 aria-expanded（toggle 不冒泡，用捕获阶段）
+document.addEventListener('toggle',function(e){
+  if(e.target&&e.target.tagName==='DETAILS')e.target.setAttribute('aria-expanded',e.target.open?'true':'false');
+},true);
+function initAria(){
+  document.querySelectorAll('details').forEach(function(d){d.setAttribute('aria-expanded',d.open?'true':'false')});
+}
+// 主题切换（v2.0.0）：FOUC 脚本已在首帧前设好 dataset.theme（localStorage wbx-theme，缺省 light）；
+// 这里只负责按钮反转 + 持久化（存储不可用时本次会话内仍生效，无 JS 时默认浅色即正确渲染）
+function initTheme(){
+  const b=$('theme-toggle');
+  const syncMeta=function(){
+    // theme-color 跟随当前主题 --bg（PWA/浏览器 chrome 用；值取自 token，哨兵块外零硬编码色）
+    const m=document.querySelector('meta[name="theme-color"]');
+    if(m){const bg=getComputedStyle(document.documentElement).getPropertyValue('--bg').trim();if(bg)m.setAttribute('content',bg);}
+  };
+  syncMeta();
+  if(!b)return;
+  b.onclick=function(){
+    const next=document.documentElement.dataset.theme==='dark'?'light':'dark';
+    document.documentElement.dataset.theme=next;
+    try{localStorage.setItem('wbx-theme',next)}catch(e){/* 隐私模式等存储不可用：不阻塞切换 */}
+    syncMeta();
+  };
+}
+function activateTab(name){
+  document.querySelectorAll('nav button').forEach(function(b){b.classList.toggle('active',b.dataset.tab===name)});
+  document.querySelectorAll('main section').forEach(function(s){s.classList.toggle('on',s.id==='tab-'+name)});
+  if(name==='history')loadHistory();
+  if(name==='status'){loadStatus();loadDoubao();loadBalance();}
+}
+document.querySelector('nav').addEventListener('click',function(e){
+  const b=e.target.closest('button');if(b&&b.dataset.tab)activateTab(b.dataset.tab);
+});
+// ---------- 结果 markdown 截断/展开 ----------
+function enhanceClamps(root){
+  root.querySelectorAll('.mdwrap.clamp').forEach(function(w){
+    if(w.dataset.enhanced)return;
+    if(w.scrollHeight<=w.clientHeight+4){w.classList.remove('clamp');return}
+    w.dataset.enhanced='1';
+    const btn=document.createElement('button');
+    btn.className='mini expand';btn.textContent='展开全文';
+    btn.onclick=function(){
+      const clamped=w.classList.toggle('clamp');
+      btn.textContent=clamped?'展开全文':'收起';
+    };
+    w.parentNode.insertBefore(btn,w.nextSibling);
+  });
+}
+// ---------- 通道分级模型（四态形状双编码 + 到期色阶 30/7/0；rank 越小越靠前=异常置顶） ----------
+function expiryTier(l){
+  const d=l.expiresInDays;
+  if(d==null)return null;
+  if(d<=0)return{t:'err'};
+  if(d<=7)return{t:'warn2',days:d};
+  if(d<=30)return{t:'warn',days:d};
+  return{t:'ok',days:d};
+}
+function laneTier(l){
+  if(l.disabled)return{rank:3,cls:'neutral',shape:'s-ring',label:'已停用',signal:'已停用'};
+  if(l.key==='cline'){
+    if(!l.installed)return{rank:3,cls:'absent',shape:'s-ring',label:'未安装（可选）',signal:'未安装'};
+    if(!l.credential)return{rank:2,cls:'warn',shape:'s-dia',label:'未登录（OAuth）',signal:'未登录'};
+    return{rank:4,cls:'ok',shape:'s-dot',label:'已登录',signal:'已登录'};
+  }
+  // codex 分支（第五 lane·Plus 质量档）四态：未装（absent）/未登录（warn，登录=收割 auth.json）/
+  // 冷却中（warn2，额度耗尽自动让位——laneReady=false 即 auto 路由跳过）/已登录（ok）
+  if(l.key==='codex'){
+    if(!l.installed)return{rank:3,cls:'absent',shape:'s-ring',label:'未安装（可选）',signal:'未安装'};
+    if(!l.credential)return{rank:2,cls:'warn',shape:'s-dia',label:'未登录（ChatGPT）',signal:'未登录'};
+    if(l.cooldown)return{rank:2,cls:'warn2',shape:'s-dia',label:'额度冷却中',signal:'冷却 '+l.cooldown.remainingMin+'m'};
+    return{rank:4,cls:'ok',shape:'s-dot',label:'已登录',signal:'已登录'};
+  }
+  // doubao 分支——静态读性=桥脚本可解析（win32+doubao.mjs）；桌面端进程/调试口 4 态由
+  // /api/doubao 探针细化（总览豆包 chip 与卡徽标走探针态），此处只兜底排序与聚合
+  if(l.key==='doubao'){
+    if(!l.ready)return{rank:3,cls:'absent',shape:'s-ring',label:'未安装（可选）',signal:'未安装'};
+    return{rank:4,cls:'ok',shape:'s-dot',label:'已就绪',signal:'已就绪'};
+  }
+  if(!l.ready)return{rank:0,cls:'err',shape:'s-sq',label:'未登录',signal:'未登录'};
+  const e=expiryTier(l);
+  if(e&&e.t==='err')return{rank:0,cls:'err',shape:'s-sq',label:'已过期',signal:'已过期'};
+  if(e&&e.t==='warn2')return{rank:1,cls:'warn2',shape:'s-dia',label:'将过期',signal:e.days+' 天'};
+  if(e&&e.t==='warn')return{rank:2,cls:'warn',shape:'s-dia',label:'将到期',signal:e.days+' 天'};
+  return{rank:4,cls:'ok',shape:'s-dot',label:'已登录',signal:e?e.days+' 天':'已登录'};
+}
+const EXP_COLOR={ok:'c-ok',warn:'c-warn',warn2:'c-warn2',err:'c-err'};
+// ---------- 状态页 ----------
+let CUR=null; // 最近一次 /api/status（停用开关即时写 config 用）
+let DOUBAO_LAST=null; // 最近一次 /api/doubao 探测 {win,running,online,unknown}（总览豆包 chip 用）
+let DOUBAO_RAW=null;  // 最近一次 /api/doubao 原始 payload（含 browser 字符串；豆包卡 proc/cdp 行回填用，v13）
+async function loadStatus(){
+  try{
+    const s=await api('GET','/api/status');
+    CUR=s;
+    $('hdr-meta').textContent='v'+s.version+' · '+(s.form==='global'?'全局形态':'项目形态')+' · '+shortRoot(s.runtimeRoot);
+    $('hdr-meta').title=String(s.runtimeRoot||'');
+    $('status-error').hidden=true;
+    renderOvw(s);
+    $('lane-cards').innerHTML=laneCardsHtml(s);
+    renderRoute(s);
+    paintDoubaoCard();   // lane-cards 渲染完回填豆包徽标（loadDoubao 先返回的竞态补画）
+    paintBalance();      // 同款竞态补画：loadBalance 先返回时余额行随卡渲染回填
+  }catch(e){
+    $('ovw').hidden=true;
+    $('lane-cards').innerHTML='';
+    $('status-error-bd').innerHTML=errBox('状态加载失败：'+e.message)+'<div class="row"><button class="btn-ghost" id="status-retry">重试</button></div>';
+    $('status-error').hidden=false;
+    $('status-retry').onclick=loadStatus;
+    $('hdr-meta').textContent='加载失败';
+  }
+}
+// ---------- 豆包桥工具卡（运行状态来自 /api/doubao，失败静默降级不 toast） ----------
+// badge/proc/cdp 随豆包 lane 卡动态渲染，与 loadStatus 存在竞态——paintDoubaoCard() 从
+// DOUBAO_LAST 回填，renderDoubao（探针返回时）与 loadStatus（lane-cards 渲染完时）双向调用，
+// 两边都未就绪时保留「检测中…」占位（元素不存在直接返回，不报错）。
+function paintDoubaoCard(){
+  const d=DOUBAO_LAST;
+  const bd=$('doubao-badge');
+  if(!bd)return;
+  const win=d?d.win:true;
+  const running=d?d.running:false;
+  const online=d?d.online:false;
+  // 徽标四态：未知/非 win32/进程不在 → absent；cdp → ok；进程在但没开调试口 → neutral
+  let cls='badge absent', label=(d&&d.unknown)?'状态未知':'豆包未运行';
+  if(!d||d.unknown){label='状态未知';}
+  else if(!win){label='仅 Windows';}
+  else if(online){cls='badge ok';label='调试口在线';}
+  else if(running){cls='badge neutral';label='未开调试口';}
+  bd.className=cls;bd.textContent=label;
+  // 客户端进程/调试口两行同源回填（DOUBAO_RAW 为 /api/doubao 原始 payload；未知态保留占位）
+  const pr=$('doubao-proc');
+  const cd=$('doubao-cdp');
+  const raw=DOUBAO_RAW;
+  if(pr&&raw){
+    pr.textContent=!raw.win?'非 Windows 平台，未探测':(raw.running?'Doubao.exe 运行中':'未检测到 Doubao.exe');
+  }
+  if(cd&&raw){
+    if(!raw.win)cd.textContent='非 Windows 平台，未探测';
+    else if(raw.online)cd.innerHTML='可达 · 127.0.0.1:9225'+(raw.browser?(' · <span class="mono">'+esc(raw.browser)+'</span>'):'');
+    else cd.textContent=raw.running?'127.0.0.1:9225 无响应':'127.0.0.1:9225 不可达';
+  }
+}
+async function loadDoubao(){
+  try{
+    const d=await api('GET','/api/doubao');
+    renderDoubao(d);
+  }catch(e){
+    // 降级：不弹 toast，控制台静默记一条；徽标 absent「状态未知」，动态槽写明失败原因（esc 过）
+    const why='状态未知：'+((e&&e.message)?e.message:String(e));
+    DOUBAO_LAST={win:true,running:false,online:false,unknown:true};
+    DOUBAO_RAW={win:true,running:false,online:false,unknown:true,why:why};
+    if(CUR)renderOvw(CUR);
+    paintDoubaoCard();
+    const pr=$('doubao-proc');
+    const cd=$('doubao-cdp');
+    if(pr)pr.innerHTML=esc(why);
+    if(cd)cd.innerHTML=esc(why);
+    if(window.console&&console.warn)console.warn('doubao: GET /api/doubao 失败 — '+why);
+  }
+}
+function renderDoubao(d){
+  d=d||{};
+  const win=(d.platform==='win32');
+  const running=(d.process===true);
+  const online=(d.cdp===true);
+  const browser=(typeof d.browser==='string')?d.browser.trim():'';
+  DOUBAO_LAST={win:win,running:running,online:online,unknown:false};
+  DOUBAO_RAW={win:win,running:running,online:online,browser:browser};
+  paintDoubaoCard();   // 徽标与 proc/cdp 随卡动态渲染，先画一次（卡未渲染时 paint 内部空转，loadStatus 渲染完补画）
+  if(CUR)renderOvw(CUR);   // 探测结果回填总览豆包 chip
+}
+// ---------- 余额行（v6.8；WorkBuddy 双 lane，/api/balance 失败降级不 toast） ----------
+// 与豆包卡同款竞态双向回填：paintBalance() 从 BAL_LAST 填 #lane-balance-<k>，
+// loadBalance（数据到达）与 loadStatus（lane-cards 渲染完）双向调用，未就绪保留「检测中…」。
+let BAL_LAST=null;
+function balanceCellHtml(b){
+  if(b&&b.state==='ok'){
+    const vtxt='<span class="num" title="剩余/总量（'+(b.packages||'?')+' 个套餐包）">'+esc(String(b.remain))+' / '+esc(String(b.total))+'</span> '+esc(b.unit||'credits');
+    return vtxt+' <span class="hint" title="数据源：社区 billing 端点（非官方，可能随上游改版失效）；截至 '+esc(String(b.asOf||'').replace('T',' ').slice(0,19))+'">非官方端点</span>';
+  }
+  if(b&&b.state==='na')return '<span class="hint">'+esc(b.hint||'无余额端点')+'</span>';
+  return '<span class="hint">暂无稳定查询端点（官方未提供）'+(b&&b.hint?'：'+esc(b.hint):'')+'</span>';
+}
+function paintBalance(){
+  if(!BAL_LAST)return;
+  for(const k of ['ai','cn']){
+    const el=$('lane-balance-'+k);
+    if(el)el.innerHTML=balanceCellHtml(BAL_LAST[k]);
+  }
+}
+async function loadBalance(){
+  try{
+    const b=await api('GET','/api/balance');
+    BAL_LAST=b.lanes||{};
+    paintBalance();
+  }catch(why){
+    if(window.console&&console.warn)console.warn('balance: GET /api/balance 失败 — '+why);
+    BAL_LAST=null;
+    for(const k of ['ai','cn']){
+      const el=$('lane-balance-'+k);
+      if(el)el.innerHTML='<span class="hint">查询失败（/api/balance 不可用）</span>';
+    }
+  }
+}
+function renderOvw(s){
+  const tiers=s.lanes.map(laneTier);
+  const worst=tiers.reduce(function(m,t){return t.rank<m.rank?t:m},tiers[0]);
+  const allOk=worst.rank===4;
+  const deg=tiers.filter(function(t){return t.rank===1||t.rank===2}).length;
+  const dis=s.lanes.filter(function(l){return l.disabled}).length;
+  let txt=(allOk?'一切正常 · ':'')+s.readyCount+' / '+LANE_ORDER_UI.length+' 通道可用';
+  if(deg>0)txt+=' · '+deg+' 个降级';
+  if(dis>0)txt+=' · '+dis+' 个已停用';
+  txt+=' · '+(s.defaultLane==='auto'?'自动路由 → '+laneLabel(s.effectiveLane):'固定路由 '+laneLabel(s.defaultLane));
+  const chipHtml=LANE_ORDER_UI.map(function(k){
+    if(k==='doubao')return doubaoChipHtml();   // 豆包 chip 走 /api/doubao 探针 4 态（比 laneTier 静态读性更细），锚点=新 lane 卡
+    const l=s.lanes.find(function(x){return x.key===k});
+    const t=laneTier(l);
+    const col=t.cls==='absent'?'c-neutral':'c-'+t.cls;
+    return '<a class="chip" href="#lane-card-'+k+'" title="跳到 '+esc(laneTitle(k))+' 卡片"><i class="shp '+t.shape+' '+col+'"></i>'+esc(laneLabel(k))+'<span class="sig">'+esc(t.signal)+'</span></a>';
+  }).join('');
+  const ovw=$('ovw');
+  ovw.className='card ovw t-'+(worst.cls==='absent'?'neutral':worst.cls);
+  ovw.innerHTML='<span class="concl">'+esc(txt)+'</span><span class="chips">'+chipHtml+'</span>';
+  ovw.hidden=false;
+}
+function doubaoChipHtml(){
+  const d=DOUBAO_LAST;
+  const sig=!d?'检测中':(d.unknown?'状态未知':(!d.win?'仅 Windows':d.online?'调试口在线':d.running?'未开调试口':'未运行'));
+  const cls=(!d||d.unknown)?'c-neutral':(d.online?'c-ok':(d.running?'c-warn2':'c-neutral'));
+  const shape=(!d||d.unknown)?'s-ring':(d.online?'s-dot':(d.running?'s-dia':'s-ring'));
+  return '<a class="chip" href="#lane-card-doubao" title="跳到 豆包（桌面端） 通道卡"><i class="shp '+shape+' '+cls+'"></i>豆包<span class="sig">'+esc(sig)+'</span></a>';
+}
+function laneCardsHtml(s){
+  const lanes=s.lanes.slice().sort(function(a,b){
+    const ra=laneTier(a).rank,rb=laneTier(b).rank;
+    return (ra-rb)||(LANE_ORDER_UI.indexOf(a.key)-LANE_ORDER_UI.indexOf(b.key));
+  });
+  return lanes.map(function(l){
+    if(l.key==='cline')return clineCardHtml(l,s);
+    if(l.key==='doubao')return doubaoCardHtml(l);   // 豆包 lane 卡渲染进 grid
+    if(l.key==='codex')return codexCardHtml(l);     // codex lane 卡（第五 lane·Plus 质量档）渲染进 grid
+    return wbCardHtml(l);
+  }).join('');
+}
+function wbCardHtml(l){
+  const t=laneTier(l);
+  const badge='<span class="badge '+t.cls+'">'+esc(t.label)+'</span>';
+  const costCls=l.key==='ai'?'acc':'neutral', costTxt=l.key==='ai'?'免费':'近免费';
+  let exp;
+  if(!l.expiresAt){exp='<span class="hint">—</span>'}
+  else{
+    const e=expiryTier(l), d=l.expiresInDays, date=l.expiresAt.slice(0,10);
+    let act='';if(d<=0)act=' <button class="mini" data-goto-login="1">重新登录</button>';
+    exp='<span class="'+(EXP_COLOR[e.t]||'c-ok')+'">'+(d<=0?'已过期':'约 '+d+' 天后过期')+'（'+date+'）</span>'+act;
+  }
+  const acct=(l.nickname||'')+(l.uinMasked?(' · uin '+l.uinMasked):'');
+  // 余额行（仅 WorkBuddy 双 lane 有余额数据源；值由 paintBalance() 从 /api/balance 双向回填）
+  const balRow=(l.key==='ai'||l.key==='cn')
+    ?'<span class="k">余额</span><span class="v" id="lane-balance-'+l.key+'"><span class="hint">检测中…</span></span>'
+    :'';
+  return '<div class="card'+(l.disabled?' off':'')+'" id="lane-card-'+l.key+'">'
+    +'<div class="card__hd"><span class="card__title">'+esc(laneTitle(l.key))+'</span>'+badge
+    +'<span class="card__sub" title="'+esc(acct)+'">'+esc(acct||'—')+'</span>'
+    +'<label class="pwr"><input type="checkbox" class="power" data-lane="'+l.key+'"'+(l.disabled?'':' checked')+' aria-label="启用或停用 '+esc(laneLabel(l.key))+'" title="停用 / 启用此通道（即时写 config）"></label></div>'
+    +'<div class="card__bd"><div class="kv">'
+    +'<span class="k">成本</span><span class="v"><span class="cost '+costCls+'" title="'+esc(l.cost)+'">'+costTxt+'</span></span>'
+    +'<span class="k">模型</span><span class="v"><span class="vtxt">DeepSeek V4.1 Flash</span></span>'
+    +'<span class="k">能力档</span><span class="v"><span class="vtxt" title="v19 能力矩阵：∅=纯文本零回退；net,read（L1 别名）=联网+只读；含 write 未交付">∅(L0) 纯文本 · net,read(L1) 联网+只读 · write 未交付</span></span>'
+    + balRow
+    +'<span class="k">凭证到期</span><span class="v">'+exp+'</span>'
+    +'</div>'
+    +'<details aria-expanded="false"><summary>详情与排障</summary><div class="dbd"><div class="kv">'
+    +'<span class="k">endpoint</span><span class="v"><span class="vtxt" title="'+esc(l.endpoint)+'">'+esc(l.endpoint)+'</span>'+copyBtn(l.endpoint)+'</span>'
+    +'<span class="k">登录模板</span><span class="v">'+(l.templateExists?'<span class="badge ok">有</span>':'<span class="badge warn">缺（启动一次桌面版）</span>')+'</span>'
+    +'</div></div></details></div></div>';
+}
+// 豆包第四 lane 卡。徽标=4 态探针（/api/doubao + loadDoubao()
+// 数据通路，badge/proc/cdp 三个 id 随卡迁入 grid，loadDoubao 无需改动）；详情保留 launch.ps1
+// 复制行、使用说明与排障、三处诚实声明全文；调度入口与手工直通（零落盘旁路）双入口并列。
+function doubaoCardHtml(l){
+  const badge='<span class="badge neutral" id="doubao-badge">检测中…</span>';
+  const askCmd=WBX_PS+'" ask --as doubao "任务文本"';
+  const doubaoAskCmd=WBX_PS+'" doubao ask "任务文本"';
+  const launchCmd='powershell -ExecutionPolicy Bypass -File "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'doubao'+BS+'launch.ps1" -Force';
+  const stCmd=WBX_PS+'" doubao status';
+  const ntCmd=WBX_PS+'" doubao new-task';
+  const cfgCmd=WBX_PS+'" doubao configure';
+  const sendCmd=WBX_PS+'" doubao send "任务文本"';
+  const rdCmd=WBX_PS+'" doubao read';
+  const hint2='（cmd 写法，PowerShell 把 %USERPROFILE% 换成 $env:USERPROFILE、Git Bash 换成 ~）';
+  return '<div class="card'+(l.disabled?' off':'')+'" id="lane-card-doubao">'
+    +'<div class="card__hd"><span class="card__title">'+esc(laneTitle('doubao'))+'</span>'+badge
+    +'<span class="card__sub">工作任务模式 · 桥侧零凭证</span>'
+    +'<label class="pwr"><input type="checkbox" class="power" data-lane="doubao"'+(l.disabled?'':' checked')+' aria-label="启用或停用 豆包" title="停用 / 启用此通道（即时写 config）"></label></div>'
+    +'<div class="card__bd"><div class="kv">'
+    +'<span class="k">成本</span><span class="v"><span class="cost neutral" title="消耗豆包会员额度（会员期内可用）；工作模式耗额度明显快于普通对话（官方口径）">会员额度</span></span>'
+    +'<span class="k">模型</span><span class="v"><span class="vtxt" title="模型与推理档由豆包桌面端工具自管理，任务级 --model/--effort 不生效">豆包 2.1 Pro · 推理高（工具自管理）</span></span>'
+    +'<span class="k">能力档</span><span class="v"><span class="vtxt">∅(L0) 纯文本（不承载任何能力集：豆包桌面 agent 不受桥控）</span></span>'
+    +'<span class="k">客户端进程</span><span class="v" id="doubao-proc">检测中…</span>'
+    +'<span class="k">调试口 9225</span><span class="v" id="doubao-cdp">检测中…</span>'
+    +'<span class="k">客户端拉起</span><span class="v"><button class="mini" id="doubao-ensure-btn" title="幂等确保豆包以调试口 9225 运行：已在线零触碰；未运行自动拉起；已运行无调试口则 -Force 重启（未发送草稿会丢失）">启动</button> <span class="hint">自动模式（doubao-autostart）下派发到达豆包 lane 时同样会自动确保</span></span>'
+    +'</div>'
+    +'<div class="copyline"><span class="t">'+esc(askCmd)+'</span>'+copyBtn(askCmd)+'</div>'
+    +'<p class="hint">调度入口（第四 lane，进历史记录；免费 lane 优先，豆包排回退链最末）'+hint2+'。</p>'
+    +'<details aria-expanded="false"><summary>使用说明与排障</summary><div class="dbd">'
+    +'<p class="hint">诚实声明（三处必读）：① 这是临时工具——依托豆包客户端当前 UI 结构（data-testid 锚点）工作，客户端升级随时可能失效；② Windows-only——依赖 Windows 进程模型、netstat 与 PowerShell，未在其他平台验证；③ 非官方——豆包官方未公开桌面端编程接口，本工具走 Chromium 官方调试开关（CDP）驱动已登录客户端，与字节跳动无关，不属于任何受支持的集成方式。</p>'
+    +'<p class="hint">前置条件：Windows 10/11 + Node.js ≥ 18（playwright-core 已随 doubao/ 目录复制，无需下载浏览器）；豆包桌面端已登录（登录态由你在豆包 GUI 内自理，本工具不做任何凭证自动化，脚本与文档零凭证）；豆包需以调试端口运行。工具位置：全局形态 ~/.zcode/wbx-bridge/doubao/（self-install 复制，v6.3 起）；本仓库开发形态 tools/doubao-bridge/。</p>'
+    +'<p class="hint">启动方式（检测到豆包已运行时，需 -Force 才会结束它们；请先保存豆包里未发送的草稿）：</p>'
+    +'<div class="copyline"><span class="t">'+esc(launchCmd)+'</span>'+copyBtn(launchCmd)+'</div>'
+    +'<div class="warn-box">调试口开放期间=本地攻击面：本机任意进程可经 9225 接管已登录客户端；launch.ps1 已校验只绑 127.0.0.1。用完正常退出豆包、再普通启动，即恢复无调试态。</div>'
+    +'<p class="hint">手工直通（零落盘旁路：不经调度、不入历史，个人对话用这条；分步命令同 doubao.mjs）：</p>'
+    +'<div class="copyline"><span class="t">'+esc(doubaoAskCmd)+'</span>'+copyBtn(doubaoAskCmd)+'</div>'
+    +'<p class="hint">装过 self-install 后任何项目任何目录可用。一条命令=新工作任务→显式配 Pro+推理「高」→发送→取回结果；本仓库开发形态仍可 cd tools/doubao-bridge/ 后 node doubao.mjs …。</p>'
+    +'<p class="hint">桥脚本位置（doubao.mjs 双候选：全局 ~/.zcode/wbx-bridge/doubao/ → 仓库 tools/doubao-bridge/）：</p>'
+    +'<div class="copyline"><span class="t">'+esc(l.bridgeDir||'未找到 doubao.mjs')+'</span>'+(l.bridgeDir?copyBtn(l.bridgeDir):'')+'</div>'
+    +'<p class="hint">分步命令速查（全局入口 = '+WBX_PS+'"，下同；仓库形态=cd tools/doubao-bridge/ 后 node doubao.mjs）：</p>'
+    +'<div class="copyline"><span class="t">'+esc(stCmd)+'</span>'+copyBtn(stCmd)+'</div>'
+    +'<p class="hint">status — CDP 是否可达、当前模型/推理档/环境。</p>'
+    +'<div class="copyline"><span class="t">'+esc(ntCmd)+'</span>'+copyBtn(ntCmd)+'</div>'
+    +'<p class="hint">new-task — 新建工作任务（注意：新会话会把推理档重置回「中」）。</p>'
+    +'<div class="copyline"><span class="t">'+esc(cfgCmd)+'</span>'+copyBtn(cfgCmd)+'</div>'
+    +'<p class="hint">configure — 显式选「豆包 2.1 Pro」+「高」（可 --model / --reasoning 覆盖）。</p>'
+    +'<div class="copyline"><span class="t">'+esc(sendCmd)+'</span>'+copyBtn(sendCmd)+'</div>'
+    +'<p class="hint">send — 发送（发送前自动重验配置，不符则先重配）。</p>'
+    +'<div class="copyline"><span class="t">'+esc(rdCmd)+'</span>'+copyBtn(rdCmd)+'</div>'
+    +'<p class="hint">read — 轮询取回最新回复（--wait-ms / --poll-ms 可调）。</p>'
+    +'<p class="hint">输出与退出码：所有命令输出单行 JSON；退出码 0 成功 / 2 锚点失配（立即停止，不硬重试）/ 3 CDP 不可达 / 4 配置校验失败 / 5 读结果超时 / 1 其他。</p>'
+    +'<p class="hint">已知坑（实测）：</p>'
+    +'<ul>'
+    +'<li class="hint">① 新会话可能重置推理档：点「新工作任务」后推理档可能从「高」跳回「中」（实测不稳定复现，模型档 Pro 一般保留）——所以 send/ask 在发送前都会重读状态栏并按需重配；直接手工操作时也请发送前瞄一眼状态栏。</li>'
+    +'<li class="hint">② 侧栏收起时：侧栏里的「新工作任务」按钮在视口外不可点——doubao.mjs 会自动回退到应用内置快捷键 Ctrl+N，并校验落入工作模式首页。</li>'
+    +'<li class="hint">③ 选择器脆弱：锚点均集中在 anchors.json（每锚点 ≥2 候选），豆包升级改 UI 即可能失配；全候选失配时 CLI 立即以退出码 2 停止，绝不盲目重试——按 README 锚点修复流程重跑勘探，更新 anchors.json 后再跑一次 status 与无害小任务验证。</li>'
+    +'<li class="hint">④ 单行道：工作模式与普通对话在会话中途不可互切（切了上下文作废）——工具只用「新工作任务」开新会话，不动你既有会话。</li>'
+    +'</ul>'
+    +'<p class="hint">工作模式耗额度明显快于普通对话（官方口径）。</p>'
+    +'</div></details></div></div>';
+}
+// codex 第五 lane 卡（ChatGPT Plus 质量优先档）。徽标=laneTier 四态（未装/未登录/冷却中/已登录）；
+// 冷却倒计时行来自 laneStatusInfo.cooldown；路由说明=单发默认优先·批量需点名（v21 D-036）。
+function codexCardHtml(l){
+  const t=laneTier(l);
+  const badge='<span class="badge '+t.cls+'">'+esc(t.label)+'</span>';
+  const loginCmd=WBX_PS+'" login --identity codex';
+  const askCmd=WBX_PS+'" ask --as codex "任务文本"';
+  const coolRow=l.cooldown
+    ?'<span class="k">额度冷却</span><span class="v"><span class="c-warn2">剩余约 '+esc(String(l.cooldown.remainingMin))+' 分钟（至 '+esc(String(l.cooldown.until).replace('T',' ').slice(0,19))+'）</span><span class="hint">——auto 路由/回退链跳过，显式点名放行</span></span>'
+    :'<span class="k">额度</span><span class="v"><span class="vtxt">5h 滚动窗口+周上限（余额以 ChatGPT 网页端 Settings→Usage 为准——无本地端点，诚实降级）</span></span>';
+  const binRow=l.binaryPath
+    ?'<span class="vtxt" title="'+esc(l.binaryPath)+'">'+esc(baseName(l.binaryPath))+'</span>'+copyBtn(l.binaryPath)
+    :'<span class="hint">未找到（安装 Codex 桌面版，或 config set codex-path）</span>';
+  return '<div class="card'+(l.disabled?' off':'')+'" id="lane-card-codex">'
+    +'<div class="card__hd"><span class="card__title">'+esc(laneTitle('codex'))+'</span>'+badge
+    +'<span class="card__sub">单发默认优先 · 批量需点名</span>'
+    +'<label class="pwr"><input type="checkbox" class="power" data-lane="codex"'+(l.disabled?'':' checked')+' aria-label="启用或停用 Codex" title="停用 / 启用此通道（即时写 config）"></label></div>'
+    +'<div class="card__bd"><div class="kv">'
+    +'<span class="k">成本</span><span class="v"><span class="cost neutral" title="ChatGPT Plus 会员额度（5 小时滚动窗口+每周上限）；耗尽自动冷却让位，冷却期路由跳过">ChatGPT Plus 额度</span></span>'
+    +'<span class="k">模型</span><span class="v"><span class="vtxt" title="模型经 config codex-model 管理（任务级不生效——Plus 额度保护）；底线护栏：仅放行 gpt-6 及以上主版本（用户 2026-10-14 裁决）">'+esc(l.model||'gpt-6.1-sol')+' · 推理 '+esc(l.reasoning||'medium')+'</span></span>'
+    +'<span class="k">能力档</span><span class="v"><span class="vtxt">∅(L0) 纯文本（不承载任何能力集：exec 沙箱与工具面不受桥控）</span></span>'
+    +coolRow
+    +'<span class="k">路由</span><span class="v"><span class="vtxt">单发 ask 默认优先（质量档）；fanout 批量默认免费池，任务级 as:"codex" 点名才投</span></span>'
+    +'</div>'
+    +'<div class="copyline"><span class="t">'+esc(askCmd)+'</span>'+copyBtn(askCmd)+'</div>'
+    +'<details aria-expanded="false"><summary>详情与排障</summary><div class="dbd"><div class="kv">'
+    +'<span class="k">二进制</span><span class="v">'+binRow+'</span>'
+    +'<span class="k">凭证收割</span><span class="v"><span class="vtxt" title="'+esc(loginCmd)+'">wbx login --identity codex（一次性只读复制 ~/.codex/auth.json）</span>'+copyBtn(loginCmd)+'</span>'
+    +'<span class="k">隔离</span><span class="v"><span class="vtxt">CODEX_HOME=桥隔离目录（--ephemeral --ignore-user-config 运行；除 auth.json 单文件一次性只读复制外 ~/.codex 零读取）</span></span>'
+    +'</div>'
+    +'<p class="hint">需先在 Codex 桌面版或 codex CLI 登录 ChatGPT 账号，再跑上面的凭证收割命令。Codex 侧令牌刷新导致失联（doctor 显示未登录）时，重跑收割命令 --force 即修复。长任务建议 --timeout 600（高推理档耗时更长）。</p>'
+    +'</div></details></div></div>';
+}
+function clineCardHtml(l,s){
+  const t=laneTier(l);
+  const badge='<span class="badge '+t.cls+'">'+esc(t.label)+'</span>';
+  const costTitle='cline-free 孪生，限时轮换+每日配额；计费 id 才按量扣费；免费用量可能被 Cline 用于改进模型（官方披露）';
+  const fmList=s.clineFreeModels||[];
+  let modelRow, freeRow;
+  if(!l.installed){
+    modelRow='<span class="vtxt c-warn">未安装（npm install -g cline）</span>';
+    freeRow='<span class="hint">—</span>';
+  }else{
+    modelRow='<span class="vtxt" title="'+esc(l.model||'')+'">'+esc(l.model||'provider 默认')+'</span> <button class="mini mini-open-free" title="在下方详情中选择免费模型">切换</button>';
+    freeRow=fmList.length?('<span class="num">'+fmList.length+' 个在档</span>'):('<span class="c-warn">清单不可用</span>');
+  }
+  let freeSel;
+  if(fmList.length){
+    const opts=fmList.map(function(fm){
+      const cur=(l.model||'')===fm.id;
+      return '<option value="'+esc(fm.id)+'"'+(cur?' selected':'')+'>'+esc(fm.id)+(fm.name?(' · '+esc(fm.name)):'')+(fm.deepseek?'':'（非 DeepSeek）')+'</option>';
+    }).join('');
+    freeSel='<span class="k">免费模型</span><span class="v"><select id="cline-free-select" style="min-width:0;width:100%">'+opts+'</select></span>'
+      +'<span class="k">说明</span><span class="v"><span class="hint vtxt">'+esc(s.clineFreeModelsNote||'切换即写 config cline-model')+'</span></span>';
+  }else{
+    freeSel='<span class="k">免费模型</span><span class="v"><span class="hint vtxt">清单不可用：'+esc(s.clineFreeModelsNote||'未知原因')+'；命令行：wbx models --as cline --free</span></span>';
+  }
+  const binRow=l.binaryPath
+    ?'<span class="vtxt" title="'+esc(l.binaryPath)+'">'+esc(baseName(l.binaryPath))+'</span>'+copyBtn(l.binaryPath)
+    :'<span class="hint">未找到（npm install -g cline）</span>';
+  const loginCmd=WBX_PS+'" login --identity cline';
+  return '<div class="card'+(l.disabled?' off':'')+'" id="lane-card-cline">'
+    +'<div class="card__hd"><span class="card__title">'+esc(laneTitle('cline'))+'</span>'+badge
+    +'<span class="card__sub">OAuth 设备授权</span>'
+    +'<label class="pwr"><input type="checkbox" class="power" data-lane="cline"'+(l.disabled?'':' checked')+' aria-label="启用或停用 Cline" title="停用 / 启用此通道（即时写 config）"></label></div>'
+    +'<div class="card__bd"><div class="kv">'
+    +'<span class="k">成本</span><span class="v"><span class="cost warn" title="'+esc(costTitle)+'">免费 · 限时配额</span></span>'
+    +'<span class="k">模型</span><span class="v">'+modelRow+'</span>'
+    +'<span class="k">能力档</span><span class="v"><span class="vtxt" title="L2 需上游命令级权限管控，六层防护栈缺层不交付（2026-09-25 裁决缓期）；write 本轮未交付（探针 P3 沙箱前提破裂）">∅(L0) 纯文本 · write/L2 未交付</span></span>'
+    +'<span class="k">免费组</span><span class="v">'+freeRow+'</span>'
+    +'</div>'
+    +'<details aria-expanded="false"><summary>详情与排障</summary><div class="dbd"><div class="kv">'
+    +freeSel
+    +'<span class="k">思考/压缩</span><span class="v">'+esc(l.thinking)+' / '+esc(l.compaction)+'</span>'
+    +'<span class="k">二进制</span><span class="v">'+binRow+'</span>'
+    +'<span class="k">登录方式</span><span class="v"><span class="vtxt" title="'+esc(loginCmd)+'">命令行 wbx login --identity cline</span>'+copyBtn(loginCmd)+'</span>'
+    +'</div></div></details></div></div>';
+}
+function renderRoute(s){
+  const pill=$('route-pill');
+  pill.querySelectorAll('button').forEach(function(b){b.classList.toggle('active',b.dataset.v===s.config['default-lane'])});
+  $('route-hint').textContent='当前生效默认路由：'+(s.defaultLane==='auto'?'自动 → '+laneLabel(s.effectiveLane):laneLabel(s.defaultLane))+'；可用通道：'+(s.readyCount>0?s.readyCount+' 个':'0 个');
+  const fix=s.config['default-lane'];
+  const fixedDisabled=(LANE_ORDER_UI.indexOf(fix)>=0)&&(s.lanes.find(function(l){return l.key===fix})||{}).disabled;
+  const w=$('route-warn');
+  if(fixedDisabled){
+    w.hidden=false;
+    w.innerHTML='固定路由指向已停用通道「'+esc(laneLabel(fix))+'」——回退链与体检会跳过它；建议改用自动路由，或到通道卡右上角重新启用。';
+  }else w.hidden=true;
+}
+// 通道卡事件（委托：电源开关/免费模型下拉/切换 mini）
+$('lane-cards').addEventListener('change',function(e){
+  const p=e.target.closest('.power');
+  if(p){
+    const key=p.dataset.lane;
+    const dis=(CUR&&CUR.config&&CUR.config['disabled-lanes']||[]).slice();
+    const i=dis.indexOf(key);
+    const wantOff=!p.checked;
+    if(wantOff&&i<0)dis.push(key);
+    if(!wantOff&&i>=0)dis.splice(i,1);
+    api('POST','/api/config',{key:'disabled-lanes',value:JSON.stringify(dis)}).then(function(){
+      toast(wantOff?('已停用 '+laneLabel(key)+'（即时生效）'):('已启用 '+laneLabel(key)), 'success');
+      loadStatus();
+    }).catch(function(err){toast('写入失败：'+err.message,'error');loadStatus()});
+    return;
+  }
+  if(e.target.id==='cline-free-select'){
+    const sel=e.target;
+    api('POST','/api/config',{key:'cline-model',value:sel.value}).then(function(){
+      toast('已切换至 '+sel.value+'（config cline-model）','success');
+      loadStatus();
+    }).catch(function(err){toast('切换失败：'+err.message,'error')});
+  }
+});
+$('lane-cards').addEventListener('click',function(e){
+  const m=e.target.closest('.mini-open-free');
+  if(m){
+    const card=m.closest('.card');
+    const det=card&&card.querySelector('details');
+    if(det){det.open=true;const sel=det.querySelector('#cline-free-select');if(sel)setTimeout(function(){sel.focus()},60)}
+  }
+  const ens=e.target.closest('#doubao-ensure-btn');
+  if(ens){
+    ens.disabled=true;ens.textContent='启动中…';
+    api('POST','/api/doubao/ensure').then(function(r){
+      const msg={online:'豆包调试口已在线（零触碰）',launched:'豆包已自动拉起（调试口就绪）',restarted:'豆包已重启（-Force；调试口就绪）',unavailable:'豆包桥不可用：'+(r.detail||'未找到 doubao.mjs'),failed:'自动拉起失败：'+(r.detail||'未知原因')}[r.action]||('完成：'+(r.action||'?'));
+      toast(msg,r.ok?'success':'error');
+    }).catch(function(err){toast('启动失败：'+err.message,'error')}).finally(function(){
+      ens.disabled=false;ens.textContent='启动';
+      loadDoubao();loadStatus();
+    });
+  }
+});
+$('route-pill').addEventListener('click',function(ev){
+  const b=ev.target.closest('button[data-v]');if(!b)return;
+  api('POST','/api/config',{key:'default-lane',value:b.dataset.v}).then(loadStatus).catch(function(e){toast('切换失败：'+e.message,'error')});
+});
+// ---------- 体检卡（空态三要素 + 结果三分组） ----------
+function renderDoctorEmpty(){
+  let lastTxt='';
+  const last=lsGet('wbx-doctor-last');
+  if(last){
+    const mins=Math.max(0,Math.round((Date.now()-new Date(last).getTime())/60000));
+    lastTxt=mins<1?'刚刚':(mins<60?mins+' 分钟前':(mins<1440?Math.round(mins/60)+' 小时前':Math.round(mins/1440)+' 天前'));
+  }
+  $('doctor-zone').innerHTML='<div class="empty">'
+    +'<div class="e1">尚未体检'+(lastTxt?'<span class="hint"> · 上次 '+lastTxt+'</span>':'')+'</div>'
+    +'<div class="e2">对每条通道发起一次真实调用（含模型探测），约 10–30 秒。</div>'
+    +'<button class="btn-primary" id="doctor-btn">一键体检</button></div>';
+}
+async function runDoctor(){
+  const z=$('doctor-zone');
+  z.innerHTML='<p class="runline"><span class="dot--running"></span>体检中（每通道一次 tiny ask，约 10–30s）…</p>';
+  try{
+    const d=await api('GET','/api/doctor?probe=1');
+    lsSet('wbx-doctor-last',new Date().toISOString());
+    renderDoctor(d);
+  }catch(e){z.innerHTML=errBox('体检失败：'+e.message)}
+}
+function renderDoctor(d){
+  const failed=d.steps.filter(function(st){return st.good===false});
+  const skipped=d.steps.filter(function(st){return st.good===null});
+  const passed=d.steps.filter(function(st){return st.good===true});
+  function group(cls,name,arr,open,copyable){
+    if(!arr.length)return'';
+    const rows=arr.map(function(st){
+      return '<div class="dstep"><span class="dn" title="'+esc(st.name)+'">'+esc(st.name)+'</span><span class="dd" title="'+esc(st.detail||'')+'">'+esc(st.detail||'')+'</span>'
+        +(copyable?copyBtn(st.name+'：'+(st.detail||'')):'')+'</div>';
+    }).join('');
+    const cntCls=cls==='dg-err'?'cnt-err':(cls==='dg-ok'?'cnt-ok':'');
+    return '<details class="dg '+cls+'"'+(open?' open':'')+'><summary>'+name+' <span class="cnt '+cntCls+'">'+arr.length+'</span></summary><div class="dbd">'+rows+'</div></details>';
+  }
+  $('doctor-zone').innerHTML='<div class="row" style="margin:0 0 8px"><span class="badge '+(d.ok?'ok':'err')+'">'+(d.ok?'通过':'未通过')+'</span><span class="hint">'+esc(shortRoot(d.runtimeRoot||''))+'</span></div>'
+    +group('dg-err','失败',failed,true,true)
+    +group('','跳过',skipped,false,false)
+    +group('dg-ok','通过',passed,false,false);
+}
+$('doctor-zone').addEventListener('click',function(e){
+  if(e.target.closest('#doctor-btn'))runDoctor();
+});
+// ---------- job 轮询 ----------
+function pollJob(jobId,onDone,onTick){
+  const timer=setInterval(function(){
+    api('GET','/api/job/'+jobId+'?brief=1').then(function(j){
+      if(onTick)onTick(j);
+      if(j.status==='done'){clearInterval(timer);api('GET','/api/job/'+jobId).then(onDone)}
+    }).catch(function(e){clearInterval(timer);onDone({error:e.message})});
+  },1000);
+}
+function taskHead(r){
+  if(!r)return '<span class="badge neutral">无记录</span>';
+  return '<span class="badge '+(r.status==='success'?'ok':'err')+'">'+esc(taskStatusLabel(r.status))+'</span>'
+    +(r.caps&&r.caps!=='L0'?'<span class="badge acc" title="能力集（v19 能力矩阵）">'+esc(r.caps)+'</span>':'')
+    +'<span>通道 <b>'+esc(fallbackText(r.fallbackFrom,r.lane))+'</b></span><span class="num">'+fmtMs(r.durationMs)+'</span>'
+    +'<span>尝试 '+r.attempts+'</span><span class="num">'+esc(r.model||'')+'</span>';
+}
+function taskBody(rec){
+  let h='';
+  if(rec&&rec.toolTrace&&rec.toolTrace.counts&&Object.keys(rec.toolTrace.counts).length){
+    const t=rec.toolTrace;
+    const line=Object.keys(t.counts).map(function(k){return esc(k)+'×'+t.counts[k]}).join('、');
+    const samples=(t.samples||[]).map(function(s){return esc(s)}).join('\n');
+    h+='<details class="trace-box" aria-expanded="false"><summary>工具轨迹：'+line+'</summary><div class="dbd"><pre>'+samples+'</pre></div></details>';
+  }
+  if(rec&&rec.result!=null)h+='<div class="mdwrap clamp">'+md(rec.result)+'</div>';
+  if(rec&&rec.error){
+    const hint=errorHint(rec.error);
+    h+=errBox(rec.error+(hint?' '+hint:''));
+  }
+  return h;
+}
+function jobFoot(j){
+  return '<div class="hint" style="margin-top:8px">任务 <span class="mono">'+esc(j.id)+'</span> · '+esc(j.dir)+' '+copyBtn('wbx history '+j.id)+'</div>';
+}
+// ---------- 调用页（模式分段器 + 高级折叠带摘要） ----------
+$('run-mode').addEventListener('click',function(e){
+  const b=e.target.closest('button[data-v]');if(!b)return;
+  $('run-mode').querySelectorAll('button').forEach(function(x){x.classList.toggle('active',x===b)});
+  $('ask-pane').hidden=b.dataset.v!=='ask';
+  $('fan-pane').hidden=b.dataset.v!=='fanout';
+});
+$('ask-lane-seg').addEventListener('click',function(e){
+  const b=e.target.closest('button[data-v]');if(!b)return;
+  $('ask-lane-seg').dataset.v=b.dataset.v;
+  $('ask-lane-seg').querySelectorAll('button').forEach(function(x){x.classList.toggle('active',x===b)});
+});
+function updAskSum(){
+  const e=$('ask-effort').value||'默认档';
+  const m=$('ask-model').value.trim()||'自动模型';
+  const traw=$('ask-timeout').value.trim();
+  const t=(traw&&parseInt(traw,10)>0)?(parseInt(traw,10)+'s'):'auto';
+  const c=$('ask-caps').value||'L0';
+  $('ask-adv-sum').textContent=c+' · '+e+' · '+m+' · '+t;
+  const hint=$('ask-caps-hint');if(hint)hint.hidden=!(c&&c!=='L0');
+}
+['ask-caps','ask-effort','ask-model','ask-timeout'].forEach(function(id){$(id).addEventListener('input',updAskSum);$(id).addEventListener('change',updAskSum)});
+function updFanSum(){
+  const p=parseInt($('fan-parallel').value,10)||2;
+  const t=parseInt($('fan-timeout').value,10)||300;
+  $('fan-adv-sum').textContent='并发 '+p+' · '+t+'s';
+}
+['fan-parallel','fan-timeout'].forEach(function(id){$(id).addEventListener('input',updFanSum);$(id).addEventListener('change',updFanSum)});
+$('ask-btn').onclick=function(){
+  const btn=this,prompt=$('ask-prompt').value.trim();
+  if(!prompt){toast('请输入提示词','error');return}
+  btn.disabled=true;
+  $('run-out').innerHTML='<p class="runline"><span class="dot--running"></span>执行中…</p>';
+  api('POST','/api/ask',{prompt:prompt,lane:$('ask-lane-seg').dataset.v||undefined,effort:$('ask-effort').value||undefined,
+    model:$('ask-model').value.trim()||undefined,caps:$('ask-caps').value||undefined,
+    timeout:parseInt($('ask-timeout').value,10)||undefined}).then(function(r){
+    pollJob(r.jobId,function(j){
+      btn.disabled=false;
+      const rec=j.tasks&&j.tasks[0]&&j.tasks[0].record;
+      let h='<div class="task-card"><div class="hd">'+taskHead(rec)+'</div>';
+      if(j.error)h+=errBox(j.error);
+      h+=taskBody(rec)+jobFoot(j)+'</div>';
+      $('run-out').innerHTML=h;
+      enhanceClamps($('run-out'));
+    },function(j){
+      $('run-out').innerHTML='<p class="runline"><span class="dot--running"></span>执行中… '+(j.done||0)+'/'+(j.total||'?')+'</p>';
+    });
+  }).catch(function(e){btn.disabled=false;$('run-out').innerHTML=errBox(e.message)});
+};
+// ---------- 批量并行 ----------
+let fanRows=[];
+let fanSeq=0;   // 单调递增：删行后 fanRows.length 会回退，length+1 生成重复 id（v23 评审 P2）
+function addFanRow(id,prompt,lane){
+  fanRows.push({id:id||('task-'+(++fanSeq)),prompt:prompt||'',lane:lane||''});
+  renderFanRows();
+}
+function renderFanRows(){
+  let h='';
+  for(let i=0;i<fanRows.length;i++){
+    const r=fanRows[i];
+    h+='<div class="fan-row">'
+      +'<input type="text" data-i="'+i+'" data-f="id" value="'+esc(r.id)+'" placeholder="任务 ID">'
+      +'<select data-i="'+i+'" data-f="lane">'+fanLaneOptions(r.lane)+'</select>'
+      +'<select data-i="'+i+'" data-f="caps" title="能力集（v19）：∅=L0 纯文本 / net,read=联网+只读（L1 别名，仅 WorkBuddy AI、国内版）/ 含 write 未交付"><option value=""'+(!r.caps?' selected':'')+'>L0</option><option value="net"'+(r.caps==='net'?' selected':'')+'>net</option><option value="read"'+(r.caps==='read'?' selected':'')+'>read</option><option value="net,read"'+(r.caps==='net,read'||r.caps==='L1'?' selected':'')+'>net,read</option></select>'
+      +'<textarea data-i="'+i+'" data-f="prompt" style="min-height:44px" placeholder="worker 提示词">'+esc(r.prompt)+'</textarea>'
+      +'<button class="fan-del" data-del="'+i+'" title="删除此任务行">×</button></div>';
+  }
+  $('fan-rows').innerHTML=h||'<p class="hint">（还没有任务行，点「+ 添加任务行」）</p>';
+  $('fan-rows').querySelectorAll('[data-f]').forEach(function(el){
+    el.oninput=function(){fanRows[+el.dataset.i][el.dataset.f]=el.value};
+    el.onchange=function(){fanRows[+el.dataset.i][el.dataset.f]=el.value};
+  });
+  $('fan-rows').querySelectorAll('[data-del]').forEach(function(el){
+    el.onclick=function(){fanRows.splice(+el.dataset.del,1);renderFanRows()};
+  });
+}
+$('fan-add').onclick=function(){addFanRow()};
+$('fan-btn').onclick=function(){
+  const btn=this;
+  const tasks=[];
+  for(let i=0;i<fanRows.length;i++){
+    const p=(fanRows[i].prompt||'').trim();
+    if(!p)continue;
+    tasks.push({id:fanRows[i].id||('task-'+(i+1)),prompt:p,as:fanRows[i].lane||undefined,caps:fanRows[i].caps||undefined});
+  }
+  if(!tasks.length){toast('至少要有一行带提示词的任务','error');return}
+  btn.disabled=true;
+  $('run-out').innerHTML='<p class="runline"><span class="dot--running"></span>执行中…</p>';
+  api('POST','/api/fanout',{tasks:tasks,parallel:parseInt($('fan-parallel').value,10)||undefined,
+    timeout:parseInt($('fan-timeout').value,10)||undefined}).then(function(r){
+    pollJob(r.jobId,function(j){
+      btn.disabled=false;
+      let h='<p class="runline">完成：成功 <b class="num">'+(j.ok==null?'?':j.ok)+'</b> / '+(j.total==null?'?':j.total)+'</p>';
+      (j.tasks||[]).forEach(function(task){
+        h+='<div class="task-card"><details><summary>任务 '+esc(task.id)+' · 提示词</summary><div class="dbd"><pre>'+esc(task.prompt||'')+'</pre></div></details>'
+          +'<div class="hd">'+taskHead(task.record)+'</div>'+taskBody(task.record)+'</div>';
+      });
+      if(j.error)h+=errBox(j.error);
+      h+=jobFoot(j);
+      $('run-out').innerHTML=h;
+      enhanceClamps($('run-out'));
+    },function(j){
+      $('run-out').innerHTML='<p class="runline"><span class="dot--running"></span>执行中… 完成 '+(j.done||0)+'/'+(j.total||'?')+'</p>';
+    });
+  }).catch(function(e){btn.disabled=false;$('run-out').innerHTML=errBox(e.message)});
+};
+// ---------- 历史（徽标化 + ID 可复制 + 手风琴单开） ----------
+async function loadHistory(){
+  try{
+    closeInlineDetail();
+    const h=await api('GET','/api/history');
+    const cnt='共 '+h.jobs.length+' 条';
+    $('hist-count').textContent=cnt;
+    $('hist-count').title='汇总全部历史任务（含旧版兼容目录）。';
+    const tb=$('hist-table').querySelector('tbody');
+    tb.innerHTML='';
+    h.jobs.forEach(function(j){
+      const tr=document.createElement('tr');
+      tr.dataset.id=j.id;
+      const when=j.createdAt?new Date(j.createdAt).toLocaleString('zh-CN',{hour12:false}):j.id;
+      const tcls=j.type==='ask'?'acc':'neutral';
+      tr.innerHTML='<td>'+esc(when)+'</td><td><span class="badge '+tcls+'">'+esc(typeLabel(j.type,j.legacy))+'</span></td>'
+        +'<td class="num">'+(j.total==null?'?':j.total)+'</td><td class="num">'+(j.successRate==null?'?':j.successRate+'%')+'</td>'
+        +'<td class="mono" title="点击复制 · wbx history 可回放">'+esc(j.id)+'</td>';
+      tb.appendChild(tr);
+    });
+    if(!h.jobs.length)tb.innerHTML='<tr><td colspan="5" class="hint" style="padding:16px">（空）</td></tr>';
+  }catch(e){toast('历史加载失败：'+e.message,'error')}
+}
+$('hist-refresh').onclick=loadHistory;
+$('hist-table').addEventListener('click',function(e){
+  const tr=e.target.closest('tr[data-id]');if(!tr)return;
+  if(e.target.closest('td.mono')){copyText(tr.dataset.id);return}
+  toggleJob(tr.dataset.id,tr);
+});
+// 行内详情：点击行 -> 详情 <tr> 插在该行正下方（手风琴单开，openJobId 语义沿用；页底卡已退役）
+let openJobId=null;
+function closeInlineDetail(){
+  const ex=document.querySelector('tr.job-inline');
+  if(ex)ex.remove();
+  openJobId=null;
+}
+async function toggleJob(id,row){
+  if(openJobId===id){closeInlineDetail();return}
+  closeInlineDetail();
+  try{
+    const j=await api('GET','/api/job/'+id);
+    openJobId=id;
+    const dist=Object.keys(j.laneDist||{}).map(function(k){return esc(laneLabel(k))+'×'+j.laneDist[k]}).join('、')||'—';
+    const capsSet={};(j.tasks||[]).forEach(function(t){if(t.record&&t.record.caps)capsSet[t.record.caps]=1});
+    const capsList=Object.keys(capsSet);
+    const capsRow=capsList.length?('<span class="k">能力集</span><span class="v">'+esc(capsList.join('、'))+'</span>'):'';
+    let h='<div class="card__hd"><span class="card__title">任务 '+esc(j.id)+'</span>'
+      +'<span class="badge '+(j.status==='done'?'ok':'acc run')+'">'+esc(jobStatusLabel(j.status))+'</span>'
+      +'<span class="card__sub">'+esc(typeLabel(j.type,j.legacy))+(j.legacy?'（旧 tasks/ 兼容）':'')+'</span>'
+      +'<span class="right hint">再点表行可收起</span></div>'
+      +'<div class="card__bd">'
+      +'<div class="sect">概览</div>'
+      +'<div class="kv">'
+      +'<span class="k">状态</span><span class="v">'+esc(jobStatusLabel(j.status))+'</span>'
+      +'<span class="k">成功率</span><span class="v">'+(j.successRate==null?'?':j.successRate+'%')+'</span>'
+      +capsRow
+      +'<span class="k">通道分布</span><span class="v"><span class="vtxt">'+dist+'</span></span>'
+      +'<span class="k">目录</span><span class="v"><span class="vtxt" title="'+esc(j.dir)+'">'+esc(j.dir)+'</span>'+copyBtn(j.dir)+'</span>'
+      +'</div>'
+      +'<div class="sect">任务</div>';
+    (j.tasks||[]).forEach(function(task){
+      h+='<div class="task-card"><details><summary>任务 '+esc(task.id)+' · 提示词</summary><div class="dbd"><pre>'+esc(task.prompt||'（无 tasks-input，旧格式）')+'</pre></div></details>'
+        +'<div class="hd">'+taskHead(task.record)+'</div>'+taskBody(task.record)+'</div>';
+    });
+    h+='<div class="sect">产物</div>';
+    if(j.summaryMd)h+='<details aria-expanded="false"><summary>summary.md</summary><div class="dbd"><pre>'+esc(j.summaryMd)+'</pre></div></details>';
+    h+='<div class="copyline"><span class="t">wbx history '+esc(j.id)+'（CLI 回放）</span>'+copyBtn('wbx history '+j.id)+'</div>';
+    h+='</div>';
+    const dtr=document.createElement('tr');
+    dtr.className='job-inline';
+    dtr.innerHTML='<td colspan="5"><div class="job-inline-card">'+h+'</div></td>';
+    row.parentNode.insertBefore(dtr,row.nextSibling);
+    enhanceClamps(dtr);
+  }catch(e){toast(e.message,'error')}
+}
+// ---------- 登录（状态内联：按钮 disabled + spinner + 文案） ----------
+let loginTimer=null;
+function setLoginBusy(busy){
+  ['login-ai','login-cn'].forEach(function(id){
+    const b=$(id);b.disabled=busy;
+    const sp=b.querySelector('.spin');if(sp)sp.hidden=!busy;
+  });
+}
+function startLoginUi(lane){
+  if(loginTimer){clearInterval(loginTimer);loginTimer=null}
+  setLoginBusy(true);
+  $('login-out').innerHTML='<p class="runline"><span class="dot--running"></span>正在申请登录…</p>';
+  api('POST','/api/login/start',{lane:lane}).then(function(r){
+    let h='<p>在浏览器完成登录（点击打开）：</p><p><a href="'+esc(r.authUrl)+'" target="_blank" rel="noopener">'+esc(r.authUrl)+'</a></p>';
+    if(r.tips&&r.tips.length){
+      h+='<p class="hint">遇到「登录失败」页时，把下面整行 URL 复制到地址栏回车：</p>';
+      r.tips.forEach(function(tp){h+='<div class="copyline"><span class="t">'+esc(tp)+'</span>'+copyBtn(tp)+'</div>'});
+    }
+    h+='<p id="login-status" class="runline"><span class="dot--running"></span>等待登录完成（每 2s 轮询，最长 5 分钟）…</p>';
+    $('login-out').innerHTML=h;
+    loginTimer=setInterval(function(){
+      api('GET','/api/login/poll').then(function(p){
+        const el=$('login-status');
+        if(!el){clearInterval(loginTimer);loginTimer=null;setLoginBusy(false);return}
+        if(p.status==='pending'){el.innerHTML='<span class="dot--running"></span>等待登录完成…（'+Math.round((Date.now()-p.startedAt)/1000)+'s）';return}
+        clearInterval(loginTimer);loginTimer=null;setLoginBusy(false);
+        if(p.status==='done'){
+          el.innerHTML='<span class="badge ok">登录成功</span> 通道 '+esc(laneLabel(p.lane))+'（'+esc(p.nickname||'')+'）· <a href="#" id="login-reload">刷新状态</a>';
+          const rl=$('login-reload');if(rl)rl.onclick=function(e){e.preventDefault();loadStatus();activateTab('status')};
+        }else if(p.status==='timeout'){
+          el.innerHTML='<span class="badge err">超时未完成</span> 请重新发起登录';
+        }else{
+          el.innerHTML='<span class="badge err">出错</span> '+esc(p.error||'');
+        }
+      }).catch(function(){});
+    },2000);
+  }).catch(function(e){setLoginBusy(false);$('login-out').innerHTML=errBox(e.message)});
+}
+$('login-ai').onclick=function(){startLoginUi('ai')};
+$('login-cn').onclick=function(){startLoginUi('cn')};
+// ---------- 启动 ----------
+initAria();
+initTheme();
+loadStatus();
+loadDoubao();
+loadBalance();
+renderDoctorEmpty();
+addFanRow('task-1','');
+addFanRow('task-2','');
+updAskSum();
+updFanSum();
+</script>
+</body>
+</html>

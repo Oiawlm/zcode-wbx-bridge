@@ -125,9 +125,16 @@ export function readUiState() {
   }
 }
 
+// 原子写原语（tmp+rename）：状态/宿主配置文件中途截断 = 守护失联或宿主 config 损坏（v23 评审 P1）
+function writeJsonAtomicSync(file, data) {
+  const tmp = file + '.wbx-tmp';
+  fs.writeFileSync(tmp, data, 'utf8');
+  fs.renameSync(tmp, file);
+}
+
 export function writeUiState(state) {
   fs.mkdirSync(UI_RUN_DIR, { recursive: true });
-  fs.writeFileSync(UI_STATE_FILE, JSON.stringify(state, null, 2) + '\n', 'utf8');
+  writeJsonAtomicSync(UI_STATE_FILE, JSON.stringify(state, null, 2) + '\n');
 }
 
 /** 仅当状态文件记录的 pid 与期望一致时删除（防止误删他人的新状态）。 */
@@ -148,7 +155,11 @@ export function appendUiLog(line) {
 }
 
 // config.json 写回（统一格式：JSON.stringify(cfg, null, 2) + 换行）
-const persist_ = (configPath, cfg) => fsp.writeFile(configPath, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+const persist_ = async (configPath, cfg) => {
+  const tmp = configPath + '.wbx-tmp';
+  await fsp.writeFile(tmp, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+  await fsp.rename(tmp, configPath);
+};
 
 // ---------- 探测 ----------
 
@@ -326,11 +337,11 @@ async function httpPostShutdown(port, token, timeoutMs = 3000) {
   }
 }
 
-export async function stopUi() {
+export async function stopUi({ port = UI_DEFAULT_PORT } = {}) {
   const { ok, state } = readUiState();
   if (!ok) {
-    const h = await fetchHealth(UI_DEFAULT_PORT);
-    if (h.ok) return { ok: false, message: `守护状态文件不存在，但 ${UI_DEFAULT_PORT} 端口有本控制台实例（pid ${h.pid}，可能是前台模式）——请在对应终端 Ctrl+C 退出` };
+    const h = await fetchHealth(port);
+    if (h.ok) return { ok: false, message: `守护状态文件不存在，但 ${port} 端口有本控制台实例（pid ${h.pid}，可能是前台模式）——请在对应终端 Ctrl+C 退出` };
     return { ok: true, message: '控制台未在运行（无状态文件）' };
   }
   // 1) HTTP 优雅关闭（带 token）

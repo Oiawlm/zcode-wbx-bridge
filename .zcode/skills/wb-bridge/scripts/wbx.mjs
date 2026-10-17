@@ -183,7 +183,10 @@ function hintText(r) {
 
 async function cmdAsk(opts) {
   let prompt = null;
-  if (opts.file) prompt = await fsp.readFile(path.resolve(opts.file), 'utf8');
+  if (opts.file) {
+    try { prompt = await fsp.readFile(path.resolve(opts.file), 'utf8'); }
+    catch (e) { die(`读取 --file 失败：${e.message}`); }
+  }
   else if (opts.prompt != null) prompt = opts.prompt;
   else if (opts.stdin) prompt = await readStdin();
   if (!prompt || !prompt.trim()) die('缺少提示词：用 --file <path>、--text "<prompt>" 或 --stdin 提供');
@@ -201,20 +204,22 @@ async function cmdAsk(opts) {
       timeoutS: opts.timeout ?? null,   // 缺省交由 core 超时单点决策（∅=300s / 能力任务=600s；显式值最高优先）
       caps: opts.caps || null,
       maxTurns: opts.maxTurns ?? null,
+      ephemeral: !!opts.ephemeral,
     });
+    const jobNote = r.jobDir ? `[job] 记录 -> ${r.jobDir}` : '[job] --ephemeral：真实执行零落盘（不入历史）';
     if (r.ok) {
-      console.error(`[OK] lane=${r.lane} model=${r.model} 耗时=${fmtMs(r.durationMs)} tokens(in/out)=${r.usage ? `${r.usage.in ?? '?'}/${r.usage.out ?? '?'}` : '—（无用量计量）'}${r.caps && r.caps !== 'L0' ? ` caps=${r.caps}` : ''}`);
+      console.error(`[OK] lane=${r.lane} model=${r.model} 耗时=${fmtMs(r.durationMs)}${r.caps && r.caps !== 'L0' ? ` caps=${r.caps}` : ''}`);
       if (r.fallbackFrom) console.error(`[FALLBACK] 主 lane ${r.fallbackFrom} 失败，已改投 lane ${r.lane}`);
       if (r.clineModelHealed) console.error(`[HEAL] cline 模型自愈：${r.clineModelHealed.from} -> ${r.clineModelHealed.to}（已写回 config，链内重投成功）`);
       if (r.toolTrace && Object.keys(r.toolTrace.counts).length) console.error(`[TRACE] 工具轨迹：${Object.entries(r.toolTrace.counts).map(([k, v]) => `${k}×${v}`).join('、')}`);
-      console.error(`[job] 记录 -> ${r.jobDir}`);
-      if (opts.json) console.log(JSON.stringify({ jobId: r.jobId, lane: r.lane, model: r.model, caps: r.caps || 'L0', usage: r.usage, durationMs: r.durationMs, result: r.text }, null, 2));
+      console.error(jobNote);
+      if (opts.json) console.log(JSON.stringify({ jobId: r.jobId, lane: r.lane, model: r.model, caps: r.caps || 'L0', durationMs: r.durationMs, result: r.text }, null, 2));
       else console.log(r.text);
       await exitWith(0);
     }
     console.error(`[FAIL] 全部尝试 lane 均失败；最后错误 kind=${r.kind}${hintText(r)}`);
     console.error(r.error || '(无错误详情)');
-    console.error(`[job] 记录 -> ${r.jobDir}`);
+    console.error(jobNote);
     await exitWith(1);
   } catch (e) {
     die(e.message);
@@ -223,6 +228,7 @@ async function cmdAsk(opts) {
 
 // ---------- 子命令：fanout ----------
 async function cmdFanout(opts) {
+  if (!opts.file) die('用法：wbx fanout --file tasks.json（--help 查看任务字段）');
   const tasksPath = path.resolve(opts.file);
   let raw;
   try { raw = JSON.parse(await fsp.readFile(tasksPath, 'utf8')); } catch (e) { die(`读取/解析 tasks.json 失败：${e.message}`); }
@@ -293,12 +299,19 @@ async function cmdFanout(opts) {
       parallel: opts.parallel ?? null,
       timeoutS: opts.timeout ?? null,   // 缺省交由 core 超时单点决策（∅=300s / 能力任务=600s；显式值最高优先）
       retry: opts.retry ?? null,
+      ephemeral: !!opts.ephemeral,
       log: (m) => console.error(`[fanout] ${m}`),
     });
     const rlCount = r.results.filter((x) => /rate.?limit|429|quota|限流/i.test(String(x.error || ''))).length;
-    console.error(`\n[fanout] 完成：成功 ${r.okCount}/${r.total}，总耗时见 summary，job=${r.jobId}`);
+    if (r.jobDir) {
+      console.error(`\n[fanout] 完成：成功 ${r.okCount}/${r.total}，总耗时见 summary，job=${r.jobId}`);
+      console.log(r.jobDir); // stdout 输出结果目录，便于脚本衔接
+    } else {
+      // --ephemeral：零落盘 → 结果以 JSON 走 stdout（任务正文含在内），脚本衔接改读 stdout
+      console.error(`\n[fanout] 完成：成功 ${r.okCount}/${r.total}（--ephemeral：真实执行零落盘，不入历史）`);
+      console.log(JSON.stringify({ ephemeral: true, okCount: r.okCount, total: r.total, results: r.results.map(({ id, lane, fallbackFrom, status, durationMs, model, error, result }) => ({ id, lane, ...(fallbackFrom ? { fallbackFrom } : {}), status, durationMs, model, ...(error ? { error } : {}), ...(result != null ? { result } : {}) })) }, null, 2));
+    }
     if (rlCount) console.error(`[fanout] ⚠️ ${rlCount} 个疑似限流失败 -> 建议降并发重跑`);
-    console.log(r.jobDir); // stdout 输出结果目录，便于脚本衔接
     await exitWith(r.okCount === r.total ? 0 : 1);
   } catch (e) {
     die(e.message);
@@ -313,8 +326,7 @@ async function cmdFanout(opts) {
 // （aborted undici 请求销毁中撞上 exit；实测复现，internal/archive/v16/v16-exec-log.md）。
 async function cmdUsage(opts) {
   ensureDirs();
-  const rows = [];
-  for (const k of LANE_ORDER) rows.push({ lane: k, bal: await laneBalance(k, { force: !!opts.force }) });
+  const rows = await Promise.all(LANE_ORDER.map(async (k) => ({ lane: k, bal: await laneBalance(k, { force: !!opts.force }) })));
   if (opts.json) {
     console.log(JSON.stringify(Object.fromEntries(rows.map((r) => [r.lane, r.bal])), null, 2));
     process.exitCode = 0;
@@ -393,13 +405,13 @@ async function cmdModels(opts) {
       return;
     }
 
-    const list = (opts.probe ? opts.probe.split(',').map((s) => s.trim()).filter(Boolean) : [cfg['cline-model'] || '']).filter(Boolean);
+    const list = (opts.probe ? opts.probe.split(',').map((s) => s.trim()).filter(Boolean) : [opts.model || cfg['cline-model'] || '']).filter(Boolean);   // --model 显式优先（v23 评审 P2）
     if (!list.length) console.log('（cline-model 为空=provider 默认模型；要探测候选 id 用 --probe "id1,id2"；查当前免费组用 --free）');
     let allOk = true;
     for (const m of list) {
       process.stdout.write(`探测 ${m} … `);
       const r = await askOnce({ lane: 'cline', model: m, prompt: '请只回复 OK', timeoutMs: 180000 });
-      if (r.ok) console.log(`可用（${fmtMs(r.durationMs)}，tokens ${r.usage.in ?? '?'}/${r.usage.out ?? '?'}，本次计价 $${(r.usage.cost ?? 0).toFixed(6)}${r.usage.cost === 0 ? '（免费）' : ''}）`);
+      if (r.ok) console.log(`可用（${fmtMs(r.durationMs)}）`);
       else { allOk = false; console.log(`不可用（${r.kind}: ${brief(r.error, 160)}）`); }
     }
     await exitWith(allOk ? 0 : 1);
@@ -411,12 +423,12 @@ async function cmdModels(opts) {
     die('codex lane 无模型探测：模型经 config codex-model 管理（默认 gpt-6.1-sol，≥GPT-6 底线护栏——wbx config set codex-model <gpt-6+>；探测会真实消耗 Plus 额度故不做）。检查就绪态：wbx doctor');
   }
   console.error(`lane = ${lane}（${IDENTITIES[lane].label}）`);
-  const list = (opts.probe ? opts.probe.split(',').map((s) => s.trim()).filter(Boolean) : [resolveModel()]);
+  const list = (opts.probe ? opts.probe.split(',').map((s) => s.trim()).filter(Boolean) : [opts.model || resolveModel()]);   // --model 直通（此前分支忽略 --model，v23 评审 P2）
   let allOk = true;
   for (const m of list) {
     process.stdout.write(`探测 ${m} … `);
     const r = await askOnce({ lane, prompt: '请只回复：OK', model: m, effort: 'low', timeoutMs: 120000 });
-    if (r.ok) console.log(`可用（${fmtMs(r.durationMs)}，tokens ${r.usage.in ?? '?'}/${r.usage.out ?? '?'}）`);
+    if (r.ok) console.log(`可用（${fmtMs(r.durationMs)}）`);
     else { allOk = false; console.log(`不可用（${r.kind}: ${brief(r.error, 160)}）`); }
   }
 
@@ -507,7 +519,7 @@ async function cmdHistory(opts) {
     const r = t.record;
     const lane = r ? (r.fallbackFrom ? `${r.fallbackFrom}→${r.lane}` : r.lane) : '（无记录）';
     const head = r
-      ? `${r.status === 'success' ? '✅' : '❌'} ${r.status} · lane=${lane} · ${fmtMs(r.durationMs ?? 0)} · tokens ${r.usage?.in ?? '?'}/${r.usage?.out ?? '?'} · 尝试 ${r.attempts}`
+      ? `${r.status === 'success' ? '✅' : '❌'} ${r.status} · lane=${lane} · ${fmtMs(r.durationMs ?? 0)} · 尝试 ${r.attempts}`
       : '（该任务无结果记录——job 可能仍在运行或异常中断）';
     console.log(`${'='.repeat(72)}`);
     console.log(`task ${t.id}   ${head}`);
@@ -595,7 +607,7 @@ async function cmdUi(opts) {
     await exitWith(0);
   }
   if (opts.stop) {
-    const r = await daemon.stopUi();
+    const r = await daemon.stopUi({ port: opts.port ?? UI_DEFAULT_PORT });   // 自定端口的无状态实例也能探测到
     console.log(`${r.ok ? '[OK] ' : '[FAIL] '}${r.message}`);
     await exitWith(r.ok ? 0 : 1);
   }
@@ -626,6 +638,10 @@ async function cmdUi(opts) {
     if (!opts.noOpen) openBrowser(url);
     await exitWith(0);
   }
+  if (probe.decision === 'conflict') {
+    console.error('[FAIL] 端口状态不一致（疑似被非本桥进程占用或 pid 复用）——处理：wbx ui --stop 清理后再试；仍失败换端口 wbx ui --port <其他端口>（netstat -ano | findstr :' + (opts.port ?? UI_DEFAULT_PORT) + '）');
+    await exitWith(1);
+  }
   const { startUiServer } = await import('./wbx-ui.mjs');
   await startUiServer({ port: opts.port ?? UI_DEFAULT_PORT, open: !opts.noOpen });
   // startUiServer 自己 keep-alive；此处不 exit
@@ -647,10 +663,10 @@ async function cmdDoubao(restArgs) {
   }
   const { spawn } = await import('node:child_process');
   const child = spawn(process.execPath, [path.join(dir, 'doubao.mjs'), ...restArgs], { stdio: 'inherit' });
-  child.on('error', (e) => { console.error(`[FAIL] 启动豆包桥失败：${e.message}`); process.exit(1); });
+  child.on('error', (e) => { console.error(`[FAIL] 启动豆包桥失败：${e.message}`); exitWith(1); });
   child.on('close', (code, signal) => {
     // 只透传退出码，不重抛同名信号——非 POSIX 语义下 signal 名可能不被识别（T7-S1）
-    process.exit(code ?? (signal ? 1 : 0));
+    exitWith(code ?? (signal ? 1 : 0));
   });
 }
 
@@ -668,6 +684,7 @@ const FLAGS = [
   { name: '--parallel', alias: ['--lane-parallel'], val: 'int' },
   { name: '--timeout', val: 'int' },
   { name: '--retry', val: 'int' },
+  { name: '--ephemeral', val: 'bool' },   // v23 包 A：真实执行零落盘（不建 job 不入历史；冒烟/连通性验证专用，ask/fanout）
   { name: '--wait', val: 'int' },
   { name: '--probe', val: 'str' },
   { name: '--free', val: 'bool' },
@@ -703,7 +720,9 @@ function parseArgs(argv) {
   const opts = { _: [] };
   const next = (i) => {
     if (i + 1 >= argv.length) die(`参数 ${argv[i]} 缺少取值`);
-    return argv[i + 1];
+    const v = argv[i + 1];
+    if (FLAG_LOOKUP.has(v)) die(`参数 ${argv[i]} 缺少取值（下一个 token 是旗标 ${v}；含 -- 开头的值请用 --file/--stdin）`);
+    return v;
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -711,7 +730,11 @@ function parseArgs(argv) {
     if (f) {
       const key = f.key || f.name.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
       if (f.val === 'bool') opts[key] = true;
-      else if (f.val === 'int') opts[key] = parseInt(next(i), 10), i++;
+      else if (f.val === 'int') {
+        const n = parseInt(next(i), 10);
+        if (!Number.isFinite(n)) die(`参数 ${f.name} 需要整数（收到 ${argv[i + 1]}）`);
+        opts[key] = n; i++;
+      }
       else opts[key] = next(i), i++;
       continue;
     }
@@ -722,12 +745,13 @@ function parseArgs(argv) {
 }
 
 // 命令表：子命令分发与「命令一览」索引的唯一事实源（详细用法块在下文 HELP 手写维护——语义叙述
-// 不适合表化，但清单与枚举绝不平行手抄）
+// 不适合表化，但清单与枚举绝不平行手抄）。已知例外：doubao 在 main 内参数原样转发直通
+//（fn:null）——直通必须发生在 parseArgs/迁移之前，零落盘无痕是有意设计。
 const COMMANDS = [
   { name: 'doctor', fn: (o) => cmdDoctor(o), desc: '自检向导（--quick <10s 静态快检；--no-probe 免模型探测）' },
   { name: 'login', fn: (o) => cmdLogin(o), desc: '登录引导（--identity cn|ai|cline|codex）' },
-  { name: 'ask', fn: (o) => cmdAsk(o), desc: '单次调用（stdout=结果，失败自动跨 lane 回退，落盘 job）' },
-  { name: 'fanout', fn: (o) => cmdFanout(o), desc: '并发池批量执行（结果落 <运行时根>/jobs/<jobId>/）' },
+  { name: 'ask', fn: (o) => cmdAsk(o), desc: '单次调用（stdout=结果，失败自动跨 lane 回退；--ephemeral 真实执行零落盘）' },
+  { name: 'fanout', fn: (o) => cmdFanout(o), desc: '并发池批量执行（结果落 <运行时根>/jobs/<jobId>/；--ephemeral 零落盘出 stdout）' },
   { name: 'models', fn: (o) => cmdModels(o), desc: '探测模型可用性 + 产品配置模型列表（--as cline --free 免费组）' },
   { name: 'usage', fn: (o) => cmdUsage(o), desc: '各 lane 余额（社区端点显式标非官方，诚实降级）' },
   { name: 'config', fn: (o) => cmdConfig(o), desc: 'list | get <key> | set <key> <value>（存 config.json）' },
@@ -773,8 +797,10 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
   node wbx.mjs login   [--identity cn|ai|cline|codex] [...] 登录引导（默认 cn 微信扫码；ai 有 state 修补锦囊；
                      cline 为 OAuth 设备授权，浏览器完成；codex 为一次性只读复制 ~/.codex/auth.json）
                      [--wait 300] [--no-open] [--force]
-  node wbx.mjs ask     --file t.txt | --text "..."  单次调用（落盘为 job）；stdout=结果，stderr=用量/lane
+  node wbx.mjs ask     --file t.txt | --text "..."  单次调用（落盘为 job）；stdout=结果，stderr=lane/耗时
                      [--as codex|ai|cn|cline|doubao] [--model M] [--effort low] [--timeout 300] [--json] [--stdin]
+                     [--ephemeral]                    真实执行零落盘（v23：回退/重试/超时/caps 原样，不建 job
+                                                      不入历史；冒烟/连通性验证一律用它，结果照常 stdout/stderr）
                      [--caps 能力集]                  能力集（v19 能力矩阵，缺省=config default-caps）：
                                                       token ∈ net|read|write 逗号组合（序无关、去重）；
                                                       别名 L0=∅ 纯文本零回退、L1=net,read（仅 ai/cn，缺省超时
@@ -783,7 +809,8 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                      [--max-turns N]                  能力任务回合上限（v6.2，整数 1-64，任何非 ∅ 能力集生效；
                                                       缺省 config caps-l1-max-turns=24；耗尽报 l1-turns-exhausted）
   node wbx.mjs fanout  --file tasks.json            并发池批量执行；任务可用 files:[路径] 拼材料；结果写 <运行时根>/jobs/<jobId>/
-                     [--lanes codex,ai,cn,cline,doubao] [--parallel 2] [--timeout 300] [--retry 1]
+                     [--lanes codex,ai,cn,cline,doubao] [--parallel 2] [--timeout 300] [--retry 1] [--ephemeral]
+                                                      --ephemeral=真实执行零落盘（不建 job；结果 JSON 走 stdout）
                                                       任务对象支持 "caps":"net,read"（能力集，语义同 ask --caps；
                                                       L1 别名同值）、"maxTurns":N（任务级回合上限，语义同 ask）、
                                                       "filesMode":"reference"（材料播种：files 复制进 worker
@@ -855,7 +882,10 @@ async function main() {
   const opts = parseArgs(argv);
   if (opts.version) { console.log(`wbx v${WBX_VERSION}`); await exitWith(0); }
   const cmd = opts._[0];
-  if (opts.help || !cmd) { console.error(HELP); await exitWith(cmd ? 0 : 1); }
+  if (opts.help || !cmd) {
+    if (opts.help) { console.log(HELP); await exitWith(0); }   // 显式 --help=正常输出（stdout/0）；裸调用=用法提示（stderr/1）
+    console.error(HELP); await exitWith(1);
+  }
   migrateIfNeeded();
   const hit = COMMANDS.find((c) => c.name === cmd);
   if (!hit || !hit.fn) die(`未知子命令 ${cmd}（--help 查看用法）`);
