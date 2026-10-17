@@ -7,10 +7,6 @@
     "[data-testid=flow_chat_guidance_page]",
     "[data-testid=chat_input_action_mode]:has-text(\"本地电脑\")"
   ],
-  "workTabButton": [
-    "#conversation-mode-switch button:has-text(\"工作\")",
-    "button:has-text(\"工作\")"
-  ],
   "modeButton": [
     "[data-testid=chat_input_action_mode]",
     "#chat_input button:has-text(\"本地电脑\")"
@@ -32,10 +28,6 @@
     "turbo": "豆包 2.1 Turbo",
     "pro": "豆包 2.1 Pro"
   },
-  "reasoningMenuItem": [
-    "[role=menuitem]:has-text(\"推理强度\")",
-    "[data-radix-popper-content-wrapper] [role=menuitem]:has-text(\"推理强度\")"
-  ],
   "reasoningLevels": {
     "低": "低",
     "中": "中",
@@ -54,10 +46,6 @@
     "[data-testid=message_list]",
     "[class*=\"message-list\"]"
   ],
-  "sentMessage": [
-    "[data-testid=send_message]",
-    "[data-testid=send-message]"
-  ],
   "receivedMessage": [
     "[data-testid=receive_message]",
     "[data-testid=receive-message]"
@@ -65,9 +53,5 @@
   "messageTextContent": [
     "[data-testid=message_text_content]",
     "[data-testid=message-text-content]"
-  ],
-  "settingsEntry": [
-    "[data-testid=sidebar_footer_setting_entry]",
-    "[data-testid=sidebar_footer_settings_entry]"
   ]
 }

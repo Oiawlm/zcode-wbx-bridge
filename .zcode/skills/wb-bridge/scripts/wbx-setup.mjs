@@ -18,25 +18,10 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {
   HOME, PROJECT_ROOT, SCRIPT_DIR, GLOBAL_BRIDGE_DIR, GLOBAL_RUNTIME_DIR,
-  LANE_ORDER, installUserBlock, uninstallUserBlock, WBX_VERSION,
+  LANE_ORDER, installUserBlock, uninstallUserBlock, WBX_VERSION, crc32,
 } from './wbx-core.mjs';
 
-// ---------- 纯 Node zip（store，无压缩，零依赖） ----------
-const CRC_TABLE = (() => {
-  const t = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    t[n] = c >>> 0;
-  }
-  return t;
-})();
-
-function crc32(buf) {
-  let c = 0xffffffff;
-  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-}
+// ---------- 纯 Node zip（store，无压缩，零依赖；crc32 自 wbx-core 导入——与 UI PWA 图标单源） ----------
 
 export function zipStore(entries) {
   const now = new Date();
@@ -102,21 +87,23 @@ export function zipStore(entries) {
 }
 
 // ---------- 模块级清单常量（self-install 完整性检查 / 复制 / export-bundle 共用同一来源） ----------
-const CORE_SCRIPTS = ['wbx.mjs', 'wbx-core.mjs', 'wbx-setup.mjs', 'wbx-daemon.mjs'];
+const CORE_SCRIPTS = ['wbx.mjs', 'wbx-core.mjs', 'wbx-ui.mjs', 'wbx-setup.mjs', 'wbx-daemon.mjs'];
 const DOC_FILES = ['WBX.md', 'UNINSTALL.md'];
 
 // ---------- 文案模板 ----------
 const globalBridgeScript = () => path.join(GLOBAL_BRIDGE_DIR, 'scripts', 'wbx.mjs');
 
+// 项目级 skill → 用户级 skill 的文本适配。两类改写按结构而非整句字面量匹配：
+//   ① `<!-- wbx:project-only -->…<!-- /wbx:project-only -->` 标记段=项目形态专属内容，全局版整段删除
+//     （标记是 SKILL.md 作者与安装器之间的契约，段内文案怎么改都不影响安装）；
+//   ② 相对入口路径与项目运行时路径按模式改写为全局绝对形态。
 export function globalSkillText(sourceSkill) {
   const gscript = globalBridgeScript();
   return sourceSkill
+    .replace(/<!-- wbx:project-only -->[\s\S]*?<!-- \/wbx:project-only -->\n?/g, '')
     .replace(/node \.zcode\/skills\/wb-bridge\/scripts\/wbx\.mjs/g, `node "${gscript}"`)
     .replace(/\.zcode\/skills\/wb-bridge\/scripts\/wbx\.mjs/g, gscript)
     .replace(/<项目>\/\.wbx\/jobs\//g, '~/.wbx/jobs/')
-    .replace('（装过 self-install 则为 `~/.wbx/jobs/`）', '')
-    .replace(/所有调用走项目内 `\.wbx\/` 隔离运行时，不影响桌面版 WorkBuddy（装过 `wbx self-install` 后统一走 `~\/\.wbx\/`，凭证全局共享）/,
-      '所有调用走全局 `~/.wbx/` 隔离运行时（凭证全局共享，任何项目同一套），不影响桌面版 WorkBuddy')
     + '\n> 注：本文件是用户级 skill（~/.zcode/skills/wb-bridge/SKILL.md），会遮蔽同名项目级 skill（内容一致，无行为差异）。\n';
 }
 
@@ -133,7 +120,7 @@ export function wbxCommandText() {
     '',
     '请按 wb-bridge 技能的流程处理上面的任务（这是用户要的一键分派触发器）：',
     '',
-    '1. 先自检：运行 `' + `node "${gscript}" doctor` + '`；有任一 lane 可用即继续（cline 是可选 lane，未装/未登录只 WARN），全部不可用则由你自己完成任务并说明原因。',
+    '1. 先自检：运行 `' + `node "${gscript}" doctor --quick` + '`（<10s 静态快检；排障才全量 doctor）；有任一 lane 可用即继续（cline 是可选 lane，未装/未登录只 WARN），全部不可用则由你自己完成任务并说明原因。',
     '2. 判断任务是否适合分派（自包含可单轮完成、不涉密——含代码模块编写：接口清晰、材料可贴、输出可校验；v5 基线=默认分派，单个自包含任务也直接派）。适合则按技能里引用的 PROMPTS.md 模板（角色+任务+材料+输出硬约束+无工具声明）构造任务；关键产物并行 2 份择优（T8）。',
     '3. 单条子任务用 ask，可拆分的多条用 fanout（任务写成 tasks.json）分派到外部算力；结果落 ~/.wbx/jobs/<jobId>/。',
     '4. 校验结果后汇总输出给用户（代码模块集成前默认过一道 T7 评审批判）；标注信息来自模型已有知识、可能过时。',
@@ -266,10 +253,10 @@ export async function selfInstall({ adopt = false, keepProject = true } = {}) {
     if (!fs.existsSync(path.join(srcScripts, f))) throw new Error(`桥源不完整：缺 ${path.join(srcScripts, f)}`);
   }
 
-  // 1. 桥本体 → ~/.zcode/wbx-bridge/
+  // 1. 桥本体 → ~/.zcode/wbx-bridge/（CORE_SCRIPTS 含 wbx-ui.mjs——`wbx ui` 动态依赖，缺文件运行时才崩=必选）
   await fsp.mkdir(dstScripts, { recursive: true });
   const copiedScripts = [];
-  for (const f of [...CORE_SCRIPTS, ...(fs.existsSync(path.join(srcScripts, 'wbx-ui.mjs')) ? ['wbx-ui.mjs'] : [])]) {
+  for (const f of CORE_SCRIPTS) {
     await fsp.copyFile(path.join(srcScripts, f), path.join(dstScripts, f));
     copiedScripts.push(f);
   }
@@ -420,7 +407,7 @@ function collectBundleEntries() {
   // 根入口 stub（安装命令可写 node wbx.mjs self-install）
   add(`${root}wbx.mjs`, '#!/usr/bin/env node\n// 分发包根入口：转发到 scripts/wbx.mjs（真正入口在同目录 scripts/ 下）\nimport("./scripts/wbx.mjs");\n');
   // scripts/
-  for (const f of [...CORE_SCRIPTS, 'wbx-ui.mjs']) {
+  for (const f of CORE_SCRIPTS) {
     const p = path.join(SCRIPT_DIR, f);
     if (fs.existsSync(p)) add(`${root}scripts/${f}`, fs.readFileSync(p));
   }

@@ -21,7 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '6.10.0';
+export const WBX_VERSION = '6.11.0';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -51,7 +51,6 @@ export function resolveRuntimeRoot() {
 }
 
 export const RUNTIME_ROOT = resolveRuntimeRoot();
-export const WBX_DIR = RUNTIME_ROOT;                    // v2 语义别名
 export const JOBS_DIR = path.join(RUNTIME_ROOT, 'jobs');
 export const SESSIONS_DIR = path.join(RUNTIME_ROOT, 'sessions');
 export const PRODUCT_DIR = path.join(RUNTIME_ROOT, 'product');
@@ -82,6 +81,13 @@ export const IDENTITIES = {
     configDir: path.join(RUNTIME_ROOT, 'config', 'cn'),
   },
 };
+// lane→身份解析（仅 ai/cn 凭证型）。非法 lane 直接抛错：上游已 parseLane 校验，
+// 静默兜底 cn 只会掩盖坏输入（v22 收敛五处 `IDENTITIES[x] || IDENTITIES.cn` 兜底）
+function identityOf(laneKey) {
+  const id = IDENTITIES[laneKey];
+  if (!id) throw new Error(`未知 lane ${JSON.stringify(laneKey)}（凭证型 lane 仅 ai | cn）`);
+  return id;
+}
 // lane 合法集合的唯一定义点（--lanes/parseLane/config 校验/UI 派生全部 import 本常量，不得平行硬编码）
 // 路由三分（v21 D-036）：canonical 序 codex 首位=单发 ask 质量优先档（auto 语义即「codex ready 即默认」）；
 // fanout 批量缺省走 FANOUT_DEFAULT_POOL（免费+会员档，不含 codex）；回退链 codex 在 cline 后 doubao 前。
@@ -95,14 +101,16 @@ const DEFAULT_CLI_PATH = 'D:\\App\\WorkBuddyAI\\resources\\app.asar.unpacked\\cl
 const FALLBACK_MODEL = 'deepseek-v4.1-flash';
 // 超长提示词阈值：>此值 ai/cn/cline 改走 stdin、doubao 改走 --file 临时文件（绕过 Windows 命令行长度上限）
 export const STDIN_THRESHOLD = 12000;
+// 外部进程超时的桥侧收尾余量（CLI 自身 flush/kill 传播；cline/doubao/codex 三处统一单点）
+const SPAWN_GRACE_MS = 20000;
+// UI 控制台默认端口（wbx / wbx-daemon / wbx-ui 三处引用单源）
+export const UI_DEFAULT_PORT = 7788;
 
 // ---------- cline 免费孪生（cline lane 默认免费调 DeepSeek V4.1 Flash） ----------
 // Cline 按模型 id 计费：deepseek/deepseek-v4.1-flash 计费，cline-free/ 前缀的同名孪生免费
 //（限时促销轮换 + 每日用量配额，官方文档口径）。免费组会轮换，故清单一律走
 // recommended-models 端点（见 fetchClineFreeModels），本常量只是默认模型 id，不是清单。
 export const CLINE_FREE_DEFAULT_MODEL = 'cline-free/deepseek-v4.1-flash';
-// v5 时期探测后写入 config 的计费孪生（loadConfig 一次性迁移的唯一源值；其他显式值不动）
-const CLINE_METERED_TWIN_MODEL = 'deepseek/deepseek-v4.1-flash';
 
 // ---------- cline lane（可选第三 lane，独立上游） ----------
 // 红线：桥的 cline 状态只在 <运行时根>/cline-home/ 下，绝不读写用户 ~/.cline。
@@ -197,9 +205,11 @@ export function doubaoReady() {
 export const DOUBAO_CDP_PORT = 9225;
 
 // CDP 在线探测（GET /json/version；200+合法 JSON+非空 Browser 才算在线——9225 被其他进程
-// 占用时因 Browser 校验不过判不在线）。任何异常降级 false，绝不 throw。
-export function doubaoCdpOnline(timeoutMs = 900) {
+// 占用时因 Browser 校验不过判不在线）。任何异常降级不在线，绝不 throw。
+// 返回 { online, browser }——askOnceDoubao 快速失败与 UI /api/doubao 状态展示共用（v22 单源）。
+export function doubaoCdpProbe(timeoutMs = 900) {
   return new Promise((resolve) => {
+    const down = () => resolve({ online: false, browser: null });
     let settled = false;
     const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
     let req = null;
@@ -207,23 +217,26 @@ export function doubaoCdpOnline(timeoutMs = 900) {
       req = http.get(`http://127.0.0.1:${DOUBAO_CDP_PORT}/json/version`, (res) => {
         let body = '';
         res.setEncoding('utf8');
-        res.on('data', (c) => { body += c; if (body.length > 65536) { try { req.destroy(); } catch { /* 尽力而为 */ } finish(false); } });
+        res.on('data', (c) => { body += c; if (body.length > 65536) { try { req.destroy(); } catch { /* 尽力而为 */ } finish({ online: false, browser: null }); } });
         res.on('end', () => {
-          if (res.statusCode !== 200) return finish(false);
+          if (res.statusCode !== 200) return down();
           let j = null;
           try { j = JSON.parse(body); } catch { j = null; }
-          finish(!!(j && typeof j.Browser === 'string' && j.Browser.trim() !== ''));
+          finish(j && typeof j.Browser === 'string' && j.Browser.trim() !== ''
+            ? { online: true, browser: j.Browser }
+            : { online: false, browser: null });
         });
-        res.on('error', () => finish(false));
+        res.on('error', down);
       });
-    } catch { finish(false); return; }
-    req.on('error', () => finish(false));
-    req.setTimeout(timeoutMs, () => { try { req.destroy(); } catch { /* 尽力而为 */ } finish(false); });
+    } catch { down(); return; }
+    req.on('error', () => finish({ online: false, browser: null }));
+    req.setTimeout(timeoutMs, () => { try { req.destroy(); } catch { /* 尽力而为 */ } finish({ online: false, browser: null }); });
   });
 }
 
-// 豆包进程探测（tasklist 过滤 Doubao.exe，3s 封顶；异常降级 false）——决定 launch.ps1 是否带 -Force
-function doubaoProcessRunning() {
+// 豆包进程探测（tasklist 过滤 Doubao.exe，3s 封顶；异常降级 false）——决定 launch.ps1 是否带 -Force；
+// UI /api/doubao 状态展示共用（v22 导出）
+export function doubaoProcessRunning() {
   if (process.platform !== 'win32') return false;
   try {
     const r = spawnSync('tasklist', ['/FI', 'IMAGENAME eq Doubao.exe', '/NH'], { timeout: 3000, encoding: 'utf8', windowsHide: true });
@@ -242,7 +255,7 @@ export async function ensureDoubao() {
   if (cfg['doubao-autostart'] === false) return { ok: false, action: 'failed', detail: 'doubao-autostart=off（自动拉起已关闭）' };
   if (doubaoEnsureFlight_) return doubaoEnsureFlight_;
   doubaoEnsureFlight_ = (async () => {
-    if (await doubaoCdpOnline()) return { ok: true, action: 'online' };
+    if ((await doubaoCdpProbe()).online) return { ok: true, action: 'online' };
     const dir = resolveDoubaoDir();
     if (!dir || process.platform !== 'win32') {
       return { ok: false, action: 'unavailable', detail: '豆包桥不可用（非 Windows 或未找到 doubao.mjs；在桥源码仓跑 wbx self-install）' };
@@ -435,32 +448,6 @@ function clineAccessTokenForCatalog_() {
   } catch { return null; }
 }
 
-// 专用 HTTPS GET（node:https 单次连接，不走 fetch/undici）：undici 全局连接池在 win32 上
-// 与随后的 process.exit 冲突（libuv async.c 断言、exit 127，实测最小复现已固化），
-// 故目录拉取必须走本实现；返回形状与 httpJson 一致 {status,json,text}。
-function httpsGetJson_(url, { headers = {}, timeoutMs = 10000 } = {}) {
-  return new Promise((resolve) => {
-    let settled = false;
-    const fin = (r) => { if (!settled) { settled = true; resolve(r); } };
-    try {
-      const req = https.request(url, { method: 'GET', headers, agent: false, timeout: timeoutMs }, (res) => {
-        const chunks = [];
-        res.on('data', (b) => chunks.push(b));
-        res.on('end', () => {
-          const text = Buffer.concat(chunks).toString('utf8');
-          let json = null;
-          try { json = JSON.parse(text); } catch { /* 非 JSON 响应 */ }
-          fin({ status: res.statusCode, json, text });
-          res.destroy();
-        });
-      });
-      req.on('timeout', () => { req.destroy(); fin({ status: 0, json: null, text: `timeout（> ${timeoutMs}ms）` }); });
-      req.on('error', (e) => fin({ status: 0, json: null, text: String((e && e.message) || e) }));
-      req.end();
-    } catch (e) { fin({ status: 0, json: null, text: String((e && e.message) || e) }); }
-  });
-}
-
 function readClineFreeCache() {
   try {
     const j = JSON.parse(fs.readFileSync(CLINE_FREE_CACHE_FILE, 'utf8'));
@@ -476,7 +463,7 @@ export async function fetchClineFreeModels({ timeoutMs = 10000 } = {}) {
   if (!token) {
     return { ok: false, source: 'none', models: [], error: 'cline 未登录（隔离 providers.json 无凭证）——node wbx.mjs login --identity cline' };
   }
-  const r = await httpsGetJson_(CLINE_RECOMMENDED_MODELS_URL, { headers: { Authorization: `Bearer ${token}` }, timeoutMs });
+  const r = await httpJson('GET', CLINE_RECOMMENDED_MODELS_URL, { headers: { Authorization: `Bearer ${token}` }, timeoutMs });
   if (r.status !== 200 || !r.json) {
     const cached = readClineFreeCache();
     if (cached) {
@@ -547,12 +534,13 @@ export function parseMaxTurns(v, ctx = '任务') {
   return n;
 }
 
-// L1 实际回合上限（任务级 maxTurns 优先，缺省 config caps-l1-max-turns，再缺省 24）
-// 导出名沿用 resolveL1MaxTurns（v11.3 门禁直呼；v19 起语义=任何非 ∅ 能力集的回合上限，命名债同 config 键）
-export function resolveL1MaxTurns(maxTurns) {
+// 能力任务实际回合上限（任务级 maxTurns 优先，缺省 config caps-l1-max-turns，再缺省 24）。
+// v22 更名 resolveL1MaxTurns→resolveCapsMaxTurns 并去 String 化（v19 起语义=任何非 ∅ 能力集，名实相符；
+// 公开 config 键 caps-l1-max-turns 不动——公开契约）
+export function resolveCapsMaxTurns(maxTurns) {
   const mt = parseMaxTurns(maxTurns);
-  if (mt != null) return String(mt);
-  return String(loadConfig()['caps-l1-max-turns'] || L1_MAX_TURNS_DEFAULT);
+  if (mt != null) return mt;
+  return Number(loadConfig()['caps-l1-max-turns'] || L1_MAX_TURNS_DEFAULT);
 }
 
 // caps 拒绝对象（capsReject_ 分流消费，文案能力集口径）
@@ -605,10 +593,30 @@ export function capsRejectWrite_(parsed) {
   return parsed.set.includes('write') ? capsWriteDisabled_() : null;
 }
 
+// caps×lane 拒绝单点（v22 收敛三处 askOnce 分流的复制链）：cline/doubao/codex 不承载任何
+// 非 ∅ 能力集——解析失败与 lane 不匹配的返回对象在此一次定义；返回 null=放行
+const CAPS_LANE_MISMATCH_WHY = {
+  cline: '--auto-approve 仅布尔两档',
+  doubao: '豆包桌面 agent 不受桥控',
+  codex: 'exec 沙箱与工具面不受桥控',
+};
+export function capsGate(lane, caps) {
+  const parsed = parseCapsSet(caps);
+  if (!parsed.ok) return capsReject_(parsed, caps);
+  if (parsed.set.length) {
+    return {
+      ok: false, kind: 'caps-lane-mismatch',
+      error: `能力集 ${parsed.normalized} 仅支持 ai | cn lane（codebuddy --tools 白名单承载，--as ai / --as cn）；${lane} 不承载能力任务：${CAPS_LANE_MISMATCH_WHY[lane]}，无法承诺只读语义`,
+      durationMs: 0, hint: 'caps-lane-mismatch',
+    };
+  }
+  return null;
+}
+
 /**
  * capsToArgs(capsSet, { maxTurns })：能力集合 → codebuddy 旗标数组的唯一组合函数
  *（v19 起替换 askOnce 内的三元；旗标组合点唯一=三原则自证锚点。同集合+同 config 下输出确定：
- * 回合上限经 resolveL1MaxTurns 读 config，属环境注入而非纯函数）。
+ * 回合上限经 resolveCapsMaxTurns 读 config，属环境注入而非纯函数）。
  * ∅ → 逐字 v5 L0 序列；非 ∅ → 白名单（固定序拼接）+ permission-mode + max-turns + json 序列。
  * {net,read} 输出与现行 L1 序列逐字一致（特征断言 internal/v19-regression.mjs 锁定）。
  */
@@ -621,7 +629,7 @@ export function capsToArgs(capsSet, { maxTurns = null } = {}) {
   const whitelist = set.map((t) => CAPS_TOOL_WHITELIST[t]).filter(Boolean).join(',');
   const mode = set.includes('write') ? CAPS_WRITE_MODE : 'default';
   // 回合上限契约 A 三层取值：任务级 maxTurns > config caps-l1-max-turns > 缺省 24（键名不动，语义=任何非∅集合）
-  return ['--tools', whitelist, '--permission-mode', mode, '--max-turns', resolveL1MaxTurns(maxTurns), '--output-format', 'json', '--no-session-persistence'];
+  return ['--tools', whitelist, '--permission-mode', mode, '--max-turns', String(resolveCapsMaxTurns(maxTurns)), '--output-format', 'json', '--no-session-persistence'];
 }
 
 /**
@@ -666,7 +674,12 @@ export function extractToolTrace(arr) {
 
 // ---------- 小工具 ----------
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-export function die(msg) { console.error('[FAIL] ' + msg); process.exit(1); }
+// die：校验/致命错误统一出口——抛 DieSignal 交 CLI 顶层 main 捕获后 exitWith(1)（等 pendingKills
+// 再退，消 win32 libuv 断言风险，v22 退出协议统一）。调用处控制流随 throw 终止，等价原 exit(1)
+export class DieSignal extends Error {
+  constructor(msg) { super(msg); this.name = 'DieSignal'; }
+}
+export function die(msg) { console.error('[FAIL] ' + msg); throw new DieSignal(msg); }
 
 export function nodeOk() {
   const v = process.versions.node.split('.').map(Number);
@@ -717,6 +730,22 @@ export function isRateLimit(text) {
 }
 
 export function escapeRegExp(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// CRC32（多项式 0xEDB88320，查表确定性生成）——wbx-ui PWA 图标 PNG chunk 与 wbx-setup zip 共用（v22 单源）
+export const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+export function crc32(buf) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
 
 export function maskUin(uin) {
   const s = String(uin || '');
@@ -840,7 +869,12 @@ export const CONFIG_DEFS = {
   },
 };
 
+// 读缓存：mtime 未变直接复用（外部改写 config 会被 stat 察觉，无陈旧风险）；返回浅拷贝防调用方误改缓存
+let configCache_ = { mtimeMs: NaN, val: null };
 export function loadConfig() {
+  let mtimeMs = 0;
+  try { mtimeMs = fs.statSync(CONFIG_FILE).mtimeMs; } catch { /* 无配置文件 */ }
+  if (configCache_.val && configCache_.mtimeMs === mtimeMs) return { ...configCache_.val };
   let raw = {};
   try { raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch { /* 无配置文件 */ }
   const out = {};
@@ -861,13 +895,6 @@ export function loadConfig() {
   for (const k of ['cline-path', 'cline-data-dir']) {
     if (typeof out[k] !== 'string') out[k] = '';
   }
-  // 存量迁移（一次性）：仅当旧值恰为 v5 计费孪生 deepseek/deepseek-v4.1-flash 时
-  // 改写为免费孪生默认；用户显式设置的其他模型 id 一律不动。写回 config.json 使迁移只发生一次。
-  let migratedClineModel = false;
-  if (raw['cline-model'] === CLINE_METERED_TWIN_MODEL) {
-    out['cline-model'] = CLINE_FREE_DEFAULT_MODEL;
-    migratedClineModel = true;
-  }
   if (typeof out['cline-model'] !== 'string' || !out['cline-model']) out['cline-model'] = CLINE_FREE_DEFAULT_MODEL;
   if (!CLINE_PROVIDER_IDS.includes(out['cline-provider'])) out['cline-provider'] = 'cline';
   if (!['none', 'low', 'medium', 'high', 'xhigh'].includes(out['cline-thinking'])) out['cline-thinking'] = 'xhigh';
@@ -879,7 +906,7 @@ export function loadConfig() {
   if (!Number.isInteger(out['doubao-parallel']) || out['doubao-parallel'] < 1 || out['doubao-parallel'] > 2) {
     out['doubao-parallel'] = 1;
   }
-  // 桥自治双键（v6.8）：非布尔回缺省 true（出厂开启；off 才是用户显式退出）
+  // 桥自治双键：非布尔回缺省 true（出厂开启；off 才是用户显式退出）
   if (typeof out['doubao-autostart'] !== 'boolean') out['doubao-autostart'] = true;
   if (typeof out['cline-auto-heal'] !== 'boolean') out['cline-auto-heal'] = true;
   // caps 键：default-caps 非法（非别名/集合串/L2）回退 L0；caps-l2-enabled 非布尔回退 false（出厂缺省）
@@ -893,23 +920,19 @@ export function loadConfig() {
   if (!Number.isInteger(out['caps-l1-max-turns']) || out['caps-l1-max-turns'] < 1 || out['caps-l1-max-turns'] > 64) {
     out['caps-l1-max-turns'] = L1_MAX_TURNS_DEFAULT;
   }
-  // codex-* 五键（v21 起可选）：类型/枚举/边界容错一律回缺省；codex-model 护栏同源校验
-  //（护栏失败回默认 gpt-6.1-sol——存量坏值不阻断加载，config set 与 askOnceCodex 的显式路径仍报 floor）
+  // codex-* 五键：类型/枚举/边界容错一律回缺省；codex-model 护栏同源校验
+  //（护栏失败回 CONFIG_DEFS 默认——存量坏值不阻断加载，config set 与 askOnceCodex 的显式路径仍报 floor）
+  const CODEX_MODEL_DEFAULT = CONFIG_DEFS['codex-model'].default;
   if (typeof out['codex-path'] !== 'string') out['codex-path'] = '';
-  if (typeof out['codex-model'] !== 'string' || !out['codex-model'].trim()) out['codex-model'] = 'gpt-6.1-sol';
-  else { try { out['codex-model'] = validateCodexModel(out['codex-model']); } catch { out['codex-model'] = 'gpt-6.1-sol'; } }
+  if (typeof out['codex-model'] !== 'string' || !out['codex-model'].trim()) out['codex-model'] = CODEX_MODEL_DEFAULT;
+  else { try { out['codex-model'] = validateCodexModel(out['codex-model']); } catch { out['codex-model'] = CODEX_MODEL_DEFAULT; } }
   if (!['low', 'medium', 'high', 'xhigh'].includes(out['codex-reasoning'])) out['codex-reasoning'] = 'medium';
   if (!Number.isInteger(out['codex-parallel']) || out['codex-parallel'] < 1 || out['codex-parallel'] > 8) out['codex-parallel'] = 1;
   if (!Number.isInteger(out['codex-quota-cooldown-min']) || out['codex-quota-cooldown-min'] < 1 || out['codex-quota-cooldown-min'] > 720) {
     out['codex-quota-cooldown-min'] = 30;
   }
-  if (migratedClineModel) {
-    try {
-      fs.writeFileSync(CONFIG_FILE, JSON.stringify(out, null, 2) + '\n', 'utf8');
-      console.error(`[MIGRATE] cline-model：检测到 v5 计费孪生 ${CLINE_METERED_TWIN_MODEL}，已改写为免费孪生 ${CLINE_FREE_DEFAULT_MODEL}（仅此值迁移，显式设置的其他模型 id 不动）`);
-    } catch { /* 写回失败不影响本次内存中生效 */ }
-  }
-  return out;
+  configCache_ = { mtimeMs, val: out };
+  return { ...out };
 }
 
 export function parseConfigValue(key, valueStr) {
@@ -1004,7 +1027,7 @@ export function scanCliCandidates() {
 
 // ---------- lane 与凭证 ----------
 export function readSession(laneKey) {
-  const id = IDENTITIES[laneKey] || IDENTITIES.cn;   // lane 已上游 parseLane 校验，兜底仅防御
+  const id = identityOf(laneKey);
   try { return JSON.parse(fs.readFileSync(id.sessionPath, 'utf8')); } catch { return null; }
 }
 
@@ -1077,7 +1100,7 @@ export function laneStatusInfo(laneKey) {
       bridgeDir: dir,
     };
   }
-  const id = IDENTITIES[laneKey] || IDENTITIES.cn;   // lane 已上游 parseLane 校验，兜底仅防御
+  const id = identityOf(laneKey);
   const s = readSession(laneKey);
   let expiresAt = null, expiresInDays = null;
   if (s?.auth?.lastRefreshTime && s?.auth?.expiresIn) {
@@ -1275,10 +1298,18 @@ export function spawnNode(args, { env, timeoutMs, stdin, cwd } = {}) {
   return spawnBin(process.execPath, args, { env, timeoutMs, stdin, cwd: cwd || RUNTIME_ROOT });
 }
 
-// 通用子进程执行（cline exe 与 node 均走这里），超时用 killTree 兜底
+// 通用子进程执行（cline exe 与 node 均走这里），超时用 killTree 兜底。
+// spawn 可能同步抛（win32 畸形可执行 EFTYPE、Defender 干扰等）——与异步 error 事件同构降级
+// code:-1，绝不向上抛（v22 修复：doctor 曾因空壳 cline exe 同步抛而崩）
 export function spawnBin(bin, args, { env, timeoutMs, stdin, cwd } = {}) {
   return new Promise((resolve) => {
-    const child = spawn(bin, args, { env: env || process.env, windowsHide: true, cwd: cwd || RUNTIME_ROOT });
+    let child;
+    try {
+      child = spawn(bin, args, { env: env || process.env, windowsHide: true, cwd: cwd || RUNTIME_ROOT });
+    } catch (err) {
+      resolve({ code: -1, stdout: '', stderr: String(err), timedOut: false });
+      return;
+    }
     let stdout = '', stderr = '', timedOut = false, settled = false;
     const timer = timeoutMs ? setTimeout(() => { timedOut = true; killTree(child); }, timeoutMs) : null;
     if (stdin != null) {
@@ -1307,23 +1338,42 @@ export function spawnBin(bin, args, { env, timeoutMs, stdin, cwd } = {}) {
   });
 }
 
+// 统一 HTTP 客户端（node:http/https 单实现，v22 收敛与原 httpsGetJson_ 的双实现）：undici/fetch
+// 的全局连接池在 win32 上与随后的 process.exit 冲突（libuv async.c 断言、exit 127，实测最小
+// 复现已固化），故桥内一切出站 JSON 请求（cline 目录 GET / 登录流 POST / 余额探测 POST）都走
+// 本函数。任何失败降级 {status:0}，绝不 throw。
 export async function httpJson(method, url, { headers = {}, body, timeoutMs = 10000 } = {}) {
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      method,
-      headers: body !== undefined ? { 'content-type': 'application/json', ...headers } : headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: ac.signal,
-    });
-    const text = await res.text();
-    let json = null;
-    try { json = JSON.parse(text); } catch { /* 非 JSON 响应 */ }
-    return { status: res.status, json, text };
-  } catch (e) {
-    return { status: 0, json: null, text: String((e && e.message) || e) };
-  } finally { clearTimeout(t); }
+  return new Promise((resolve) => {
+    let settled = false;
+    const fin = (r) => { if (!settled) { settled = true; resolve(r); } };
+    let u;
+    try { u = new URL(url); } catch { fin({ status: 0, json: null, text: `非法 URL：${url}` }); return; }
+    let req;
+    try {
+      const mod = u.protocol === 'https:' ? https : http;
+      req = mod.request(u, {
+        method,
+        headers: body !== undefined ? { 'content-type': 'application/json', ...headers } : headers,
+        agent: false,
+        timeout: timeoutMs,
+      }, (res) => {
+        const chunks = [];
+        res.on('data', (b) => chunks.push(b));
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          let json = null;
+          try { json = JSON.parse(text); } catch { /* 非 JSON 响应 */ }
+          fin({ status: res.statusCode, json, text });
+          res.destroy();
+        });
+        res.on('error', () => fin({ status: 0, json: null, text: '响应流错误' }));
+      });
+      req.on('timeout', () => { req.destroy(); fin({ status: 0, json: null, text: `timeout（> ${timeoutMs}ms）` }); });
+      req.on('error', (e) => fin({ status: 0, json: null, text: String((e && e.message) || e) }));
+      if (body !== undefined) req.write(JSON.stringify(body));
+      req.end();
+    } catch (e) { fin({ status: 0, json: null, text: String((e && e.message) || e) }); }
+  });
 }
 
 export function openBrowser(url) {
@@ -1340,7 +1390,7 @@ export function openBrowser(url) {
 
 // ---------- CodeBuddy CLI 调用 ----------
 function baseEnv(laneKey, extra = {}) {
-  const id = IDENTITIES[laneKey] || IDENTITIES.cn;
+  const id = identityOf(laneKey);
   const env = {
     ...process.env,
     CODEBUDDY_CONFIG_DIR: id.configDir,     // 隔离配置目录，绝不指向 ~/.workbuddy*
@@ -1592,16 +1642,9 @@ export function parseClineNdjson(text) {
  * 注意：cline 参数解析要求提示词至少含一个 ASCII 空格（实测无空格的短中文会被当未知子命令拒绝）。
  */
 export async function askOnceCline({ prompt, model = null, timeoutMs = 300000, caps = 'L0' }) {
-  // caps 契约（v19 能力矩阵）：cline 不承载任何非 ∅ 能力集（--auto-approve 仅布尔两档，CLINE_COMMAND_PERMISSIONS
-  // 只覆盖 run_commands 且 3.0.65 实测不存在该特性——无法承诺只读语义）；L2 本版未交付。均明确报错，
-  // 绝不静默降档 L0、绝不自动改路（是否降档重派由编排器显式决定）。
-  const capsParsed = parseCapsSet(caps);
-  if (!capsParsed.ok) {
-    return capsReject_(capsParsed, caps);
-  }
-  if (capsParsed.set.length) {
-    return { ok: false, kind: 'caps-lane-mismatch', error: `能力集 ${capsParsed.normalized} 仅支持 ai | cn lane（codebuddy --tools 白名单承载，--as ai / --as cn）；cline 不承载能力任务：--auto-approve 仅布尔两档，无法承诺只读语义`, durationMs: 0, hint: 'caps-lane-mismatch' };
-  }
+  // caps 契约（v19 能力矩阵，capsGate 单点）：cline 不承载任何非 ∅ 能力集，明确报错绝不静默降档
+  const gated = capsGate('cline', caps);
+  if (gated) return gated;
   const bin = resolveClinePath();
   if (!bin) {
     return { ok: false, kind: 'cli-error', error: 'cline 未安装（可选 lane）。安装：npm install -g cline，然后 wbx login --identity cline', durationMs: 0, hint: 'not-installed' };
@@ -1628,7 +1671,7 @@ export async function askOnceCline({ prompt, model = null, timeoutMs = 300000, c
   ];
 
   const t0 = Date.now();
-  const r = await spawnBin(bin, args, { env: clineSpawnEnv(), timeoutMs: timeoutMs + 20000, stdin: useStdin ? prompt : null, cwd: CLINE_WORK_DIR });
+  const r = await spawnBin(bin, args, { env: clineSpawnEnv(), timeoutMs: timeoutMs + SPAWN_GRACE_MS, stdin: useStdin ? prompt : null, cwd: CLINE_WORK_DIR });
   const durationMs = Date.now() - t0;
   const stdout = ansiStrip(r.stdout || '');
   const stderr = ansiStrip(r.stderr || '');
@@ -1762,13 +1805,8 @@ export function parseDoubaoPayload(stdoutText) {
  */
 export async function askOnceDoubao({ prompt, model = null, timeoutMs = 300000, caps = 'L0' }) {
   void model; // 任务级 --model 对 doubao 不生效（工具自管理 2.1 Pro + 推理高；help/文档如实注明）
-  const parsed = parseCapsSet(caps);
-  if (!parsed.ok) {
-    return capsReject_(parsed, caps);
-  }
-  if (parsed.set.length) {
-    return { ok: false, kind: 'caps-lane-mismatch', error: `能力集 ${parsed.normalized} 仅支持 ai | cn lane（codebuddy --tools 白名单承载，--as ai / --as cn）；doubao 不承载能力任务：豆包桌面 agent 不受桥控，无法承诺只读语义`, durationMs: 0, hint: 'caps-lane-mismatch' };
-  }
+  const gated = capsGate('doubao', caps);
+  if (gated) return gated;
   const dir = resolveDoubaoDir();
   if (!dir) {
     return { ok: false, kind: 'cli-error', error: '豆包桥 doubao.mjs 未找到（可选 lane）。修复：在桥源码仓跑 wbx self-install（把 tools/doubao-bridge/ 复制到全局副本）', durationMs: 0, hint: 'not-installed' };
@@ -1792,7 +1830,7 @@ export async function askOnceDoubao({ prompt, model = null, timeoutMs = 300000, 
   // 单次派发（成功路径仅此一次执行；自动拉起后的重投只发生在 CDP 不可达失败之后）
   const runOnce = async () => {
     const t0 = Date.now();
-    const r = await spawnBin(process.execPath, args, { timeoutMs: timeoutMs + 20000 });
+    const r = await spawnBin(process.execPath, args, { timeoutMs: timeoutMs + SPAWN_GRACE_MS });
     const stdout = ansiStrip(r.stdout || '');
     const stderr = ansiStrip(r.stderr || '');
     return {
@@ -1863,13 +1901,8 @@ export async function askOnceDoubao({ prompt, model = null, timeoutMs = 300000, 
  * hint=codex-quota 失败返回（auto 路由/回退链随即跳过 codex；显式点名放行语义由调用侧承接）。
  */
 export async function askOnceCodex({ prompt, effort = null, timeoutMs = 300000, caps = 'L0' }) {
-  const capsParsed = parseCapsSet(caps);
-  if (!capsParsed.ok) {
-    return capsReject_(capsParsed, caps);
-  }
-  if (capsParsed.set.length) {
-    return { ok: false, kind: 'caps-lane-mismatch', error: `能力集 ${capsParsed.normalized} 仅支持 ai | cn lane（codebuddy --tools 白名单承载，--as ai / --as cn）；codex 不承载能力任务：exec 沙箱与工具面不受桥控，无法承诺只读语义`, durationMs: 0, hint: 'caps-lane-mismatch' };
-  }
+  const gated = capsGate('codex', caps);
+  if (gated) return gated;
   const bin = resolveCodexPath();
   if (!bin) {
     return { ok: false, kind: 'cli-error', error: 'codex 未安装（可选 lane）。修复：安装/更新 Codex 桌面版（捆绑 CLI），或 wbx config set codex-path "<codex.exe 完整路径>"', durationMs: 0, hint: 'not-installed' };
@@ -1891,7 +1924,7 @@ export async function askOnceCodex({ prompt, effort = null, timeoutMs = 300000, 
   const t0 = Date.now();
   let r;
   try {
-    r = await spawnBin(bin, args, { env: codexSpawnEnv(), timeoutMs: timeoutMs + 20000, stdin: useStdin ? prompt : null, cwd: CODEX_WORK_DIR });
+    r = await spawnBin(bin, args, { env: codexSpawnEnv(), timeoutMs: timeoutMs + SPAWN_GRACE_MS, stdin: useStdin ? prompt : null, cwd: CODEX_WORK_DIR });
   } catch (err) {
     try { fs.rmSync(outFile, { force: true }); } catch { /* 容错 */ }
     return { ok: false, kind: 'cli-error', error: `codex 进程启动失败：${brief(String((err && err.message) || err))}`, durationMs: Date.now() - t0, hint: 'spawn-failed' };
@@ -2055,29 +2088,27 @@ export function summarizeJob(id, dir, { legacy = false } = {}) {
   };
 }
 
+// job 目录三根枚举（新 jobs + 两个 legacy 只读根）单源：listJobs/tokenTotals 共用，seen 去重防双计
+function* jobRoots() {
+  const seen = new Set();
+  for (const root of [JOBS_DIR, LEGACY_TASKS_DIR, LEGACY_JOBS_DIR]) {
+    if (!root || seen.has(root) || !fs.existsSync(root)) continue;
+    seen.add(root);
+    let entries = [];
+    try { entries = fs.readdirSync(root); } catch { continue; }
+    for (const e of entries) {
+      const dir = path.join(root, e);
+      try { if (!fs.statSync(dir).isDirectory()) continue; } catch { continue; }
+      yield { key: e, dir, legacy: root !== JOBS_DIR };
+    }
+  }
+}
+
 // job 列表：jobs/*（新）+ 项目 .wbx/tasks/*（v2 旧）+ 项目 .wbx/jobs/*（项目形态时期，只读兼容）
 export function listJobs() {
   const rows = [];
-  const seen = new Set();
-  try {
-    for (const e of fs.readdirSync(JOBS_DIR)) {
-      const dir = path.join(JOBS_DIR, e);
-      if (!fs.statSync(dir).isDirectory()) continue;
-      rows.push(summarizeJob(e, dir));
-      seen.add(e);
-    }
-  } catch { /* jobs 目录不存在 */ }
-  const legacyRoots = [LEGACY_TASKS_DIR, LEGACY_JOBS_DIR];
-  for (const legacyRoot of legacyRoots) {
-    if (!legacyRoot || legacyRoot === JOBS_DIR || !fs.existsSync(legacyRoot)) continue;
-    try {
-      for (const e of fs.readdirSync(legacyRoot)) {
-        if (seen.has(e)) continue;
-        const dir = path.join(legacyRoot, e);
-        if (!fs.statSync(dir).isDirectory()) continue;
-        rows.push(summarizeJob(e, dir, { legacy: true }));
-      }
-    } catch { /* 忽略 */ }
+  for (const { key, dir, legacy } of jobRoots()) {
+    rows.push(summarizeJob(key, dir, { legacy }));
   }
   rows.sort((a, b) => String(b.id).localeCompare(String(a.id)));
   return rows;
@@ -2095,35 +2126,25 @@ const usageNumOf = (u, keys) => {
 };
 
 export function tokenTotals() {
-  const roots = [JOBS_DIR, LEGACY_TASKS_DIR, LEGACY_JOBS_DIR];
-  const seen = new Set();
   let tasks = 0, okTasks = 0, tokensIn = 0, tokensOut = 0, unknownUsage = 0;
-  for (const root of roots) {
-    let entries = [];
-    try { entries = fs.readdirSync(root); } catch { continue; /* 目录不存在 */ }
-    for (const e of entries) {
-      if (seen.has(e)) continue;
-      const dir = path.join(root, e);
-      try { if (!fs.statSync(dir).isDirectory()) continue; } catch { continue; }
-      seen.add(e);
-      let files = [];
-      try { files = fs.readdirSync(dir); } catch { continue; }
-      for (const f of files) {
-        if (!isTaskRecordFile(f)) continue;
-        let rec = null;
-        try { rec = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { continue; }
-        if (!rec || typeof rec !== 'object') continue;
-        tasks++;
-        if (rec.status === 'success') okTasks++;
-        const fin = usageNumOf(rec.usage, ['in', 'input_tokens', 'inputTokens', 'prompt_tokens']);
-        const fout = usageNumOf(rec.usage, ['out', 'output_tokens', 'outputTokens', 'completion_tokens']);
-        if (fin == null && fout == null) {
-          if (rec.status === 'success') unknownUsage++;
-          continue;
-        }
-        tokensIn += fin || 0;
-        tokensOut += fout || 0;
+  for (const { dir } of jobRoots()) {
+    let files = [];
+    try { files = fs.readdirSync(dir); } catch { continue; }
+    for (const f of files) {
+      if (!isTaskRecordFile(f)) continue;
+      let rec = null;
+      try { rec = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { continue; }
+      if (!rec || typeof rec !== 'object') continue;
+      tasks++;
+      if (rec.status === 'success') okTasks++;
+      const fin = usageNumOf(rec.usage, ['in', 'input_tokens', 'inputTokens', 'prompt_tokens']);
+      const fout = usageNumOf(rec.usage, ['out', 'output_tokens', 'outputTokens', 'completion_tokens']);
+      if (fin == null && fout == null) {
+        if (rec.status === 'success') unknownUsage++;
+        continue;
       }
+      tokensIn += fin || 0;
+      tokensOut += fout || 0;
     }
   }
   return { tasks, okTasks, tokensIn, tokensOut, unknownUsage };
@@ -2187,6 +2208,37 @@ export function buildSummaryMd({ type, tasks, results, totalMs, laneKeys, lanePa
 
 // ---------- 高层执行器：ask / fanout（job 落盘 + 回退链，CLI 与 UI 共用） ----------
 /**
+ * 单 lane 派发核（runAskJob 链与 fanout runTask 共用，v22 收敛两份重复的 attempt/heal 编排）：
+ * retryN 次重试（限流 5s/其余 2s 间隔，失败逐次落盘 dump）→ cline 自愈（heal 命中后以 config 模型
+ * 重投一次）。call(model) 由调用方构造（model=null → 桥按 config 解析）；healNote 用于重投前的
+ * 人读日志；dump(res) 的落盘编号由调用方注入（跨 lane 连续，不在此计数）。
+ * 返回 { res, attempts, healed }——跨 lane 回退决策留给调用方（两流程回退语义不同）。
+ */
+async function runAttempts({ lane, call, dump, say, retryN = 0, usedModel = null, tag = '', healNote = null }) {
+  let res = null, attempts = 0, healed = null;
+  for (let a = 0; a <= retryN; a++) {
+    attempts = a + 1;
+    res = await call(usedModel);
+    if (res.ok) return { res, attempts, healed };
+    await dump(res);
+    if (a < retryN) {
+      const rl = res.hint === 'ratelimit' || isRateLimit(res.error);   // 限流判定先于落盘（指针路径文本不得污染判定）
+      say(`${tag}失败（${res.kind}），${rl ? '5s' : '2s'} 后重试 ${a + 1}/${retryN}`);
+      await sleep(rl ? 5000 : 2000);
+    }
+  }
+  if (lane === 'cline') {
+    healed = await healClineModelIfNeeded(res, { log: say, usedModel });
+    if (healed) {
+      attempts++;
+      if (healNote) say(healNote(healed.to));
+      res = await call(null);   // model:null -> 用已 heal 的 config 值
+      if (!res.ok) await dump(res);
+    }
+  }
+  return { res, attempts, healed };
+}
+/**
  * runAskJob：单条 ask，含回退链与 job 落盘。返回：
  *   { ok, jobId, jobDir, lane, fallbackFrom, model, usage, durationMs, text|error, kind }
  */
@@ -2235,23 +2287,23 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
     if (qs.active) console.error(`[WARN] codex 额度冷却中（剩余约 ${qs.remainingMin}m，${qs.reason || 'usage limit'}）——显式点名放行，失败将按回退链改投`);
   }
 
+  const jobT0 = Date.now();
   let usedLane = null, res = null, resLane = null, attempts = 0, clineHeal = null;
+  let attemptSeq = 0;   // 全局尝试序号：跨回退 lane 连续（attempt 落盘编号与 rec.attempts 同源）
   for (const lane of chain) {
-    attempts++;
-    res = await askOnce({ lane, prompt, model, effort, timeoutMs: effTimeoutS * 1000, caps: capsNorm || 'L0', scratchDir: capsScratch, maxTurns: mt });
+    const run = await runAttempts({
+      lane,
+      call: (m) => askOnce({ lane, prompt, model: m, effort, timeoutMs: effTimeoutS * 1000, caps: capsNorm || 'L0', scratchDir: capsScratch, maxTurns: mt }),
+      dump: (r) => dumpFailedAttempt(job.dir, 'ask', ++attemptSeq, r),
+      say: (msg) => console.error(msg),
+      usedModel: model,
+      healNote: (to) => `cline auto-heal -> ${to}，重投一次`,
+    });
+    attempts += run.attempts;
+    if (run.healed) clineHeal = run.healed;
+    res = run.res;
     resLane = lane;
     if (res.ok) { usedLane = lane; break; }
-    await dumpFailedAttempt(job.dir, 'ask', attempts, res);   // 失败 attempt 全量落盘+指针
-    // cline auto-heal：配置修复（写回 config）后链内重投一次；重投仍失败照旧走后续回退
-    if (lane === 'cline') {
-      clineHeal = await healClineModelIfNeeded(res, { log: console.error, usedModel: model });
-      if (clineHeal) {
-        attempts++;
-        res = await askOnce({ lane, prompt, model: null, effort, timeoutMs: effTimeoutS * 1000, caps: capsNorm || 'L0', scratchDir: capsScratch, maxTurns: mt });   // model:null -> 用已 heal 的 config 值
-        if (res.ok) { usedLane = lane; break; }
-        await dumpFailedAttempt(job.dir, 'ask', attempts, res);
-      }
-    }
     if (lane !== primary) break;
     if (fb) console.error(`[WARN] lane ${lane} 失败（kind=${res.kind}），自动改投 lane ${fb}…`);
   }
@@ -2279,8 +2331,8 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
     await fsp.writeFile(path.join(job.dir, 'ask.transcript.json'), res.rawTranscript, 'utf8');
   }
   await writeTaskRecord(job.dir, rec);
-  await finalizeJob(job.dir, { total: 1, ok: res?.ok ? 1 : 0, durationMs: res?.durationMs ?? 0 });
-  const md = buildSummaryMd({ type: 'ask', tasks: [{ id: 'ask' }], results: [rec], totalMs: 0, jobId: job.id });
+  await finalizeJob(job.dir, { total: 1, ok: res?.ok ? 1 : 0, durationMs: Date.now() - jobT0 });
+  const md = buildSummaryMd({ type: 'ask', tasks: [{ id: 'ask' }], results: [rec], totalMs: Date.now() - jobT0, jobId: job.id });
   await fsp.writeFile(path.join(job.dir, 'summary.md'), md, 'utf8');
 
   if (res?.ok) {
@@ -2293,7 +2345,7 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
  * runFanoutJob：批量并发（双 lane 动态均衡 + 重试 + 跨 lane 回退 + job 落盘）。
  * tasksIn: [{id, prompt, as?, model?, effort?}]；返回 { jobId, jobDir, okCount, total, results }。
  */
-export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, timeoutS = 300, retry = null, log = null, jobId = null }) {
+export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, timeoutS = null, retry = null, log = null, jobId = null }) {
   ensureDirs();
   const cfg = loadConfig();
   const say = log || (() => {});
@@ -2470,35 +2522,25 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
       say(`${task.id}@${lane} -> failed（${seedError}）`);
       return;
     }
-    let res = null, attempts = 0, clineHeal = null;
-    for (let a = 0; a <= retryN; a++) {
-      attempts = a + 1;
-      res = await askOnce({ lane, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });
-      if (res.ok) break;
-      const rl = res.hint === 'ratelimit' || isRateLimit(res.error);   // 限流判定先于落盘（指针路径文本不得污染判定）
-      await dumpFailedAttempt(job.dir, task.id, attempts, res);   // 失败 attempt 全量落盘+指针
-      if (a < retryN) {
-        say(`${task.id}@${lane} 失败（${res.kind}），${rl ? '5s' : '2s'} 后重试 ${a + 1}/${retryN}`);
-        await sleep(rl ? 5000 : 2000);
-      }
-    }
-    // cline auto-heal：配置修复（写回 config）后重投一次；仍失败照旧走跨 lane 回退
-    if (!res.ok && lane === 'cline') {
-      clineHeal = await healClineModelIfNeeded(res, { log: say, usedModel: mdl });
-      if (clineHeal) {
-        attempts++;
-        say(`${task.id}@cline auto-heal -> ${clineHeal.to}，重投一次`);
-        res = await askOnce({ lane, prompt: task.prompt, model: null, effort: task.effort, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });   // model:null -> 用已 heal 的 config 值
-        if (!res.ok) await dumpFailedAttempt(job.dir, task.id, attempts, res);
-      }
-    }
+    let attemptSeq = 0;   // 全局尝试序号：跨重试/自愈/回退连续（attempt 落盘编号与 rec.attempts 同源）
+    const run = await runAttempts({
+      lane,
+      call: (m) => askOnce({ lane, prompt: task.prompt, model: m, effort: task.effort, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null }),
+      dump: (r) => dumpFailedAttempt(job.dir, task.id, ++attemptSeq, r),
+      say,
+      retryN,
+      usedModel: mdl,
+      tag: `${task.id}@${lane} `,
+      healNote: (to) => `${task.id}@cline auto-heal -> ${to}，重投一次`,
+    });
+    let res = run.res, attempts = attemptSeq, clineHeal = run.healed;
     let usedLane = lane, fallbackFrom = null;
     if (!res.ok) {
       // L1 跨 lane 回退只在 ai/cn 之间（cline/doubao 不承载 L1，不得进入回退目标）
       let fb = fallbackLane(lane);
       if (task.effSet.length && fb !== 'ai' && fb !== 'cn') fb = null;
       if (fb) {
-        attempts++;
+        attempts = ++attemptSeq;
         say(`${task.id}@${lane} 用尽重试（${res.kind}），跨 lane 回退 -> ${fb}`);
         res = await askOnce({ lane: fb, prompt: task.prompt, model: mdl, effort: task.effort, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });
         if (!res.ok) await dumpFailedAttempt(job.dir, task.id, attempts, res);   // 回退 attempt 同样落盘
@@ -2572,7 +2614,7 @@ const NO_AUTH_HEADERS = {
  * 供 CLI 直接打印 / UI 展示。失败 throw（含修复指引）。
  */
 export async function startLogin(laneKey) {
-  const identity = IDENTITIES[laneKey] || IDENTITIES.cn;   // lane 已上游 parseLane 校验，兜底仅防御
+  const identity = identityOf(laneKey);
   const templatePath = process.env.WBX_PRODUCT_CONFIG || identity.templatePath;
   let source;
   try {
@@ -2661,7 +2703,10 @@ export async function persistLogin(ctx, authToken, account) {
 }
 
 // ---------- doctor（结构化，CLI 与 UI 共用） ----------
-export async function doctorStatus({ probe = true, onLine = null } = {}) {
+// probe=true 含模型探测（tiny ask）；quick=true 快检（v22 新增）：跳过一切探测与子进程/端点调用，
+// 只做 node/CLI 路径/凭证存在性/config 静态检查——常规会话自检用它（<10s 零额度），排障才全量。
+export async function doctorStatus({ probe = true, onLine = null, quick = false } = {}) {
+  if (quick) probe = false;
   ensureDirs();
   migrateIfNeeded();
   const say = (m) => { if (onLine) onLine(m); };
@@ -2778,6 +2823,12 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
       say('[SKIP] 凭证     未登录 -> node wbx.mjs login --identity cline（浏览器完成 OAuth 设备授权）');
       laneRows.push(cinfo);
     } else {
+      if (quick) {
+        // 快检：不做版本 spawn 与免费清单端点调用（凭证存在性已在上方判定）
+        steps.push({ name: 'lane-cline', good: true, detail: `已登录（快检：跳过版本探测与免费清单校验）` });
+        say('[OK]   凭证     已登录（快检：跳过版本探测与免费清单校验，全量见 wbx doctor）');
+        laneRows.push({ ...cinfo, probe: null });
+      } else {
       const cfgC = loadConfig();
       const ver = await spawnBin(resolveClinePath(), ['--version'], { env: clineSpawnEnv(), timeoutMs: 30000 });
       const verStr = ansiStrip(ver.stdout || '').trim().split(/\r?\n/)[0] || '?';
@@ -2830,6 +2881,7 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
           laneRows.push({ ...cinfo, probe: { good: false, detail } });
         }
       }
+      }
     }
   }
 
@@ -2850,6 +2902,12 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
       say('[WARN] 可选lane  豆包桥未找到 doubao.mjs（可选能力，不影响 ai/cn/cline）。修复：在桥源码仓跑 wbx self-install（装全局副本）');
       laneRows.push(dinfo);
     } else {
+      if (quick) {
+        // 快检：不做 doubao.mjs status 探测 spawn（安装态已判定）
+        steps.push({ name: 'lane-doubao', good: null, detail: '已安装（快检：跳过桌面端状态探测）' });
+        say('[SKIP] 桌面端   快检跳过桌面端状态探测（全量见 wbx doctor）');
+        laneRows.push({ ...dinfo, probe: null });
+      } else {
       say('豆包桌面端状态探测中（doubao.mjs status，免费不耗额度）…');
       const st = await spawnBin(process.execPath, [path.join(dinfo.bridgeDir, 'doubao.mjs'), 'status', '--timeout-ms', '8000'], { timeoutMs: 30000 });
       const payload = parseDoubaoPayload(ansiStrip(st.stdout || ''));
@@ -2869,6 +2927,7 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
         say(`[WARN] 桌面端   ${probeDetail}。${autoNote}`);
       }
       laneRows.push({ ...dinfo, probe: { good: online, detail: probeDetail } });
+      }
     }
   }
 
@@ -2888,6 +2947,13 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
       say('[WARN] 可选lane  codex 未安装（可选能力，不影响 ai/cn/cline/doubao）。安装：Codex 桌面版（捆绑 CLI）或 codex CLI，或 wbx config set codex-path "<codex.exe 路径>"');
       laneRows.push(xinfo);
     } else {
+      if (quick) {
+        // 快检：不做 --version/login status spawn（二进制与 auth.json 存在性已判定）
+        const credQuick = fs.existsSync(path.join(CODEX_HOME, 'auth.json'));
+        steps.push({ name: 'lane-codex', good: credQuick ? true : null, detail: credQuick ? '已装且凭证在位（快检：跳过登录态探测）' : '已装但未收割凭证（快检）' });
+        say(`${credQuick ? '[OK]   凭证     已装且凭证在位（快检：跳过登录态探测，全量见 wbx doctor）' : '[SKIP] 凭证     已装但未收割凭证（快检）-> node wbx.mjs login --identity codex'}`);
+        laneRows.push({ ...xinfo, probe: null });
+      } else {
       const ver = await spawnBin(xinfo.binaryPath, ['--version'], { env: codexSpawnEnv(), timeoutMs: 30000 });
       const verStr = ansiStrip(ver.stdout || '').trim().split(/\r?\n/)[0] || '?';
       say('Codex 登录态探测中（隔离 CODEX_HOME login status，免额度）…');
@@ -2909,6 +2975,7 @@ export async function doctorStatus({ probe = true, onLine = null } = {}) {
         steps.push({ name: 'codex-quota', good: qs.active ? null : true, detail: qNote });
         laneRows.push({ ...xinfo, probe: { good: true, detail: `login status OK（${qNote}）` } });
       }
+      }
     }
   }
 
@@ -2928,47 +2995,21 @@ export const USER_AGENTS_PATH = path.join(HOME, '.zcode', 'AGENTS.md');
 export const USER_BLOCK_BEGIN = '<!-- wbx:begin -->';
 export const USER_BLOCK_END = '<!-- wbx:end -->';
 
+// 用户级块=跨项目最小指针版（v22 三层注入分工：全局只留指针，lane 细节归各仓库 AGENTS/SKILL——
+// 消除用户级块与仓库规则面约 90% 的双注入重复）
 export function userBlockText(bridgeScriptPath) {
   const wbx = `node "${bridgeScriptPath}"`;
   return [
     USER_BLOCK_BEGIN,
-    '## wbx 外部算力桥（五 lane 子代理：默认分派，放开用）',
+    '## wbx 外部算力桥（本项目装有 wbx 桥：五 lane 外部 Agent 当作子代理，默认分派）',
     '',
-    `本机装有 wbx 桥（入口 "${bridgeScriptPath}"）：五个外部 Agent 当作你的子代理，高频、放量调用`,
-    '（免费 lane 不必为省 token 收着用）。lane：codex = Codex CLI（ChatGPT Plus 质量优先档——',
-    '单发 ask 默认优先，模型 gpt-6.1-sol；额度耗尽自动冷却让位；fanout 批量默认免费 lane、任务级',
-    'as:"codex" 点名）；ai/cn = WorkBuddy 双 lane 的 DeepSeek V4.1 Flash（国际版免费/国内版近免费）；',
-    'cline = Cline CLI（可选，免费孪生限时轮换+每日配额；免费清单：wbx models --as cline --free）；',
-    'doubao = 豆包桌面端（可选，耗会员额度，回退链最末；需以调试口 9225 运行）。',
-    '自包含（v4 公理）：全部输入可由你打包进提示词（材料先行）、输出可独立校验即可外包——含代码模块编写：',
+    `- 自检：\`${wbx} doctor --quick\`（<10s 静态检查；排障用全量 doctor）`,
+    `- 单条：\`${wbx} ask --file <p.txt>\`（--as codex|ai|cn|cline|doubao 指定 lane，缺省 codex 优先，失败自动回退）`,
+    `- 批量：\`${wbx} fanout --file <tasks.json>\`（任务可用 files:[路径] 拼材料、as:"codex" 点名）`,
+    `- 控制台：\`${wbx} ui --detach\`（http://127.0.0.1:7788；--stop 停止）`,
     '',
-    '```bash',
-    `${wbx} doctor                     # 先自检；可用 lane 全红 -> 提示用户 login，任务自己做`,
-    `${wbx} ask --file <p.txt>           # 单条（--as codex|ai|cn|cline|doubao 指定 lane，缺省 codex 优先，失败自动回退）`,
-    `${wbx} fanout --file <tasks.json>   # 并行批量（任务可用 files:[路径] 拼材料、as:"codex" 点名；结果落 ~/.wbx/jobs/<jobId>/）`,
-    `${wbx} ui --detach                 # 常开网页控制台 http://127.0.0.1:7788（幂等后台守护；--stop 停止；`,
-    '                                   #  --install-autostart 随 ZCode 新会话自动拉起，--remove-autostart 摘除）',
-    `${wbx} doubao status | ask "任务文本"  # 豆包桌面桥手工直通（零落盘旁路，不经调度/不入历史；豆包需以`,
-    '                                   #  调试口 9225 运行——先 powershell -ExecutionPolicy Bypass -File',
-    '                                   #  "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"（cmd 写法；PS/GitBash 换 $env:USERPROFILE/~）；',
-    '                                   #  子命令同 doubao.mjs：status/new-task/configure/send/read/ask）',
-    '```',
-    '',
-    '默认分派（v5 基线反转）：凡自包含任务（输入可打包、输出可校验）即为候选——单个调研、翻译、',
-    '抽取、模块实现也直接派，不必凑「≥2 对象/≥3 模块」。消耗豁免：不为省 token 压低 effort 或裁剪材料',
-    '（裁剪只为信噪比）。关键产物（关键代码模块/文案）并行 2 份择优（T8 best-of-N）；代码模块集成前',
-    '默认过一道评审批判（T7）——多一次免费调用换质量下限。fanout ≥6 任务或结果很长时，用自己的子代理',
-    '管理整批、主上下文只收摘要（层级 ≤2）。',
-    '',
-    '能力矩阵 caps（v19）：caps=能力集合（net/read/write 逗号组合），L0≡∅（缺省纯文本零回退）、',
-    'L1≡net,read 为别名；net,read 联网+只读（--caps "net,read"，仅 ai/cn，时效调研用 T4-L1，',
-    '带来源清单；按需最小可用 net/read）；含 write 本轮未交付（探针 P3 实证 headless 写无进程级',
-    '边界，声明即报 caps-write-disabled）；L2 未交付（--caps L2 报错；上游 cline 支持命令级 deny 后',
-    '按六层防护栈交付）。caps 是任务契约：失败不静默降档、lane 不匹配明确报错。',
-    '',
-    '防护不变：结果必校验后才用；涉密/隐私/凭证绝不外包；L0 提示词含无工具声明、L1 含能力边界+',
-    '注入防御+来源清单（模板见桥 PROMPTS.md §速查表）；doctor FAIL、连续 >= 2 失败或',
-    '限流 -> 停止外包，改由自己完成并如实告知用户。完整文档/卸载：桥项目文件夹内 WBX.md、UNINSTALL.md。',
+    '调用准则与安全红线以各仓库 AGENTS.md / .zcode/skills/wb-bridge/SKILL.md 为准（自包含任务默认分派；',
+    '涉密/隐私/凭证绝不外包；结果必校验；连续 ≥2 失败或限流停止外包自己做）。',
     USER_BLOCK_END,
   ].join('\n');
 }

@@ -7,7 +7,7 @@
 ### 文件白名单
 - 仓库只接受白名单内的文件；**新增文件必须先在白名单登记并说明理由**，未登记者一律拒收。
 - 现有白名单：
-  - 根目录：`LICENSE`、`.gitignore`、`README.md`、`WBX.md`、`UI-SPEC.md`、`UNINSTALL.md`、`AGENTS.md`、`SECURITY.md`、`CONTRIBUTING.md`、`CHANGELOG.md`
+  - 根目录：`LICENSE`、`.gitignore`、`README.md`、`WBX.md`、`HISTORY.md`、`UI-SPEC.md`、`UNINSTALL.md`、`AGENTS.md`、`SECURITY.md`、`CONTRIBUTING.md`、`CHANGELOG.md`
   - 技能目录：`.zcode/skills/wb-bridge/{SKILL.md, PROMPTS.md, examples/tasks.example.json, scripts/wbx.mjs, scripts/wbx-core.mjs, scripts/wbx-setup.mjs, scripts/wbx-daemon.mjs, scripts/wbx-ui.mjs}`
   - 提示词工艺库（v17 起，取代原 v11 知识库指南）：`.zcode/skills/glm-prompt-crafter/{SKILL.md, references/glm-model-profiles.md, references/goal-mode-writing.md, references/official-sources.md}`
   - 提示词工艺库部署脚本（v17 起）：`tools/install-glm-prompt-crafter.mjs`（仓库包 → `~/.zcode/skills/` 用户级部署，SHA-256 校验，登记于 UNINSTALL §九）
@@ -22,6 +22,10 @@
 4. push 后 `gh api` 线上校验，并远端拉回复扫。
 - 敏感模式清单因含个人信息不公开列出。提交前请自查并确保**不引入**：凭证、绝对路径中的用户名、真实姓名、uin、邮箱。
 - **本仓不做 CI**（定案）：敏感审计模式含个人信息，不能进公开 workflow 文件；人工发布流程已覆盖。
+
+### 提交信息纪律（v22 起）
+- 提交信息 = **主题 + 要点，≤1.5KB**：主题一行说清这轮交付了什么，要点列关键变化；执行细节/探针/评审记录归 `internal/` 执行日志（exec-log），不进提交信息。
+- 单轮交付单提交（保持 `git log` 与 CHANGELOG 首条一一对应）。
 
 ### 卸载承诺
 - 任何**新增安装物或运行时产物**，必须同步登记进 `UNINSTALL.md`（维持一键还原承诺），否则不予合并。
@@ -38,7 +42,7 @@
 - 基于**单 main 分支**直接提交 PR，无需额外分支模型。
 - 本地 `node --check` 对**全部脚本**逐个通过。
 - 跑**全命令回归**：`doctor` / `ask` / `fanout` / `config` / `history` / `export-bundle`。
-- 回归门禁套件（`internal/*.mjs`）在维护者本地 `internal/` 下（已 gitignore，不入库），PR **只要求全命令回归**；门禁由维护者在合并前统一执行。
+- 回归门禁套件（`internal/` 六域常青套件：core-matrix / cli-blackbox / ui-contract / ui-redtest / daemon-lifecycle / docs-governance + test-helpers）在维护者本地 `internal/` 下（已 gitignore，不入库），PR **只要求全命令回归**；门禁由维护者在合并前统一执行。
 - PR 描述须包含：
   - 白名单符合性说明（是否新增文件、理由）；
   - `node --check` 结果；

@@ -21,7 +21,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { WBX_VERSION, RUNTIME_ROOT, SCRIPT_DIR, GLOBAL_BRIDGE_DIR, HOME, ensureDirs } from './wbx-core.mjs';
+import { WBX_VERSION, RUNTIME_ROOT, SCRIPT_DIR, GLOBAL_BRIDGE_DIR, HOME, UI_DEFAULT_PORT, ensureDirs } from './wbx-core.mjs';
 
 // ---------- 纯函数集（守护判活 + 请求安全；契约见 internal 测试） ----------
 
@@ -115,7 +115,7 @@ export const UI_RUN_DIR = path.join(RUNTIME_ROOT, 'run');
 export const UI_LOG_DIR = path.join(RUNTIME_ROOT, 'logs');
 export const UI_STATE_FILE = path.join(UI_RUN_DIR, 'ui.json');
 export const UI_LOG_FILE = path.join(UI_LOG_DIR, 'ui.log');
-export const UI_DEFAULT_PORT = 7788;
+// UI_DEFAULT_PORT 自 wbx-core 导入（v22 单源：wbx/daemon/ui 三处引用同值；此处不再重复定义）
 
 export function readUiState() {
   try {

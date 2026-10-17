@@ -1,15 +1,11 @@
 {
   "name": "doubao-bridge",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
+  "description": "豆包桌面端 CDP 桥（wbx 桥第四 lane 运行时 + wbx doubao 手工直通 CLI；依赖 playwright-core）",
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "dependencies": {
     "playwright-core": "^1.63.0"
   }

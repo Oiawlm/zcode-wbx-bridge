@@ -23,6 +23,8 @@
             3 可执行文件缺失 / 启动失败 / 就绪轮询超时 / 端口被非豆包进程占用
             4 端口绑定校验失败（出现非回环绑定，或无法确认回环 LISTENING）
             5 未预期异常
+    （注意：本退出码空间与 doubao.mjs 互相独立、同码不同义——那边 2=锚点失配/3=CDP 不可达/4=配置错；
+      消费方 wbx-core 按来源进程区分，不走数值等价）
 
 .NOTES
     文件编码必须为 UTF-8 with BOM：PowerShell 5.1 只有看到 BOM 才会按 UTF-8 解析脚本，否则中文注释与
@@ -337,7 +339,10 @@ if ($live.Count -eq 0) {
 $livePids = @($live | ForEach-Object { [int]$_.Id })
 
 # ---- 步骤 5：解析 pid 并输出唯一一行 JSON ----
+# 归因优先级：端口监听者∈豆包进程 > 启动器自身 > 最早豆包进程（兜底，标注 pid_inferred——
+# 兜底值可能是启动器/辅助进程而非真正 CDP 进程，消费方据此知情）
 $cdpPid = $null
+$cdpPidInferred = $false
 foreach ($listenPid in $listenPids) {
     if ($livePids -contains $listenPid) { $cdpPid = $listenPid; break }
 }
@@ -346,16 +351,23 @@ if ($null -eq $cdpPid) {
         $cdpPid = [int]$appProcess.Id
     }
     else {
-        $cdpPid = [int](@($live | Sort-Object StartTime | Select-Object -First 1)[0].Id)
+        # 兜底：取最早启动的豆包进程。Sort-Object StartTime 可能因进程恰好退出/属性访问拒绝
+        # 抛异常（曾直落 trap 把健康启动误判成 exit 5）——容错后退化按枚举序取首个。
+        $cdpPidInferred = $true
+        $earliest = $null
+        try { $earliest = @($live | Sort-Object StartTime -ErrorAction Stop | Select-Object -First 1)[0] } catch { $earliest = $null }
+        if ($null -eq $earliest) { $earliest = @($live | Select-Object -First 1)[0] }
+        if ($null -ne $earliest) { $cdpPid = [int]$earliest.Id }
     }
 }
 
-Write-Note "就绪: $browser，仅监听 127.0.0.1:$Port (PID $cdpPid)"
+Write-Note "就绪: $browser，仅监听 127.0.0.1:$Port (PID $cdpPid)$(if ($cdpPidInferred) { '（推断值：未直接归因到监听进程）' })"
 $payload = [ordered]@{
     ok      = $true
     port    = $Port
     browser = $browser
     pid     = $cdpPid
+    pid_inferred = $cdpPidInferred
     reason  = $null
     hint    = $ShutdownHint
 }

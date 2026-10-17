@@ -12,6 +12,8 @@ import { chromium } from 'playwright-core';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ANCHORS_FILE = path.join(HERE, 'anchors.json');
 
+// 退出码（注意与 launch.ps1 的退出码空间互相独立：那边 1=已有进程/2=未归零/3=启动失败/4=绑定异常，
+// 同码不同义；消费方 wbx-core 按来源进程区分，不走数值等价）
 const EXIT = { OK: 0, GENERIC: 1, ANCHOR: 2, CDP: 3, CONFIG: 4, READ_TIMEOUT: 5 };
 
 const DEFAULT_MODEL = '豆包 2.1 Pro';
@@ -112,7 +114,7 @@ function parseArgv(argv) {
       case 'index': {
         const [v, ni] = takeValue(arg, i);
         const n = Number(v);
-        if (!Number.isInteger(n)) throw new CliError(`--index 必须是整数: ${v}`, EXIT.GENERIC);
+        if (!Number.isInteger(n)) throw new CliError(`--index 必须是整数（负数=从末位倒数）: ${v}`, EXIT.GENERIC, { usage: USAGE });
         opts.index = n;
         i = ni;
         break;
@@ -169,8 +171,9 @@ function candidatesFor(key) {
 }
 
 // 只认主应用页，launcher / background 页一律不碰
+const PAGE_WAIT_CAP_MS = 3000; // 主应用页探测封顶（页面定位是轻量探测，不受 --timeout-ms 任务超时影响；防误传大值时挂等）
 async function getAppPage(browser, timeoutMs) {
-  const deadline = Date.now() + Math.min(timeoutMs, 3000);
+  const deadline = Date.now() + Math.min(timeoutMs, PAGE_WAIT_CAP_MS);
   for (;;) {
     for (const context of browser.contexts()) {
       for (const page of context.pages()) {
@@ -213,10 +216,6 @@ async function resolveAnchor(page, key, opts) {
   return page.locator(sel).first();
 }
 
-async function resolveOne(page, key, opts) {
-  return resolveAnchor(page, key, opts);
-}
-
 // ---------------------------------------------------------------- 状态栏
 
 function normalizeText(raw) {
@@ -248,24 +247,16 @@ function statusSatisfies(statusText, model, reasoning) {
 }
 
 async function readStatusText(page, timeoutMs) {
-  const locator = await resolveOne(page, 'modelButton', { timeoutMs, state: 'visible' });
+  const locator = await resolveAnchor(page, 'modelButton', { timeoutMs, state: 'visible' });
   const text = await locator.textContent({ timeout: timeoutMs });
   return normalizeText(text);
 }
 
-async function readStatusTextSafe(page, timeoutMs) {
+// 锚点文本安全读（失配/超时一律 null，绝不抛——status 探测是只读降级路径；modelButton/modeButton 共用）
+async function readAnchorTextSafe(page, key, timeoutMs) {
   try {
-    return await readStatusText(page, timeoutMs);
-  } catch {
-    return null;
-  }
-}
-
-async function readModeTextSafe(page, timeoutMs) {
-  try {
-    const locator = await resolveOne(page, 'modeButton', { timeoutMs, state: 'visible' });
-    const text = await locator.textContent({ timeout: timeoutMs });
-    return normalizeText(text) || null;
+    const locator = await resolveAnchor(page, key, { timeoutMs, state: 'visible' });
+    return normalizeText(await locator.textContent({ timeout: timeoutMs })) || null;
   } catch {
     return null;
   }
@@ -324,7 +315,7 @@ async function findMenuItem(page, { label, prefix = false, timeoutMs, what }) {
 
 async function ensureMenuOpen(page, opts) {
   if (await isMenuOpen(page)) return;
-  const button = await resolveOne(page, 'modelButton', { timeoutMs: opts.timeoutMs, state: 'visible' });
+  const button = await resolveAnchor(page, 'modelButton', { timeoutMs: opts.timeoutMs, state: 'visible' });
   await button.click(); // 真实 CDP 点击
   const deadline = Date.now() + opts.timeoutMs;
   while (Date.now() < deadline) {
@@ -338,8 +329,8 @@ async function ensureMenuOpen(page, opts) {
 
 async function doStatus(page, opts) {
   const appPageUrl = page.url();
-  const model = await readStatusTextSafe(page, opts.timeoutMs);
-  const mode = await readModeTextSafe(page, opts.timeoutMs);
+  const model = await readAnchorTextSafe(page, 'modelButton', opts.timeoutMs);
+  const mode = await readAnchorTextSafe(page, 'modeButton', opts.timeoutMs);
   const browserTitle = await page.title().catch(() => null);
   return { cdp: opts.cdpUrl, appPageUrl, model, mode, browserTitle };
 }
@@ -351,10 +342,14 @@ async function doNewTask(page, opts) {
   // 并用 workHomePage 锚点验证确实切到了工作模式首页（防止快捷键被吞的假成功）。
   let clicked = false;
   try {
-    const button = await resolveOne(page, 'newWorkTaskButton', { timeoutMs: opts.timeoutMs, state: 'visible' });
+    const button = await resolveAnchor(page, 'newWorkTaskButton', { timeoutMs: opts.timeoutMs, state: 'visible' });
     await button.click({ timeout: 5000 });
     clicked = true;
-  } catch {}
+  } catch (e) {
+    // 锚点全候选失配=选择器回归，必须显式失败（自述信条：失配绝不硬重试、不换 locator 猜），
+    // 绝不用 Ctrl+N 兜底掩盖成「成功」；其余失败（按钮视口外/点击超时）才回退快捷键
+    if (e instanceof CliError && e.code === EXIT.ANCHOR) throw e;
+  }
   if (!clicked) {
     await page.keyboard.press('Control+N');
   }
@@ -463,7 +458,7 @@ async function doSend(page, opts, text) {
     }
   }
 
-  const editor = await resolveOne(page, 'editor', { timeoutMs: opts.timeoutMs, state: 'visible' });
+  const editor = await resolveAnchor(page, 'editor', { timeoutMs: opts.timeoutMs, state: 'visible' });
   await editor.click(); // 真实点击聚焦
   // 分步使用 send 时编辑器可能残留草稿：先清空再输入，避免拼接成意外任务
   await page.keyboard.press('Control+a');
@@ -471,7 +466,7 @@ async function doSend(page, opts, text) {
   await typeIntoEditor(page, payload);
 
   // chat_input_send_button 仅在编辑器有内容后才渲染，必须在输入之后定位
-  const sendButton = await resolveOne(page, 'sendButton', { timeoutMs: opts.timeoutMs, state: 'visible' });
+  const sendButton = await resolveAnchor(page, 'sendButton', { timeoutMs: opts.timeoutMs, state: 'visible' });
   await sendButton.click();
 
   return { sent: true, modelAtSend: statusAtSend };
@@ -624,8 +619,10 @@ main().then(
   },
   (err) => {
     const code = err instanceof CliError ? err.code : EXIT.GENERIC;
-    if (code === EXIT.GENERIC) {
-      process.stderr.write(`doubao.mjs: ${err?.stack ?? String(err)}\n`);
+    if (err instanceof CliError) {
+      process.stderr.write(`doubao.mjs: ${err.message}（exit ${code}）\n`);   // 结构化错误：简行到 stderr，stdout JSON 仍是权威
+    } else {
+      process.stderr.write(`doubao.mjs: ${err?.stack ?? String(err)}\n`);    // 未预期异常：全栈便于定位
     }
     emit({
       ok: false,

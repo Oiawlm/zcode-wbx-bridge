@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * wbx — ZCode ↔ WorkBuddy AI 联动桥 CLI（可观测 + 全局化 + 可视化 + 可分发）
+ * wbx — ZCode ↔ 外部算力联动桥 CLI（薄壳：参数解析 + 输出格式化）
  *
  * 可复用逻辑在 ./wbx-core.mjs，安装/打包在 ./wbx-setup.mjs，Web UI 在 ./wbx-ui.mjs。
- * 本文件是薄 CLI 壳：参数解析 + 输出格式化。
+ * 子命令、旗标、退出码的权威清单=本文件 COMMANDS/FLAGS 表与 --help（由表生成，不另维护平行清单）。
  *
  * 五 lane：codex = Codex CLI（ChatGPT Plus 质量优先档：单发 ask 默认优先，额度耗尽自动冷却让位）；
  * ai = 国际版（deepseek-v4.1-flash x0.00 免费）；cn = 国内版（x0.03 近免费）；
@@ -11,17 +11,6 @@
  * doubao = 豆包桌面端（会员额度；回退链最末）+ 手工直通双入口并存。
  * 默认路由三分：单发 auto=codex 就绪即优先、否则 ai 免费优先；fanout 批量缺省免费池（codex 点名才投）；
  * 失败/限流自动回退下一 lane（各一次，付费两档排后）。
- *
- * 用法（node wbx.mjs <子命令>，详见 --help）：
- *   doctor / login / ask / fanout / models          v2 全量保留
- *   config get|set|list                             运行时配置（存 <运行时根>/config.json）
- *   history [--last N] / history <jobId>            job 历史与完整回放（含旧 .wbx/tasks/）
- *   install-user / uninstall-user                   v2 兼容（legacy）：用户级 AGENTS.md 标记块
- *   self-install / self-uninstall                   用户级全局安装（~/.zcode + ~/.wbx）
- *   ui [--port 7788]                                本地 Web UI（127.0.0.1，无常驻）
- *   export-bundle [--out <dir>]                     分发打包（零凭证，含自检断言）
- *   doubao <doubao.mjs 子命令…>                     豆包桌面桥手工直通（参数原样转发，零落盘
- *                                                   旁路；与第四 lane 调度双入口并存）
  *
  * 约束：绝不写 ~/.workbuddy、~/.workbuddy-ai；凭证只存 .wbx/ 或 ~/.wbx/（均 gitignore），
  * 绝不打印其内容。
@@ -31,14 +20,14 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import {
-  WBX_VERSION, SCRIPT_DIR, PROJECT_ROOT, RUNTIME_ROOT, JOBS_DIR, LEGACY_TASKS_DIR,
+  WBX_VERSION, SCRIPT_DIR, RUNTIME_ROOT, JOBS_DIR, LEGACY_TASKS_DIR,
   IDENTITIES, LANE_ORDER, STDIN_THRESHOLD, CONFIG_DEFS,
-  HOME, CODEX_HOME,
+  HOME, CODEX_HOME, UI_DEFAULT_PORT,
   clineReady, clineProvidersFile, clineHomeDir, runClineAuth,
-  die, redact, brief, fmtMs,
+  die, DieSignal, redact, brief, fmtMs,
   ensureDirs, readStdin, migrateIfNeeded,
   loadConfig, setConfig,
-  resolveDefaultLane, parseLane, laneReady,
+  resolveDefaultLane, parseLane, laneReady, resolveDoubaoDir,
   askOnce, resolveModel, fetchClineFreeModels, laneBalance,
   runAskJob, runFanoutJob,
   listJobs, getJob,
@@ -51,7 +40,7 @@ import { selfInstall, selfUninstall, exportBundle } from './wbx-setup.mjs';
 
 // ---------- 子命令：doctor ----------
 async function cmdDoctor(opts) {
-  const r = await doctorStatus({ probe: !opts.noProbe, onLine: (m) => console.error(m) });
+  const r = await doctorStatus({ probe: !opts.noProbe && !opts.quick, quick: !!opts.quick, onLine: (m) => console.error(m) });
   const ready = r.readyLanes;
   const failed = r.lanes.filter((l) => l.probe && !l.probe.good);
   if (ready.length && failed.length && r.lanes.some((x) => x.probe?.good)) {
@@ -624,11 +613,11 @@ async function cmdUi(opts) {
   if (opts.detach) {
     // 钩子路径（SessionStart 也走这里）：必须秒回且永远 exit 0，失败只打印/落日志。
     // 输出走 stderr：宿主会把钩子 stdout 按 JSON 严格 schema 解析，保持 stdout 为空最稳。
-    const r = await daemon.detachUi({ port: opts.port ?? 7788 });
+    const r = await daemon.detachUi({ port: opts.port ?? UI_DEFAULT_PORT });
     console.error(`${r.ok ? '[OK] ' : '[FAIL] '}${r.message}`);
     await exitWith(0);
   }
-  if (opts.daemon) return daemon.daemonMain({ port: opts.port ?? 7788 }); // 内部：由 --detach spawn
+  if (opts.daemon) return daemon.daemonMain({ port: opts.port ?? UI_DEFAULT_PORT }); // 内部：由 --detach spawn
   // 裸 `wbx ui`：守护进程已在跑 -> 打印 URL + 开浏览器 + exit 0；否则维持前台模式
   const probe = await daemon.probeExisting();
   if (probe.decision === 'reuse') {
@@ -638,7 +627,7 @@ async function cmdUi(opts) {
     await exitWith(0);
   }
   const { startUiServer } = await import('./wbx-ui.mjs');
-  await startUiServer({ port: opts.port ?? 7788, open: !opts.noOpen });
+  await startUiServer({ port: opts.port ?? UI_DEFAULT_PORT, open: !opts.noOpen });
   // startUiServer 自己 keep-alive；此处不 exit
 }
 
@@ -647,14 +636,11 @@ async function cmdUi(opts) {
 // 与 wbx 自身不同，由 doubao.mjs 自己解析并负责 usage/退出码；本函数只做目录解析 + 子进程直通。
 // 不变量：直通必须无痕——任何子命令零落盘副作用，勿给豆包直通加记录逻辑（历史页语义=lane 调度记录）。
 async function cmdDoubao(restArgs) {
-  const candidates = [
-    path.join(path.dirname(SCRIPT_DIR), 'doubao'),        // 全局形态：~/.zcode/wbx-bridge/doubao/（self-install 复制）
-    path.join(PROJECT_ROOT, 'tools', 'doubao-bridge'),    // 仓库形态：桥源码仓的 v12 交付物
-  ];
-  const dir = candidates.find((d) => fs.existsSync(path.join(d, 'doubao.mjs')));
+  // 目录解析走 core 单源 resolveDoubaoDir（wbx-core 的 askOnceDoubao 同款；v22 收敛双候选复述）
+  const dir = resolveDoubaoDir();
   if (!dir) {
     die(
-      `未找到豆包桥 doubao.mjs（已查：\n  ${candidates.join('\n  ')}）。\n` +
+      '未找到豆包桥 doubao.mjs（已查：全局 ~/.zcode/wbx-bridge/doubao/ 与仓库 tools/doubao-bridge/）。\n' +
       '全局形态：在装有本桥的源码仓里跑 wbx self-install，会把 tools/doubao-bridge/ 一并复制到 ~/.zcode/wbx-bridge/doubao/。\n' +
       '豆包桥是可选工具（Windows-only），缺失不影响其余 lane（ai/cn/cline）。'
     );
@@ -668,7 +654,51 @@ async function cmdDoubao(restArgs) {
   });
 }
 
-// ---------- 参数解析与入口 ----------
+// ---------- 参数解析与入口（表驱动：FLAGS/COMMANDS 是唯一事实源，HELP 索引段由表生成） ----------
+// 旗标表：name/别名/是否带值/取值类型。新增旗标只改这里（parseArgs 与 --help 旗标总表自动跟进）
+const FLAGS = [
+  { name: '--file', val: 'str' },
+  { name: '--text', alias: ['-p'], val: 'str', key: 'prompt' },
+  { name: '--model', alias: ['-m'], val: 'str' },
+  { name: '--effort', val: 'str' },
+  { name: '--caps', val: 'str' },
+  { name: '--max-turns', val: 'int' },
+  { name: '--as', val: 'str' },
+  { name: '--lanes', val: 'str' },
+  { name: '--parallel', alias: ['--lane-parallel'], val: 'int' },
+  { name: '--timeout', val: 'int' },
+  { name: '--retry', val: 'int' },
+  { name: '--wait', val: 'int' },
+  { name: '--probe', val: 'str' },
+  { name: '--free', val: 'bool' },
+  { name: '--identity', val: 'str' },
+  { name: '--last', val: 'int' },
+  { name: '--task', val: 'str' },
+  { name: '--port', val: 'int' },
+  { name: '--detach', val: 'bool' },
+  { name: '--stop', val: 'bool' },
+  { name: '--status', val: 'bool' },
+  { name: '--daemon', val: 'bool' },
+  { name: '--install-autostart', val: 'bool' },
+  { name: '--remove-autostart', val: 'bool' },
+  { name: '--out', val: 'str' },
+  { name: '--json', val: 'bool' },
+  { name: '--stdin', val: 'bool' },
+  { name: '--no-open', val: 'bool' },
+  { name: '--no-probe', val: 'bool' },
+  { name: '--quick', val: 'bool' },
+  { name: '--force', val: 'bool' },
+  { name: '--adopt', val: 'bool' },
+  { name: '--no-keep-project', val: 'bool' },
+  { name: '--purge', val: 'bool' },
+  { name: '--version', alias: ['-v'], val: 'bool' },
+  { name: '--help', alias: ['-h'], val: 'bool' },
+];
+const FLAG_LOOKUP = new Map([
+  ...FLAGS.map((f) => [f.name, f]),
+  ...FLAGS.flatMap((f) => (f.alias || []).map((a) => [a, f])),
+]);
+
 function parseArgs(argv) {
   const opts = { _: [] };
   const next = (i) => {
@@ -677,49 +707,39 @@ function parseArgs(argv) {
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    switch (a) {
-      case '--file': opts.file = next(i); i++; break;
-      case '--text': case '-p': opts.prompt = next(i); i++; break;
-      case '--model': case '-m': opts.model = next(i); i++; break;
-      case '--effort': opts.effort = next(i); i++; break;
-      case '--caps': opts.caps = next(i); i++; break;
-      case '--max-turns': opts.maxTurns = next(i); i++; break;
-      case '--as': opts.as = next(i); i++; break;
-      case '--lanes': opts.lanes = next(i); i++; break;
-      case '--parallel': case '--lane-parallel': opts.parallel = parseInt(next(i), 10); i++; break;
-      case '--timeout': opts.timeout = parseInt(next(i), 10); i++; break;
-      case '--retry': opts.retry = parseInt(next(i), 10); i++; break;
-      case '--wait': opts.wait = parseInt(next(i), 10); i++; break;
-      case '--probe': opts.probe = next(i); i++; break;
-      case '--free': opts.free = true; break;
-      case '--identity': opts.identity = next(i); i++; break;
-      case '--last': opts.last = parseInt(next(i), 10); i++; break;
-      case '--task': opts.task = next(i); i++; break;
-      case '--port': opts.port = parseInt(next(i), 10); i++; break;
-      case '--detach': opts.detach = true; break;
-      case '--stop': opts.stop = true; break;
-      case '--status': opts.status = true; break;
-      case '--daemon': opts.daemon = true; break;
-      case '--install-autostart': opts.installAutostart = true; break;
-      case '--remove-autostart': opts.removeAutostart = true; break;
-      case '--out': opts.out = next(i); i++; break;
-      case '--json': opts.json = true; break;
-      case '--stdin': opts.stdin = true; break;
-      case '--no-open': opts.noOpen = true; break;
-      case '--no-probe': opts.noProbe = true; break;
-      case '--force': opts.force = true; break;
-      case '--adopt': opts.adopt = true; break;
-      case '--no-keep-project': opts.noKeepProject = true; break;
-      case '--purge': opts.purge = true; break;
-      case '--version': case '-v': opts.version = true; break;
-      case '--help': case '-h': opts.help = true; break;
-      default:
-        if (a.startsWith('--')) die(`未知参数 ${a}（--help 查看用法）`);
-        opts._.push(a);
+    const f = FLAG_LOOKUP.get(a);
+    if (f) {
+      const key = f.key || f.name.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      if (f.val === 'bool') opts[key] = true;
+      else if (f.val === 'int') opts[key] = parseInt(next(i), 10), i++;
+      else opts[key] = next(i), i++;
+      continue;
     }
+    if (a.startsWith('--')) die(`未知参数 ${a}（--help 查看用法）`);
+    opts._.push(a);
   }
   return opts;
 }
+
+// 命令表：子命令分发与「命令一览」索引的唯一事实源（详细用法块在下文 HELP 手写维护——语义叙述
+// 不适合表化，但清单与枚举绝不平行手抄）
+const COMMANDS = [
+  { name: 'doctor', fn: (o) => cmdDoctor(o), desc: '自检向导（--quick <10s 静态快检；--no-probe 免模型探测）' },
+  { name: 'login', fn: (o) => cmdLogin(o), desc: '登录引导（--identity cn|ai|cline|codex）' },
+  { name: 'ask', fn: (o) => cmdAsk(o), desc: '单次调用（stdout=结果，失败自动跨 lane 回退，落盘 job）' },
+  { name: 'fanout', fn: (o) => cmdFanout(o), desc: '并发池批量执行（结果落 <运行时根>/jobs/<jobId>/）' },
+  { name: 'models', fn: (o) => cmdModels(o), desc: '探测模型可用性 + 产品配置模型列表（--as cline --free 免费组）' },
+  { name: 'usage', fn: (o) => cmdUsage(o), desc: '各 lane 余额（社区端点显式标非官方，诚实降级）' },
+  { name: 'config', fn: (o) => cmdConfig(o), desc: 'list | get <key> | set <key> <value>（存 config.json）' },
+  { name: 'history', fn: (o) => cmdHistory(o), desc: '历史列表 / 完整回放双向对话' },
+  { name: 'install-user', fn: () => cmdInstallUser(), desc: 'legacy：向 ~/.zcode/AGENTS.md 注入标记块' },
+  { name: 'uninstall-user', fn: () => cmdUninstallUser(), desc: 'legacy：移除用户级标记块' },
+  { name: 'self-install', fn: (o) => cmdSelfInstall(o), desc: '用户级全局安装（~/.zcode/wbx-bridge + skill + ~/.wbx）' },
+  { name: 'self-uninstall', fn: (o) => cmdSelfUninstall(o), desc: '全局卸载（--purge 连凭证目录删）' },
+  { name: 'export-bundle', fn: (o) => cmdExportBundle(o), desc: '分发打包（零凭证 zip + 自检）' },
+  { name: 'ui', fn: (o) => cmdUi(o), desc: '本地 Web UI（--detach 守护 / --stop / --status / 自启钩子）' },
+  { name: 'doubao', fn: null, desc: '豆包桌面桥手工直通（参数原样转发 doubao.mjs，零落盘旁路）' },
+];
 
 const HELP = `wbx — ZCode <-> 外部算力联动桥（v${WBX_VERSION} 五 lane：Codex CLI + WorkBuddy 双 lane + 可选 Cline CLI + 可选豆包桌面端）
 
@@ -744,9 +764,12 @@ codex 隔离：CODEX_HOME=<运行时根>/codex-home（--ignore-user-config 运�
 doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao …」手工直通为零落盘旁路（不经调度、不入历史）。
 
 用法：
-  node wbx.mjs doctor  [--no-probe]                 自检向导：node/CLI 探测/模板/两 lane 凭证+模型探测
+  node wbx.mjs doctor  [--quick] | [--no-probe]    自检向导：node/CLI 探测/模板/两 lane 凭证+模型探测
                                                    + cline 可选段（含免费孪生存在性校验）
                                                    + codex 可选段（免额度探测：login status+模型+冷却态）
+                                                   --quick：快检（v22）——跳过一切探测与端点/子进程调用，
+                                                   只做 node/CLI 路径/凭证存在性/config 静态检查，<10s 零额度；
+                                                   常规会话自检用 --quick，排障才全量
   node wbx.mjs login   [--identity cn|ai|cline|codex] [...] 登录引导（默认 cn 微信扫码；ai 有 state 修补锦囊；
                      cline 为 OAuth 设备授权，浏览器完成；codex 为一次性只读复制 ~/.codex/auth.json）
                      [--wait 300] [--no-open] [--force]
@@ -765,9 +788,10 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                                                       L1 别名同值）、"maxTurns":N（任务级回合上限，语义同 ask）、
                                                       "filesMode":"reference"（材料播种：files 复制进 worker
                                                       scratch 按相对路径自读；需任务级 caps 显式含 read+ai/cn）
-  node wbx.mjs models  [--as cn|ai|cline] [--probe "m1,m2"]   探测模型可用性并列出产品配置中的模型
+  node wbx.mjs models  [--as codex|ai|cn|cline|doubao] [--probe "m1,m2"]   探测模型可用性并列出产品配置中的模型
                      [--free]     （--as cline --free：列当前免费模型组，recommended-models 端点实时；
-                                   codex 无模型探测：走 config codex-model+doctor，不做逐个 tiny ask）
+                                   codex/doubao 无模型清单概念：明确报错指路——codex 走 config
+                                   codex-model+doctor（探测耗 Plus 额度不做），doubao 模型自管理）
   node wbx.mjs usage  [--json] [--force]             各 lane 余额（v6.8：WorkBuddy 双 lane 走社区 billing
                                                     端点并显式标注「非官方」；cline/doubao/codex 如实标注
                                                     无端点——Plus 额度以 ChatGPT 网页端 Settings→Usage 为准；
@@ -812,6 +836,15 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
 
 tasks.json 格式：[{"id":"t1","prompt":"...","as?":"codex|ai|cn|cline|doubao","model?":"...","effort?":"low","file?":"p.txt","files?":["a.js"],"filesMode?":"reference（需任务级 caps 显式含 read）","caps?":"net,read（能力集或 L1 别名）","maxTurns?":24}]
 
+命令一览（与分发表同源生成）：
+${COMMANDS.map((c) => `  ${(c.name + ' ').padEnd(16)} ${c.desc}`).join('\n')}
+
+旗标总表（与解析表同源生成；均为全局旗标，按子命令适用）：
+${FLAGS.map((f) => `  ${f.name.padEnd(22)}${(f.alias || []).map((a) => `${a} `).join('').padEnd(8)}${f.val === 'bool' ? '开关' : f.val === 'int' ? '整数' : '取值'}`).join('\n')}
+
+退出码：0 成功 / 1 失败（含校验错误 die）；usage 命令自然排空不强制退出（Windows libuv 兼容特例）；
+ui --detach 恒 0（钩子路径须秒回，失败只落日志）；wbx-daemon 专用退出码 78（守护协议，不经本 CLI）。
+
 环境变量（均可选）：WBX_HOME（运行时根）、WBX_CLI、WBX_CLINE（cline 二进制）、WBX_CODEX（codex 二进制）、
 WBX_MODEL、WBX_PROJECT_ROOT、WBX_PRODUCT_CONFIG（login 模板）`;
 
@@ -824,23 +857,14 @@ async function main() {
   const cmd = opts._[0];
   if (opts.help || !cmd) { console.error(HELP); await exitWith(cmd ? 0 : 1); }
   migrateIfNeeded();
-  switch (cmd) {
-    case 'doctor': return cmdDoctor(opts);
-    case 'login': return cmdLogin(opts);
-    case 'ask': return cmdAsk(opts);
-    case 'fanout': return cmdFanout(opts);
-    case 'models': return cmdModels(opts);
-    case 'usage': return cmdUsage(opts);
-    case 'config': return cmdConfig(opts);
-    case 'history': return cmdHistory(opts);
-    case 'install-user': return cmdInstallUser();
-    case 'uninstall-user': return cmdUninstallUser();
-    case 'self-install': return cmdSelfInstall(opts);
-    case 'self-uninstall': return cmdSelfUninstall(opts);
-    case 'export-bundle': return cmdExportBundle(opts);
-    case 'ui': return cmdUi(opts);
-    default: die(`未知子命令 ${cmd}（--help 查看用法）`);
-  }
+  const hit = COMMANDS.find((c) => c.name === cmd);
+  if (!hit || !hit.fn) die(`未知子命令 ${cmd}（--help 查看用法）`);
+  return hit.fn(opts);
 }
 
-main().catch(async (e) => { console.error('[FAIL] ' + redact(e && e.stack || e)); const { waitKills } = await import('./wbx-core.mjs'); await waitKills(); process.exit(1); });
+// die() 抛 DieSignal 至此统一收口：等 pendingKills 后退（win32 libuv 断言防护，退出协议单点）；
+// 非 DieSignal 的意外异常打印堆栈后同码退出
+main().catch(async (e) => {
+  if (!(e instanceof DieSignal)) console.error('[FAIL] ' + redact(e && e.stack || e));
+  await exitWith(1);
+});

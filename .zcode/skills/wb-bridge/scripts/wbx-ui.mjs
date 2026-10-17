@@ -33,7 +33,6 @@
  */
 
 import http from 'node:http';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -41,7 +40,8 @@ import crypto from 'node:crypto';
 import zlib from 'node:zlib';
 import {
   WBX_VERSION, RUNTIME_ROOT, JOBS_DIR,
-  LANE_ORDER, CONFIG_DEFS, bridgeForm,
+  LANE_ORDER, CONFIG_DEFS, UI_DEFAULT_PORT, crc32,
+  bridgeForm, doubaoCdpProbe, doubaoProcessRunning,
   redact, loadConfig, setConfig, parseLane, parseCapsSet,
   laneStatusInfo, resolveDefaultLane, newJobId, getJob, listJobs, tokenTotals,
   runAskJob, runFanoutJob, doctorStatus, fetchClineFreeModels,
@@ -52,9 +52,17 @@ import {
 import { hostHeaderAllowed, originAllowed } from './wbx-daemon.mjs';
 
 // 守护上下文与监听端口（startUiServer 时设置；handler 里做安全校验与 shutdown 用）
-let LISTEN_PORT = 7788;
+let LISTEN_PORT = UI_DEFAULT_PORT;
 let DAEMON_CTX = null;   // { token, persist(state), clear(), onShutdown() }
 let SERVER = null;
+
+// ---------- 模板插值常量（路径/lane 选项单源；新增第六 lane 只改这里与 core LANE_ORDER） ----------
+const WBX_ENTRY_CMD = 'node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs"';   // 全局入口命令（cmd 写法，复制即用）
+const DOUBAO_LAUNCH_CMD = 'powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"';
+const LANE_ROUTE_LABELS = { codex: '固定 Codex', ai: '固定 WorkBuddy AI', cn: '固定 WorkBuddy', cline: '固定 Cline', doubao: '固定 豆包' };
+const LANE_SHORT_LABELS = { codex: 'Codex', ai: 'WorkBuddy AI', cn: 'WorkBuddy', cline: 'Cline', doubao: '豆包' };
+const laneRouteButtons = LANE_ORDER.map((k) => `<button data-v="${k}">${LANE_ROUTE_LABELS[k]}</button>`).join('\n          ');
+const laneShortButtons = LANE_ORDER.map((k) => `<button data-v="${k}">${LANE_SHORT_LABELS[k]}</button>`).join('\n            ');
 
 // ---------- 内嵌前端（单文件，无外部资源） ----------
 const HTML = `<!doctype html>
@@ -399,11 +407,7 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
       <div class="row">
         <span class="seg" id="route-pill">
           <button data-v="auto">自动（Codex 就绪即优先，否则免费档）</button>
-          <button data-v="codex">固定 Codex</button>
-          <button data-v="ai">固定 WorkBuddy AI</button>
-          <button data-v="cn">固定 WorkBuddy</button>
-          <button data-v="cline">固定 Cline</button>
-          <button data-v="doubao">固定 豆包</button>
+          ${laneRouteButtons}
         </span>
       </div>
       <div class="hint" id="route-hint" style="margin-top:8px"></div>
@@ -433,11 +437,7 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
         <div class="row">
           <span class="seg" id="ask-lane-seg">
             <button data-v="" class="active">自动</button>
-            <button data-v="codex">Codex</button>
-            <button data-v="ai">WorkBuddy AI</button>
-            <button data-v="cn">WorkBuddy</button>
-            <button data-v="cline">Cline</button>
-            <button data-v="doubao">豆包</button>
+            ${laneShortButtons}
           </span>
           <button class="btn-primary" id="ask-btn">执行单条调用</button>
         </div>
@@ -523,7 +523,7 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
         <summary>命令行登录（备用）· Cline CLI（可选通道）</summary>
         <div class="dbd">
           <p class="hint">Cline 登录是设备码流程，需在终端里跑（浏览器完成授权，凭证落隔离目录 <b>&lt;运行时根&gt;/cline-home/</b>，与用户 ~/.cline 无关）：</p>
-          <div class="copyline"><span class="t">node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" login --identity cline</span><button class="copybtn" data-copy='node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" login --identity cline'>复制</button></div>
+          <div class="copyline"><span class="t">${WBX_ENTRY_CMD} login --identity cline</span><button class="copybtn" data-copy='${WBX_ENTRY_CMD} login --identity cline'>复制</button></div>
           <p class="hint">登录后默认免费调 DeepSeek（cline-free/deepseek-v4.1-flash 孪生，限时轮换+每日配额）；
           免费模型可在「状态」页 Cline 卡下拉选择，或 <b>wbx models --as cline --free</b> 查清单后 config set。
           思考档默认 xhigh / 上下文压缩默认 off / 并发默认 1。
@@ -538,7 +538,7 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
         <summary>豆包（桌面端）· 无需在此登录</summary>
         <div class="dbd">
           <p class="hint">豆包已是第四 lane（可选，耗会员额度，路由/回退/批量调度均可用），但<b>登录仍在豆包桌面客户端内自理、桥侧零凭证</b>——本页与桥都不读写任何豆包账号信息，也没有「登录豆包」流程。桥只需要豆包以调试端口 9225 运行，启动方式：</p>
-          <div class="copyline"><span class="t">powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1" -Force</span><button class="copybtn" data-copy='powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1" -Force'>复制</button></div>
+          <div class="copyline"><span class="t">${DOUBAO_LAUNCH_CMD} -Force</span><button class="copybtn" data-copy='${DOUBAO_LAUNCH_CMD} -Force'>复制</button></div>
           <p class="hint">装过 self-install 后任何项目任何目录可用（上面为 cmd 写法，PowerShell 把 %USERPROFILE% 换成 $env:USERPROFILE、Git Bash 换成 ~；-Force 会在豆包已运行时先结束它们，请先保存未发送的草稿）。连接是否就绪，到「状态」页<b>豆包（桌面端）</b>通道卡看探针（客户端进程 + 调试口 9225）。</p>
         </div>
       </details>
@@ -550,7 +550,7 @@ tr.job-inline>td{padding:var(--s2) var(--s2) var(--s3) !important;background:var
         <summary>Codex CLI（ChatGPT Plus·可选通道）· 命令行收割凭证</summary>
         <div class="dbd">
           <p class="hint">Codex 是第五 lane（ChatGPT Plus 质量优先档：单发 ask 默认优先；额度耗尽自动冷却让位）。登录在 Codex 桌面版或 codex CLI 里完成（ChatGPT 账号），桥侧只做<b>一次性只读复制</b>凭证（不回写、不展示、不入库；除 auth.json 单文件外不读 ~/.codex 任何内容）：</p>
-          <div class="copyline"><span class="t">node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" login --identity codex</span><button class="copybtn" data-copy='node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" login --identity codex'>复制</button></div>
+          <div class="copyline"><span class="t">${WBX_ENTRY_CMD} login --identity codex</span><button class="copybtn" data-copy='${WBX_ENTRY_CMD} login --identity codex'>复制</button></div>
           <p class="hint">收割后到「状态」页 Codex 通道卡确认已登录（模型 gpt-6.1-sol，仅放行 gpt-6 及以上——用户裁决底线护栏）。Codex 侧令牌刷新导致桥内副本失联时，重跑上面命令加 --force 重新收割即可修复。</p>
         </div>
       </details>
@@ -569,6 +569,8 @@ const TYPE_LABEL={ask:'单条调用',fanout:'批量并行',unknown:'未知'};   
 const TASK_STATUS_LABEL={success:'成功',failed:'失败'};
 const JOB_STATUS_LABEL={done:'已完成',running:'进行中',pending:'等待中'};
 const LANE_ORDER_UI=['${LANE_ORDER.join("','")}'];   // 自 core LANE_ORDER 派生（lane 集合唯一来源）
+const FAN_LANE_LABELS={codex:'Codex（点名）',ai:'WorkBuddy AI',cn:'WorkBuddy',cline:'Cline',doubao:'豆包'};
+function fanLaneOptions(sel){var o='<option value="">自动（免费池）</option>';LANE_ORDER_UI.forEach(function(k){o+='<option value="'+k+'"'+(sel===k?' selected':'')+'>'+FAN_LANE_LABELS[k]+'</option>'});return o}
 const BS=String.fromCharCode(92); // 反斜杠常量（模板字符串安全，不写反斜杠字面量）
 const WBX_PS='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs'; // 全局入口命令前缀（cmd 写法）
 function laneLabel(k){return LANE_LABEL[k]||k||''}
@@ -1286,7 +1288,7 @@ function renderFanRows(){
     const r=fanRows[i];
     h+='<div class="fan-row">'
       +'<input type="text" data-i="'+i+'" data-f="id" value="'+esc(r.id)+'" placeholder="任务 ID">'
-      +'<select data-i="'+i+'" data-f="lane"><option value="">自动（免费池）</option><option value="codex"'+(r.lane==='codex'?' selected':'')+'>Codex（点名）</option><option value="ai"'+(r.lane==='ai'?' selected':'')+'>WorkBuddy AI</option><option value="cn"'+(r.lane==='cn'?' selected':'')+'>WorkBuddy</option><option value="cline"'+(r.lane==='cline'?' selected':'')+'>Cline</option><option value="doubao"'+(r.lane==='doubao'?' selected':'')+'>豆包</option></select>'
+      +'<select data-i="'+i+'" data-f="lane">'+fanLaneOptions(r.lane)+'</select>'
       +'<select data-i="'+i+'" data-f="caps" title="能力集（v19）：∅=L0 纯文本 / net,read=联网+只读（L1 别名，仅 WorkBuddy AI、国内版）/ 含 write 未交付"><option value=""'+(!r.caps?' selected':'')+'>L0</option><option value="net"'+(r.caps==='net'?' selected':'')+'>net</option><option value="read"'+(r.caps==='read'?' selected':'')+'>read</option><option value="net,read"'+(r.caps==='net,read'||r.caps==='L1'?' selected':'')+'>net,read</option></select>'
       +'<textarea data-i="'+i+'" data-f="prompt" style="min-height:44px" placeholder="worker 提示词">'+esc(r.prompt)+'</textarea>'
       +'<button class="fan-del" data-del="'+i+'" title="删除此任务行">×</button></div>';
@@ -1465,8 +1467,7 @@ updFanSum();
 </html>
 `;
 
-// ---------- 登录服务端状态（内存，单登录流） ----------
-const loginState = { status: 'idle', lane: null, startedAt: null, error: null, nickname: null };
+// ---------- 登录服务端状态（内存，单登录流；定义见路由区） ----------
 
 // ---------- PWA（manifest + 自产图标；零外链红线——图标纯函数生成，零落盘，确定性输出） ----------
 const PWA_MANIFEST = JSON.stringify({
@@ -1491,22 +1492,7 @@ function iconPng(size) {
 const SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const EMPTY = Buffer.alloc(0);
 
-// CRC32：固定多项式 0xEDB88320，查表由固定循环生成（无随机源，确定）
-const CRC_TABLE = (() => {
-  const t = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
-    t[n] = c >>> 0;
-  }
-  return t;
-})();
-
-function crc32(buf) {
-  let c = 0xFFFFFFFF;
-  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
-  return (c ^ 0xFFFFFFFF) >>> 0;
-}
+// crc32/CRC_TABLE 自 wbx-core 导入（v22 单源：与 wbx-setup zip 共用）
 
 // PNG chunk 不变量：length(4 BE, 仅 data) + type(4) + data + crc(4 BE, 覆盖 type+data)
 function chunk(type, data) {
@@ -1661,47 +1647,232 @@ function briefJob(j) {
 }
 
 // ---------- 豆包桥工具状态（只读探测，不碰豆包进程与凭证，任何失败降级不抛错） ----------
-function doubaoStatus() {
+// 探测实现自 wbx-core 导入（doubaoCdpProbe/doubaoProcessRunning，v22 单源——与 askOnceDoubao
+// 的 CDP 探测/进程判定同款，消除原整段重写）
+async function doubaoStatus() {
   const platform = process.platform;
   // 非 Windows：不做任何探测（README 诚实声明②：Windows-only，未在其他平台验证）
   if (platform !== 'win32') {
-    return Promise.resolve({ platform, process: false, cdp: false });
+    return { platform, process: false, cdp: false };
   }
-  // 1) 进程探测：tasklist 过滤 Doubao.exe；超时 3s 封顶保护（实测毫秒级），异常一律降级 false
-  let running = false;
-  try {
-    const r = spawnSync('tasklist', ['/FI', 'IMAGENAME eq Doubao.exe', '/NH'], { timeout: 3000, encoding: 'utf8', windowsHide: true });
-    if (r && !r.error && r.stdout) running = /doubao\.exe/i.test(String(r.stdout));
-  } catch { running = false; }
-  // 2) CDP 探测：GET /json/version，900ms 封顶；200+合法 JSON+非空 Browser 才算在线
-  //    （9225 被其他进程占用时因 Browser 校验不过判 false）；总耗时 <1.5s
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
-    const down = () => finish({ platform, process: running, cdp: false });
-    let req = null;
+  const running = doubaoProcessRunning();
+  const p = await doubaoCdpProbe();
+  return p.online ? { platform, process: running, cdp: true, browser: p.browser } : { platform, process: running, cdp: false };
+}
+
+// ---------- HTTP 服务（路由表驱动：method+pattern 单点登记；安全校验在表分发前统一执行） ----------
+// 登录服务端状态（内存，单登录流）
+const loginState = { status: 'idle', lane: null, startedAt: null, error: null, nickname: null };
+
+async function hHealth(req, res) {
+  sendJson(res, 200, { app: 'wbx-ui', pid: process.pid, port: LISTEN_PORT, version: WBX_VERSION });
+}
+async function hShutdown(req, res) {
+  if (!DAEMON_CTX) return sendJson(res, 404, { error: '前台模式不支持 /__shutdown（Ctrl+C 退出）' });
+  const b = await readBody(req);
+  const tok = Buffer.from(typeof b.token === 'string' ? b.token : '', 'utf8');
+  const expect = Buffer.from(DAEMON_CTX.token, 'utf8');
+  const good = tok.length === expect.length && crypto.timingSafeEqual(tok, expect);
+  if (!good) return sendJson(res, 403, { error: 'token 不正确' });
+  sendJson(res, 200, { ok: true, message: '正在优雅关闭' });
+  setTimeout(() => {
     try {
-      req = http.get('http://127.0.0.1:9225/json/version', (res) => {
-        let body = '';
-        res.setEncoding('utf8');
-        res.on('data', (c) => {
-          body += c;
-          if (body.length > 65536) { try { req.destroy(); } catch { /* 尽力而为 */ } down(); }
-        });
-        res.on('end', () => {
-          if (res.statusCode !== 200) return down();
-          let j = null;
-          try { j = JSON.parse(body); } catch { j = null; }
-          if (j && typeof j.Browser === 'string' && j.Browser.trim() !== '') finish({ platform, process: running, cdp: true, browser: j.Browser });
-          else down();
-        });
-        res.on('error', down);
-      });
-    } catch { down(); return; }
-    req.on('error', down);
-    req.setTimeout(900, () => { try { req.destroy(); } catch { /* 尽力而为 */ } down(); });
+      SERVER && SERVER.close(() => DAEMON_CTX && DAEMON_CTX.onShutdown());
+      setTimeout(() => DAEMON_CTX && DAEMON_CTX.onShutdown(), 3000); // close 被长连接卡住时兜底退出
+    } catch { DAEMON_CTX && DAEMON_CTX.onShutdown(); }
+  }, 150);
+}
+async function hIndex(req, res) {
+  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(HTML);
+}
+async function hManifest(req, res) {
+  res.writeHead(200, { 'content-type': 'application/manifest+json; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(PWA_MANIFEST);
+}
+async function hIcon(req, res, m) {
+  res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' });
+  res.end(iconPng(Number(m[1])));
+}
+async function hStatus(req, res, m, u) {
+  ensureDirs();
+  const cfg = loadConfig();
+  const lanes = LANE_ORDER.map((k) => laneStatusInfo(k));
+  // cline 免费模型组（server 侧调 recommended-models，失败降级缓存/空数组+提示）
+  let clineFreeModels = [];
+  let clineFreeModelsNote = '';
+  {
+    const fm = await fetchClineFreeModels();
+    if (fm.ok && fm.models.length) {
+      clineFreeModels = fm.models.map((x) => ({ id: x.id, name: x.name, description: x.description, deepseek: /deepseek/i.test(x.id) }));
+      if (fm.source === 'cache') clineFreeModelsNote = `清单为 ${String(fm.fetchedAt).slice(0, 16)} 缓存（端点暂不可用）`;
+    } else {
+      clineFreeModelsNote = fm.error || '免费清单不可用';
+    }
+  }
+  sendJson(res, 200, {
+    version: WBX_VERSION, runtimeRoot: RUNTIME_ROOT,
+    form: bridgeForm(),
+    config: cfg, defaultLane: cfg['default-lane'], effectiveLane: resolveDefaultLane(),
+    readyCount: lanes.filter((l) => l.ready && !l.disabled).length,
+    lanes, clineFreeModels, clineFreeModelsNote,
+    tokens: tokenTotals(),   // 外部桥接累计 token 用量（总览 chip 展示）
   });
 }
+async function hDoctor(req, res, m, u) {
+  const probe = u.searchParams.get('probe') === '1';
+  const d = await doctorStatus({ probe, onLine: null });
+  sendJson(res, 200, d);
+}
+async function hDoubao(req, res) {
+  sendJson(res, 200, await doubaoStatus());
+}
+async function hBalance(req, res) {
+  // 余额可见：per-lane 探测（core TTL 缓存共享；失败优雅降级为 unavailable/na，绝不阻塞）
+  const lanes = {};
+  for (const k of LANE_ORDER) lanes[k] = await laneBalance(k);
+  sendJson(res, 200, { lanes, fetchedAt: new Date().toISOString() });
+}
+async function hDoubaoEnsure(req, res) {
+  // 桥自治手动入口：幂等（core 单飞锁），CDP 在线零触碰豆包；按钮回执 toast + 刷新探测
+  sendJson(res, 200, await ensureDoubao());
+}
+async function hHistory(req, res) {
+  sendJson(res, 200, { jobs: listJobs(), totals: tokenTotals() });   // +全量 token 用量汇总
+}
+async function hJob(req, res, m, u) {
+  const j = await getJob(m[1]);
+  if (!j) return sendJson(res, 404, { error: `任务 ${m[1]} 不存在` });
+  if (u.searchParams.get('brief') === '1') return sendJson(res, 200, briefJob(j));
+  sendJson(res, 200, j);
+}
+async function hAsk(req, res) {
+  const b = await readBody(req);
+  const prompt = typeof b.prompt === 'string' ? b.prompt.trim() : '';
+  if (!prompt) return sendJson(res, 400, { error: '缺少提示词（prompt）' });
+  let as = null;
+  if (b.lane && b.lane !== 'auto') {
+    as = parseLane(b.lane);
+    if (!as) return sendJson(res, 400, { error: `lane 取值只支持 auto|codex|ai|cn|cline|doubao（codex=Codex CLI（ChatGPT Plus），ai=WorkBuddy AI，cn=WorkBuddy，cline=Cline，doubao=豆包桌面端；收到 ${b.lane}）` });
+  }
+  // caps 任务契约（v19 能力矩阵）——不合法值/含 write 未交付/lane 不匹配均 400（绝不静默降档或改路）
+  let caps = null; let capsNorm = null;
+  if (b.caps != null && b.caps !== '') {
+    const cp = parseCapsSet(b.caps);
+    if (!cp.ok) return sendJson(res, 400, { error: cp.kind === 'caps-l2-not-delivered' ? 'L2 本版未交付（声明即报错）' : `caps 只支持能力集（net/read/write 逗号组合）或别名 L0 | L1（收到 ${b.caps}）` });
+    if (cp.set.includes('write')) return sendJson(res, 400, { error: 'caps：write 能力本轮未交付（探针 P3 沙箱前提破裂，声明即报错）' });
+    caps = cp.normalized || 'L0';
+    capsNorm = cp.normalized;
+  }
+  if (capsNorm && (as === 'cline' || as === 'doubao' || as === 'codex')) {
+    return sendJson(res, 400, { error: `caps ${capsNorm} 与通道 ${as} 不匹配：能力任务仅支持 WorkBuddy AI / 国内版（ai/cn）` });
+  }
+  const jobId = newJobId();
+  // 异步启动约定：启动类端点即回 200+jobId，执行失败由 job 记录承接（轮询可见失败态），与
+  // 同步校验错误（400）分层——本端点不因执行失败改 5xx
+  runAskJob({
+    prompt, as,
+    model: typeof b.model === 'string' && b.model ? b.model : null,
+    effort: typeof b.effort === 'string' && b.effort ? b.effort : null,
+    timeoutS: Number(b.timeout) > 0 ? Number(b.timeout) : null,   // 缺省交由 core 超时单点决策
+    caps,
+    maxTurns: b.maxTurns ?? null,   // 任务级回合上限（core 校验 1-64/任何非 ∅ 能力集）
+    jobId,
+  }).catch((e) => writeFailedJob(jobId, e.message));
+  sendJson(res, 200, { jobId });
+}
+async function hFanout(req, res) {
+  const b = await readBody(req);
+  if (!Array.isArray(b.tasks) || !b.tasks.length) return sendJson(res, 400, { error: 'tasks 需为非空数组' });
+  const tasksIn = b.tasks.map((t, i) => ({
+    id: t.id || `task-${i + 1}`,
+    prompt: String(t.prompt || ''),
+    as: t.as || null,
+    effort: t.effort || null,
+    model: t.model || null,
+    caps: t.caps != null && t.caps !== '' ? t.caps : null,   // 任务级能力档（透传 core 校验）
+    maxTurns: t.maxTurns ?? null,   // 任务级 L1 回合上限（透传 core 校验）
+  }));
+  const bad = tasksIn.find((t) => !t.prompt.trim());
+  if (bad) return sendJson(res, 400, { error: `任务 ${bad.id} 缺少提示词（prompt）` });
+  let lanes = null;
+  if (Array.isArray(b.lanes) && b.lanes.length) lanes = b.lanes;
+  else if (typeof b.lanes === 'string' && b.lanes.trim()) lanes = b.lanes.split(',').map((s) => s.trim()).filter(Boolean);
+  const jobId = newJobId();
+  runFanoutJob({
+    tasksIn, lanes,
+    parallel: Number(b.parallel) > 0 ? Number(b.parallel) : null,
+    timeoutS: Number(b.timeout) > 0 ? Number(b.timeout) : null,   // 缺省交由 core 超时单点决策
+    retry: Number.isInteger(b.retry) && b.retry >= 0 ? b.retry : null,
+    jobId,
+  }).catch((e) => writeFailedJob(jobId, e.message));
+  sendJson(res, 200, { jobId });
+}
+async function hConfig(req, res) {
+  const b = await readBody(req);
+  if (!b.key || !Object.prototype.hasOwnProperty.call(CONFIG_DEFS, b.key)) return sendJson(res, 400, { error: `未知配置键 ${b.key}` });
+  try {
+    const r = await setConfig(b.key, b.value === undefined ? '' : String(b.value));
+    sendJson(res, 200, { ok: true, key: r.key, value: r.value });
+  } catch (e) {
+    sendJson(res, 400, { error: e.message });
+  }
+}
+async function hLoginStart(req, res) {
+  const b = await readBody(req);
+  const lane = parseLane(b.lane);
+  // 仅 ai/cn 有 SSO 登录流（cline=CLI OAuth；doubao=客户端 GUI 自理；codex=一次性只读复制 auth.json，均不走此端点）
+  if (!lane || lane === 'cline' || lane === 'doubao' || lane === 'codex') return sendJson(res, 400, { error: 'lane 只支持 ai|cn（cline 走 CLI OAuth、doubao 在客户端自理、codex 跑 wbx login --identity codex 收割凭证——本端点仅承载 SSO 流）' });
+  if (loginState.status === 'pending') return sendJson(res, 409, { error: `已有登录流程进行中（lane ${loginState.lane}）` });
+  loginState.status = 'pending'; // 先占位防并发登录流（TOCTOU），失败回滚
+  loginState.lane = lane;
+  loginState.startedAt = Date.now();
+  loginState.error = null;
+  loginState.nickname = null;
+  let ctx;
+  try { ctx = await startLogin(lane); }
+  catch (e) {
+    loginState.status = 'error';
+    loginState.error = redact(e.message);
+    return sendJson(res, 500, { error: redact(e.message) });
+  }
+  (async () => {
+    const { authToken, pending } = await pollLoginToken(ctx, 300000);
+    if (!authToken) { loginState.status = 'timeout'; return; }
+    const account = await fetchAccountInfo(ctx, authToken);
+    await persistLogin(ctx, authToken, account);
+    loginState.status = 'done';
+    loginState.nickname = account?.nickname || null;
+  })().catch((e) => {
+    loginState.status = 'error';
+    loginState.error = redact(e.message);
+  });
+  sendJson(res, 200, { lane, authUrl: ctx.authUrl, tips: ctx.tips });
+}
+async function hLoginPoll(req, res) {
+  sendJson(res, 200, { status: loginState.status, lane: loginState.lane, startedAt: loginState.startedAt, error: loginState.error, nickname: loginState.nickname });
+}
+
+// 路由表（method+pattern 单点登记；新增端点只加一行，不再长 if 链）
+const ROUTES = [
+  { method: 'GET', re: /^\/__health$/, fn: hHealth },
+  { method: 'POST', re: /^\/__shutdown$/, fn: hShutdown },
+  { method: 'GET', re: /^\/(|index\.html)$/, fn: hIndex },
+  { method: 'GET', re: /^\/manifest\.webmanifest$/, fn: hManifest },
+  { method: 'GET', re: /^\/icons\/icon-(192|512)\.png$/, fn: hIcon },
+  { method: 'GET', re: /^\/api\/status$/, fn: hStatus },
+  { method: 'GET', re: /^\/api\/doctor$/, fn: hDoctor },
+  { method: 'GET', re: /^\/api\/doubao$/, fn: hDoubao },
+  { method: 'GET', re: /^\/api\/balance$/, fn: hBalance },
+  { method: 'POST', re: /^\/api\/doubao\/ensure$/, fn: hDoubaoEnsure },
+  { method: 'GET', re: /^\/api\/history$/, fn: hHistory },
+  { method: 'GET', re: /^\/api\/job\/([A-Za-z0-9_-]+)$/, fn: hJob },
+  { method: 'POST', re: /^\/api\/ask$/, fn: hAsk },
+  { method: 'POST', re: /^\/api\/fanout$/, fn: hFanout },
+  { method: 'POST', re: /^\/api\/config$/, fn: hConfig },
+  { method: 'POST', re: /^\/api\/login\/start$/, fn: hLoginStart },
+  { method: 'GET', re: /^\/api\/login\/poll$/, fn: hLoginPoll },
+];
 
 async function handler(req, res) {
   const u = new URL(req.url, 'http://127.0.0.1');
@@ -1714,214 +1885,11 @@ async function handler(req, res) {
     if (req.method === 'POST' && !originAllowed(req.headers.origin, LISTEN_PORT)) {
       return sendJson(res, 403, { error: 'Origin 不允许（本控制台仅限同源访问）' });
     }
-    if (req.method === 'GET' && p === '/__health') {
-      sendJson(res, 200, { app: 'wbx-ui', pid: process.pid, port: LISTEN_PORT, version: WBX_VERSION });
-      return;
-    }
-    if (req.method === 'POST' && p === '/__shutdown') {
-      if (!DAEMON_CTX) return sendJson(res, 404, { error: '前台模式不支持 /__shutdown（Ctrl+C 退出）' });
-      const b = await readBody(req);
-      const tok = Buffer.from(typeof b.token === 'string' ? b.token : '', 'utf8');
-      const expect = Buffer.from(DAEMON_CTX.token, 'utf8');
-      const good = tok.length === expect.length && crypto.timingSafeEqual(tok, expect);
-      if (!good) return sendJson(res, 403, { error: 'token 不正确' });
-      sendJson(res, 200, { ok: true, message: '正在优雅关闭' });
-      setTimeout(() => {
-        try {
-          SERVER && SERVER.close(() => DAEMON_CTX && DAEMON_CTX.onShutdown());
-          setTimeout(() => DAEMON_CTX && DAEMON_CTX.onShutdown(), 3000); // close 被长连接卡住时兜底退出
-        } catch { DAEMON_CTX && DAEMON_CTX.onShutdown(); }
-      }, 150);
-      return;
-    }
-    if (req.method === 'GET' && (p === '/' || p === '/index.html')) {
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-      res.end(HTML);
-      return;
-    }
-    if (req.method === 'GET' && p === '/manifest.webmanifest') {
-      res.writeHead(200, { 'content-type': 'application/manifest+json; charset=utf-8', 'cache-control': 'no-store' });
-      res.end(PWA_MANIFEST);
-      return;
-    }
-    if (req.method === 'GET') {
-      const im = /^\/icons\/icon-(192|512)\.png$/.exec(p);
-      if (im) {
-        res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' });
-        res.end(iconPng(Number(im[1])));
-        return;
-      }
-    }
-    if (req.method === 'GET' && p === '/api/status') {
-      ensureDirs();
-      const cfg = loadConfig();
-      const lanes = LANE_ORDER.map((k) => laneStatusInfo(k));
-      // cline 免费模型组（server 侧调 recommended-models，失败降级缓存/空数组+提示）
-      let clineFreeModels = [];
-      let clineFreeModelsNote = '';
-      {
-        const fm = await fetchClineFreeModels();
-        if (fm.ok && fm.models.length) {
-          clineFreeModels = fm.models.map((m) => ({ id: m.id, name: m.name, description: m.description, deepseek: /deepseek/i.test(m.id) }));
-          if (fm.source === 'cache') clineFreeModelsNote = `清单为 ${String(fm.fetchedAt).slice(0, 16)} 缓存（端点暂不可用）`;
-        } else {
-          clineFreeModelsNote = fm.error || '免费清单不可用';
-        }
-      }
-      sendJson(res, 200, {
-        version: WBX_VERSION, runtimeRoot: RUNTIME_ROOT,
-        form: bridgeForm(),
-        config: cfg, defaultLane: cfg['default-lane'], effectiveLane: resolveDefaultLane(),
-        readyCount: lanes.filter((l) => l.ready && !l.disabled).length,
-        lanes, clineFreeModels, clineFreeModelsNote,
-        tokens: tokenTotals(),   // 外部桥接累计 token 用量（总览 chip 展示）
-      });
-      return;
-    }
-    if (req.method === 'GET' && p === '/api/doctor') {
-      const probe = u.searchParams.get('probe') === '1';
-      const d = await doctorStatus({ probe, onLine: null });
-      sendJson(res, 200, d);
-      return;
-    }
-    if (req.method === 'GET' && p === '/api/doubao') {
-      const d = await doubaoStatus();
-      sendJson(res, 200, d);
-      return;
-    }
-    if (req.method === 'GET' && p === '/api/balance') {
-      // 余额可见：per-lane 探测（core TTL 缓存共享；失败优雅降级为 unavailable/na，绝不阻塞）
-      const lanes = {};
-      for (const k of LANE_ORDER) lanes[k] = await laneBalance(k);
-      sendJson(res, 200, { lanes, fetchedAt: new Date().toISOString() });
-      return;
-    }
-    if (req.method === 'POST' && p === '/api/doubao/ensure') {
-      // 桥自治手动入口：幂等（core 单飞锁），CDP 在线零触碰豆包；按钮回执 toast + 刷新探测
-      const r = await ensureDoubao();
-      sendJson(res, 200, r);
-      return;
-    }
-    if (req.method === 'GET' && p === '/api/history') {
-      sendJson(res, 200, { jobs: listJobs(), totals: tokenTotals() });   // +全量 token 用量汇总
-      return;
-    }
-    let m;
-    if (req.method === 'GET' && (m = /^\/api\/job\/([A-Za-z0-9_-]+)$/.exec(p))) {
-      const j = await getJob(m[1]);
-      if (!j) return sendJson(res, 404, { error: `任务 ${m[1]} 不存在` });
-      if (u.searchParams.get('brief') === '1') return sendJson(res, 200, briefJob(j));
-      sendJson(res, 200, j);
-      return;
-    }
-    if (req.method === 'POST' && p === '/api/ask') {
-      const b = await readBody(req);
-      const prompt = typeof b.prompt === 'string' ? b.prompt.trim() : '';
-      if (!prompt) return sendJson(res, 400, { error: '缺少提示词（prompt）' });
-      let as = null;
-      if (b.lane && b.lane !== 'auto') {
-        as = parseLane(b.lane);
-        if (!as) return sendJson(res, 400, { error: `lane 取值只支持 auto|codex|ai|cn|cline|doubao（codex=Codex CLI（ChatGPT Plus），ai=WorkBuddy AI，cn=WorkBuddy，cline=Cline，doubao=豆包桌面端；收到 ${b.lane}）` });
-      }
-      // caps 任务契约（v19 能力矩阵）——不合法值/含 write 未交付/lane 不匹配均 400（绝不静默降档或改路）
-      let caps = null; let capsNorm = null;
-      if (b.caps != null && b.caps !== '') {
-        const cp = parseCapsSet(b.caps);
-        if (!cp.ok) return sendJson(res, 400, { error: cp.kind === 'caps-l2-not-delivered' ? 'L2 本版未交付（声明即报错）' : `caps 只支持能力集（net/read/write 逗号组合）或别名 L0 | L1（收到 ${b.caps}）` });
-        if (cp.set.includes('write')) return sendJson(res, 400, { error: 'caps：write 能力本轮未交付（探针 P3 沙箱前提破裂，声明即报错）' });
-        caps = cp.normalized || 'L0';
-        capsNorm = cp.normalized;
-      }
-      if (capsNorm && (as === 'cline' || as === 'doubao' || as === 'codex')) {
-        return sendJson(res, 400, { error: `caps ${capsNorm} 与通道 ${as} 不匹配：能力任务仅支持 WorkBuddy AI / 国内版（ai/cn）` });
-      }
-      const jobId = newJobId();
-      runAskJob({
-        prompt, as,
-        model: typeof b.model === 'string' && b.model ? b.model : null,
-        effort: typeof b.effort === 'string' && b.effort ? b.effort : null,
-        timeoutS: Number(b.timeout) > 0 ? Number(b.timeout) : null,   // 缺省交由 core 超时单点决策
-        caps,
-        maxTurns: b.maxTurns ?? null,   // 任务级回合上限（core 校验 1-64/任何非 ∅ 能力集）
-        jobId,
-      }).catch((e) => writeFailedJob(jobId, e.message));
-      sendJson(res, 200, { jobId });
-      return;
-    }
-    if (req.method === 'POST' && p === '/api/fanout') {
-      const b = await readBody(req);
-      if (!Array.isArray(b.tasks) || !b.tasks.length) return sendJson(res, 400, { error: 'tasks 需为非空数组' });
-      const tasksIn = b.tasks.map((t, i) => ({
-        id: t.id || `task-${i + 1}`,
-        prompt: String(t.prompt || ''),
-        as: t.as || null,
-        effort: t.effort || null,
-        model: t.model || null,
-        caps: t.caps != null && t.caps !== '' ? t.caps : null,   // 任务级能力档（透传 core 校验）
-        maxTurns: t.maxTurns ?? null,   // 任务级 L1 回合上限（透传 core 校验）
-      }));
-      const bad = tasksIn.find((t) => !t.prompt.trim());
-      if (bad) return sendJson(res, 400, { error: `任务 ${bad.id} 缺少提示词（prompt）` });
-      let lanes = null;
-      if (Array.isArray(b.lanes) && b.lanes.length) lanes = b.lanes;
-      else if (typeof b.lanes === 'string' && b.lanes.trim()) lanes = b.lanes.split(',').map((s) => s.trim()).filter(Boolean);
-      const jobId = newJobId();
-      runFanoutJob({
-        tasksIn, lanes,
-        parallel: Number(b.parallel) > 0 ? Number(b.parallel) : null,
-        timeoutS: Number(b.timeout) > 0 ? Number(b.timeout) : null,   // 缺省交由 core 超时单点决策
-        retry: Number.isInteger(b.retry) && b.retry >= 0 ? b.retry : null,
-        jobId,
-      }).catch((e) => writeFailedJob(jobId, e.message));
-      sendJson(res, 200, { jobId });
-      return;
-    }
-    if (req.method === 'POST' && p === '/api/config') {
-      const b = await readBody(req);
-      if (!b.key || !Object.prototype.hasOwnProperty.call(CONFIG_DEFS, b.key)) return sendJson(res, 400, { error: `未知配置键 ${b.key}` });
-      try {
-        const r = await setConfig(b.key, b.value === undefined ? '' : String(b.value));
-        sendJson(res, 200, { ok: true, key: r.key, value: r.value });
-      } catch (e) {
-        sendJson(res, 400, { error: e.message });
-      }
-      return;
-    }
-    if (req.method === 'POST' && p === '/api/login/start') {
-      const b = await readBody(req);
-      const lane = parseLane(b.lane);
-      // 仅 ai/cn 有 SSO 登录流（cline=CLI OAuth；doubao=客户端 GUI 自理；codex=一次性只读复制 auth.json，均不走此端点）
-      if (!lane || lane === 'cline' || lane === 'doubao' || lane === 'codex') return sendJson(res, 400, { error: 'lane 只支持 ai|cn（cline 走 CLI OAuth、doubao 在客户端自理、codex 跑 wbx login --identity codex 收割凭证——本端点仅承载 SSO 流）' });
-      if (loginState.status === 'pending') return sendJson(res, 409, { error: `已有登录流程进行中（lane ${loginState.lane}）` });
-      loginState.status = 'pending'; // 先占位防并发登录流（TOCTOU），失败回滚
-      loginState.lane = lane;
-      loginState.startedAt = Date.now();
-      loginState.error = null;
-      loginState.nickname = null;
-      let ctx;
-      try { ctx = await startLogin(lane); }
-      catch (e) {
-        loginState.status = 'error';
-        loginState.error = redact(e.message);
-        return sendJson(res, 500, { error: redact(e.message) });
-      }
-      (async () => {
-        const { authToken, pending } = await pollLoginToken(ctx, 300000);
-        if (!authToken) { loginState.status = 'timeout'; return; }
-        const account = await fetchAccountInfo(ctx, authToken);
-        await persistLogin(ctx, authToken, account);
-        loginState.status = 'done';
-        loginState.nickname = account?.nickname || null;
-      })().catch((e) => {
-        loginState.status = 'error';
-        loginState.error = redact(e.message);
-      });
-      sendJson(res, 200, { lane, authUrl: ctx.authUrl, tips: ctx.tips });
-      return;
-    }
-    if (req.method === 'GET' && p === '/api/login/poll') {
-      const out = { status: loginState.status, lane: loginState.lane, startedAt: loginState.startedAt, error: loginState.error, nickname: loginState.nickname };
-      sendJson(res, 200, out);
+    for (const r of ROUTES) {
+      if (req.method !== r.method) continue;
+      const m = r.re.exec(p);
+      if (!m) continue;
+      await r.fn(req, res, m, u);
       return;
     }
     sendJson(res, 404, { error: '未找到' });
