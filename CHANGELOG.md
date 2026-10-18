@@ -3,6 +3,15 @@
 本文件只记**用户可感知**的变更，每版 ≤15 行；格式参考 Keep a Changelog（新增/变更/修复）。
 历史版本（6.10.0 及更早）的完整条目已原文迁入 [HISTORY.md](HISTORY.md)（v22 历史外置定案），不在本文件重复维护。
 
+## [6.13.1] - 2026-10-19
+
+v26 轮：仓库公开面同步与「每版必推」显式化（纯公开面轮，桥行为零变化；定案=internal/RESEARCH-V26.md）。
+
+- **新增** Community Standards 三件套：CODE_OF_CONDUCT.md、问题报告模板（含凭证脱敏提醒）与 PR 模板（CONTRIBUTING 要求表面化为 checkbox）；CONTRIBUTING 白名单同步登记。
+- **新增** README 快速开始补 `git clone` 获取步骤；AGENTS.md 新增「版本交付纪律」小节（每版交付完成即走发布白名单流程推送 GitHub，AGENTS 预算 40→43 行）。
+- **变更** 仓库远端 description/topics 更新为五 lane 口径（topics 12→18）。
+- **修复** v2 时代残留措辞三处：fanout 文档注释「双 lane 动态均衡」、HELP doctor 行「两 lane 凭证」（并补 doubao 可选段）、wbx-setup 头注释同源残留。
+
 ## [6.13.0] - 2026-10-18
 
 v24 轮：cn lane 夜间免费档 + 模型策略单点 + 免费窗可视化 + 模型画像沉淀（定案=internal/RESEARCH-V24.md；夜间路由语义=A「只换模型不动路由」，AskUserQuestion 2026-10-18）。

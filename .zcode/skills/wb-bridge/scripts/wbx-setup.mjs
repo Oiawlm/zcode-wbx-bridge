@@ -3,7 +3,7 @@
  *
  * - selfInstall：桥复制到 ~/.zcode/wbx-bridge/，生成用户级 skill（~/.zcode/skills/wb-bridge/）、
  *   用户级斜杠命令（~/.zcode/commands/wbx.md）、~/.zcode/AGENTS.md 标记块、全局运行时 ~/.wbx/。
- *   --adopt 把项目 .wbx/ 的两 lane 凭证迁到 ~/.wbx/（--no-keep-project 迁移后删除项目侧凭证，
+ *   --adopt 把项目 .wbx/ 的五 lane 凭证迁到 ~/.wbx/（--no-keep-project 迁移后删除项目侧凭证，
  *   默认保留；tasks/ 历史始终保留）。
  * - selfUninstall：上述全部移除；--purge 连 ~/.wbx/（含凭证）一起删，默认保留。
  * - exportBundle：生成零凭证分发 zip（scripts/ + SKILL.md + examples/ + docs/ + INSTALL-README.md），

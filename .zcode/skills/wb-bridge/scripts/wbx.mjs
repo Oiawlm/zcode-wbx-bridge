@@ -788,9 +788,10 @@ codex 隔离：CODEX_HOME=<运行时根>/codex-home（--ignore-user-config 运�
 doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao …」手工直通为零落盘旁路（不经调度、不入历史）。
 
 用法：
-  node wbx.mjs doctor  [--quick] | [--no-probe]    自检向导：node/CLI 探测/模板/两 lane 凭证+模型探测
+  node wbx.mjs doctor  [--quick] | [--no-probe]    自检向导：node/CLI 探测/模板/WorkBuddy 双 lane 凭证+模型探测
                                                    + cline 可选段（含免费孪生存在性校验）
                                                    + codex 可选段（免额度探测：login status+模型+冷却态）
+                                                   + doubao 可选段（桌面端调试口探测；快检跳过）
                                                    --quick：快检（v22）——跳过一切探测与端点/子进程调用，
                                                    只做 node/CLI 路径/凭证存在性/config 静态检查，<10s 零额度；
                                                    常规会话自检用 --quick，排障才全量

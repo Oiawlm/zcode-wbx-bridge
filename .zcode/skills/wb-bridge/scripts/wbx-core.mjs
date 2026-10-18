@@ -21,7 +21,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const WBX_VERSION = '6.13.0';
+export const WBX_VERSION = '6.13.1';
 
 // ---------- 路径与常量 ----------
 export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -2466,7 +2466,7 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
 }
 
 /**
- * runFanoutJob：批量并发（双 lane 动态均衡 + 重试 + 跨 lane 回退 + job 落盘）。
+ * runFanoutJob：批量并发（缺省池 ai/cn/cline/doubao，codex 点名才投 + 重试 + 跨 lane 回退 + job 落盘）。
  * tasksIn: [{id, prompt, as?, model?, effort?}]；返回 { jobId, jobDir, okCount, total, results }。
  */
 export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, timeoutS = null, retry = null, log = null, jobId = null, ephemeral = false }) {

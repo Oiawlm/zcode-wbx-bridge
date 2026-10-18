@@ -37,3 +37,7 @@ AGENTS.md（自动注入）→ internal/ROUTE.md → internal/MEMORY.md → 按�
 ## 窗口模型约定
 
 窗口模型由用户按任务指定，未指明时默认 GLM-5.3；外部子代理默认 DeepSeek V4.1 Flash（wbx 免费 lane）。
+
+## 版本交付纪律
+
+每轮版本交付完成即按 CONTRIBUTING「发布白名单流程」推送 GitHub（push 后 gh api 线上校验）；发布以 CHANGELOG 版本节为准，不打 git tag（SECURITY.md 定案）。

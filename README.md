@@ -61,16 +61,20 @@ flowchart LR
 前置：Windows + Node ≥18.20.8 + ZCode；WorkBuddy 桌面版至少成功启动过一次（生成登录模板缓存）。
 
 ```bat
-:: 1) 在本仓库目录：全局安装（写入 ~/.zcode/ 与 ~/.wbx/）
+:: 1) 获取仓库并进入目录（首次使用）
+git clone https://github.com/Oiawlm/zcode-wbx-bridge.git
+cd zcode-wbx-bridge
+
+:: 2) 在本仓库目录：全局安装（写入 ~/.zcode/ 与 ~/.wbx/）
 node .zcode\skills\wb-bridge\scripts\wbx.mjs self-install
 
-:: 2) 登录（国内版微信扫码；各一次，凭证约 55 天）
+:: 3) 登录（国内版微信扫码；各一次，凭证约 55 天）
 node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" login --identity cn
 node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" login --identity ai
 ::    可选 lane：cline 加 login --identity cline（浏览器 OAuth）；codex 加 login --identity codex
 ::    （一次性只读复制 ~/.codex/auth.json 入隔离目录）；doubao 在豆包客户端内自理、无需登录
 
-:: 3) 自检（快检 <10s；全量含模型探测排障用）
+:: 4) 自检（快检 <10s；全量含模型探测排障用）
 node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" doctor --quick
 ```
 

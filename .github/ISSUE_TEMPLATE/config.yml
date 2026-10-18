@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全问题上报（SECURITY.md）
+    url: https://github.com/Oiawlm/zcode-wbx-bridge/security/advisories/new
+    about: 凭证 / 安全类问题走私有上报，不要开公开 Issue

@@ -7,7 +7,8 @@
 ### 文件白名单
 - 仓库只接受白名单内的文件；**新增文件必须先在白名单登记并说明理由**，未登记者一律拒收。
 - 现有白名单：
-  - 根目录：`LICENSE`、`.gitignore`、`README.md`、`WBX.md`、`HISTORY.md`、`UI-SPEC.md`、`UNINSTALL.md`、`AGENTS.md`、`SECURITY.md`、`CONTRIBUTING.md`、`CHANGELOG.md`
+  - 根目录：`LICENSE`、`.gitignore`、`README.md`、`WBX.md`、`HISTORY.md`、`UI-SPEC.md`、`UNINSTALL.md`、`AGENTS.md`、`SECURITY.md`、`CONTRIBUTING.md`、`CHANGELOG.md`、`CODE_OF_CONDUCT.md`
+  - 社区协作模板（v26 起，Community Standards 三件套）：`.github/ISSUE_TEMPLATE/{bug_report.md, config.yml}`、`.github/pull_request_template.md`（静态模板；`.github/` 下禁 workflow——「本仓不做 CI」定案不变）
   - 技能目录：`.zcode/skills/wb-bridge/{SKILL.md, PROMPTS.md, examples/tasks.example.json, scripts/wbx.mjs, scripts/wbx-core.mjs, scripts/wbx-setup.mjs, scripts/wbx-daemon.mjs, scripts/wbx-ui.mjs, scripts/ui.html}`（ui.html=前端模板唯一事实源，v23 资产化）
   - 提示词工艺库（v17 起，取代原 v11 知识库指南）：`.zcode/skills/glm-prompt-crafter/{SKILL.md, references/glm-model-profiles.md, references/goal-mode-writing.md, references/official-sources.md}`
   - 提示词工艺库部署脚本（v17 起）：`tools/install-glm-prompt-crafter.mjs`（仓库包 → `~/.zcode/skills/` 用户级部署，SHA-256 校验，登记于 UNINSTALL §四）
