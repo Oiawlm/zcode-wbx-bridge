@@ -16,3 +16,4 @@
 ## 凭证自查建议
 
 凭证两类均在 gitignore 内：WorkBuddy accessToken（`.wbx/`、`~/.wbx/` 的 sessions/product）、cline OAuth（`~/.wbx/cline-home/.../providers.json`；codex 为 `~/.wbx/codex-home/auth.json` 副本）。自查：`git log` 历史无凭证；凭证文件权限仅当前用户可读；doctor/日志/导出包只报存在性不输出内容；疑似泄漏立即在对应平台吊销重签后按上方渠道私有上报。
+季度复扫：建议每季度以 gitleaks（本地运行，不入仓库依赖）对全史手动复扫一次；泄露处置官方口径=先吊销/轮换受影响凭证，再清理历史（「删了历史≠没泄露」）。

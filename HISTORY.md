@@ -299,7 +299,7 @@ T1 结构特征（接口契约/无工具声明/输出要求）；交付物 `pwch
 （C# MSTest 测试起草 + 文案任务，T1 形态提示词，2/2 成功）——v4 代码外包模式已被本验收之外的
 真实使用自然触发。
 
-**实测发现的使用注意**：项目文件夹路径含非 ASCII 字符（如本项目「agent联动」）时，Git Bash
+**实测发现的使用注意**：项目文件夹路径含非 ASCII 字符（本项目文件夹名即含非 ASCII）时，Git Bash
 里以相对/绝对路径传参给项目内 `wbx.mjs` 偶发 Node 模块加载编码错误——改用全局桥入口
 `~/.zcode/wbx-bridge/scripts/wbx.mjs`（ASCII 路径）即可绕开，功能一致（WBX.md 故障排查表
 「Cannot find module」条目同源，此处补记现象与绕法）。
@@ -602,9 +602,8 @@ cline-model 生效；history 列表 + `--task` 定向回放；UI（/api/status �
 （实测回读一致）；清单不可用时降级为提示文字（含命令行替代方案）。
 
 **4. GitHub 发布与审计**：白名单逐文件 `git add`（11 个修改文件；无新增文件，白名单 16
-文件不变，`git ls-files` 逐项对照一致）→ staged 敏感审计零命中（六套：人名/账号
-`jaferpentz|FireChou|周燎原|Lenovo|Agent Vault|Yglstr`、邮箱正则、`D:\Download`、
-`C:\Users\Lenovo`、uin 脱敏 `33**54|45**32`、`usr-01M2X`）+ 凭证值级
+文件不变，`git ls-files` 逐项对照一致）→ staged 敏感审计零命中（六套审计模式清单：人名/账号、
+邮箱正则、本机绝对路径两式、uin 脱敏 `33**54|45**32`、机标识——明值见内部门禁单点）+ 凭证值级
 （`accessToken"…"20+ 字符`形态）零命中 → commit `86356e6` → push → `gh api` 分支 sha
 与本地一致（86356e6c2ae…）→ **origin/main 远端复扫六套零命中** → tag `v5.1.0` → release
 （notes 引 CHANGELOG + WBX 链接，附件 `wbx-bridge-v5.1.0-20260925.zip` 320KB/11 文件/
@@ -777,8 +776,8 @@ v4.0.0 时代的 ui 孤儿进程（守护化要解决的问题的活案例）。
 
 **6. 发布证据**：白名单逐文件 `git add`（11 个文件：10 改 1 增——新增
 `.zcode/skills/wb-bridge/scripts/wbx-daemon.mjs`；`git ls-files` 17 项逐一对照一致；
-`.zcode/plans/` 非本项目产物未纳入）→ staged 敏感审计（人名/账号、邮箱正则、`D:\Download`、
-`C:\Users\Lenovo`、uin 脱敏、`usr-01M2X`、cline 凭证实值形态、accessToken 值形态、本机
+`.zcode/plans/` 非本项目产物未纳入）→ staged 敏感审计（人名/账号、邮箱正则、本机绝对路径、
+uin 脱敏、机标识、cline 凭证实值形态、accessToken 值形态、本机
 ui.json token 实值）**零实际命中**（①③④⑤⑥ 仅命中 WBX.md v5.1 附录对审计模式本身的文档引用，
 先例一致）→ commit `1acce03` → push → `gh api` 分支 sha 与本地一致（1acce036b705…）→
 **origin/main 拉回复扫零命中** → tag `v5.2.0` → release
@@ -900,7 +899,7 @@ API 断言（v8 ④+v7 ⑤cd）确认 /api/history type 英文原值、job 详�
 **4. 发布与全局形态**：白名单逐文件 `git add`（6 个文件：wbx-core.mjs[仅 WBX_VERSION 一行]/
 wbx-ui.mjs/CHANGELOG.md/WBX.md/README.md/AGENTS.md；`git ls-files` 17 项逐一对照一致、无新增
 跟踪文件，`.zcode/plans/` 非本项目产物未纳入）→ staged 敏感审计（人名/账号、邮箱正则、
-`D:\Download`、`C:\Users\Lenovo`、uin 脱敏、accessToken 值形态、JWT 形态、本机 ui.json token
+本机绝对路径、uin 脱敏、accessToken 值形态、JWT 形态、本机 ui.json token
 实值）**零实际命中**（仅 WBX.md 对审计模式本身的文档引用，v5.2 先例一致）→ commit `e7d6c6a`
 → push → `gh api` 分支 sha 与本地一致（e7d6c6a903c7…）→ 远端拉回 diff 为空（identical）+
 远端敏感复扫零命中 → tag **v5.3.0** → release
@@ -1046,7 +1045,7 @@ history/ui --status·--detach 幂等复用同 pid·--stop/export-bundle 430.7KB�
 本地 accessToken 值均未出现；UI-SPEC.md 不进 bundle，符合 P1 裁决]）。发布：白名单逐文件 `git add`
 （6 个文件：wbx-ui.mjs[改名+哨兵]/wbx-core.mjs[仅 WBX_VERSION 一行]/UI-SPEC.md[**新增，白名单第 16
 项，共 18 项逐一对照一致**]/CHANGELOG.md/README.md/WBX.md；`.zcode/plans/` 非本项目产物未纳入）→
-staged 敏感审计（人名/账号、邮箱正则、`D:Download`、`C:UsersLenovo`、uin 脱敏、
+staged 敏感审计（人名/账号、邮箱正则、本机绝对路径去反斜杠变体、uin 脱敏、
 accessToken/JWT 值形态、本机 ui.json token 实值比对 `internal/archive/v9/v9-audit-token.mjs`）**零实际命中**
 （仅 WBX.md v5.2 章对审计模式本身的文档引用，v5.3 先例一致）→ commit `afa9084` → push → `gh api`
 远端 sha 与本地一致（afa9084978ba…）→ 拉回 diff 空（identical）→ 远端敏感复扫非 WBX.md 零命中 →
