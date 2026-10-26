@@ -16,8 +16,8 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { HOME, PROJECT_ROOT, SCRIPT_DIR, GLOBAL_BRIDGE_DIR, GLOBAL_RUNTIME_DIR } from './wbx-paths.mjs';
 import {
-  HOME, PROJECT_ROOT, SCRIPT_DIR, GLOBAL_BRIDGE_DIR, GLOBAL_RUNTIME_DIR,
   LANE_ORDER, installUserBlock, uninstallUserBlock, WBX_VERSION, crc32,
 } from './wbx-core.mjs';
 
@@ -89,7 +89,7 @@ export function zipStore(entries) {
 }
 
 // ---------- 模块级清单常量（self-install 完整性检查 / 复制 / export-bundle 共用同一来源） ----------
-const CORE_SCRIPTS = ['wbx.mjs', 'wbx-core.mjs', 'wbx-ui.mjs', 'wbx-setup.mjs', 'wbx-daemon.mjs', 'ui.html'];   // ui.html=前端模板资产（wbx ui 启动期读取，v23）
+const CORE_SCRIPTS = ['wbx.mjs', 'wbx-core.mjs', 'wbx-paths.mjs', 'wbx-ui.mjs', 'wbx-setup.mjs', 'wbx-daemon.mjs', 'ui.html'];   // wbx-paths=路径派生单点（core 五脚本 import 依赖，v28-S）；ui.html=前端模板资产（wbx ui 启动期读取，v23）
 const DOC_FILES = ['WBX.md', 'UNINSTALL.md'];
 
 // ---------- 文案模板 ----------

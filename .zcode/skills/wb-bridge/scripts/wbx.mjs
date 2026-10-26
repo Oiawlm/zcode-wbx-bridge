@@ -19,10 +19,11 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { SCRIPT_DIR, RUNTIME_ROOT, JOBS_DIR, LEGACY_TASKS_DIR, HOME, CODEX_HOME } from './wbx-paths.mjs';
 import {
-  WBX_VERSION, SCRIPT_DIR, RUNTIME_ROOT, JOBS_DIR, LEGACY_TASKS_DIR,
+  WBX_VERSION,
   IDENTITIES, LANE_ORDER, STDIN_THRESHOLD, CONFIG_DEFS,
-  HOME, CODEX_HOME, UI_DEFAULT_PORT,
+  UI_DEFAULT_PORT,
   clineReady, clineProvidersFile, clineHomeDir, runClineAuth,
   die, DieSignal, redact, brief, fmtMs,
   ensureDirs, readStdin, migrateIfNeeded,

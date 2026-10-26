@@ -38,10 +38,11 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
+import { RUNTIME_ROOT, JOBS_DIR, bridgeForm } from './wbx-paths.mjs';
 import {
-  WBX_VERSION, RUNTIME_ROOT, JOBS_DIR,
+  WBX_VERSION,
   LANE_ORDER, CONFIG_DEFS, UI_DEFAULT_PORT, crc32,
-  bridgeForm, doubaoCdpProbe, doubaoProcessRunning,
+  doubaoCdpProbe, doubaoProcessRunning,
   redact, loadConfig, setConfig, parseLane, parseCapsSet,
   laneStatusInfo, resolveDefaultLane, newJobId, getJob, listJobs,
   runAskJob, runFanoutJob, doctorStatus, fetchClineFreeModels,

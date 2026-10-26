@@ -17,50 +17,18 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import http from 'node:http';
 import https from 'node:https';
-import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import {
+  PROJECT_ROOT, HOME, GLOBAL_BRIDGE_DIR, RUNTIME_ROOT, JOBS_DIR, SESSIONS_DIR, PRODUCT_DIR,
+  CONFIG_FILE, LEGACY_TASKS_DIR, LEGACY_JOBS_DIR, bridgeForm,
+  CLINE_HOME, CLINE_WORK_DIR, CODEX_HOME, CODEX_WORK_DIR, SCRATCH_ROOT, L0_CWD_DIR,
+} from './wbx-paths.mjs';
 
 export const WBX_VERSION = '6.14.0';
 
-// ---------- 路径与常量 ----------
-export const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
-
-export function findProjectRoot() {
-  if (process.env.WBX_PROJECT_ROOT) return path.resolve(process.env.WBX_PROJECT_ROOT);
-  let d = SCRIPT_DIR;
-  for (let i = 0; i < 6; i++) {
-    if (fs.existsSync(path.join(d, '.zcode', 'skills', 'wb-bridge'))) return d;
-    const parent = path.dirname(d);
-    if (parent === d) break;
-    d = parent;
-  }
-  return process.cwd();
-}
-
-export const PROJECT_ROOT = findProjectRoot();
-export const HOME = os.homedir();
-export const GLOBAL_BRIDGE_DIR = path.join(HOME, '.zcode', 'wbx-bridge');
-export const GLOBAL_RUNTIME_DIR = path.join(HOME, '.wbx');
-
-// 运行时根：WBX_HOME env → ~/.wbx（全局形态，以 ~/.zcode/wbx-bridge 存在为准）→ 项目 .wbx
-export function resolveRuntimeRoot() {
-  if (process.env.WBX_HOME) return path.resolve(process.env.WBX_HOME);
-  if (fs.existsSync(GLOBAL_BRIDGE_DIR)) return GLOBAL_RUNTIME_DIR;
-  return path.join(PROJECT_ROOT, '.wbx');
-}
-
-export const RUNTIME_ROOT = resolveRuntimeRoot();
-export const JOBS_DIR = path.join(RUNTIME_ROOT, 'jobs');
-export const SESSIONS_DIR = path.join(RUNTIME_ROOT, 'sessions');
-export const PRODUCT_DIR = path.join(RUNTIME_ROOT, 'product');
-export const CONFIG_FILE = path.join(RUNTIME_ROOT, 'config.json');
-export const LEGACY_TASKS_DIR = path.join(PROJECT_ROOT, '.wbx', 'tasks'); // v2 fanout 结果（只读）
-export const LEGACY_JOBS_DIR = path.join(PROJECT_ROOT, '.wbx', 'jobs');   // 项目形态时期的 jobs（只读）
+// ---------- v1 迁移源（项目 .wbx/ 旧凭证/旧产品配置；路径派生单点见 ./wbx-paths.mjs） ----------
 const OLD_SESSION_PATH = path.join(PROJECT_ROOT, '.wbx', 'session.json');        // v1 凭证（迁移源）
 const OLD_PRODUCT_PATH = path.join(PROJECT_ROOT, '.wbx', 'product-config.json'); // v1 产品配置（迁移源）
-
-export const bridgeForm = () => (fs.existsSync(GLOBAL_BRIDGE_DIR) ? 'global' : 'project');
 
 // 双 lane 身份表（endpoint/platform 是兜底值，实际以模板为准）
 export const IDENTITIES = {
@@ -117,8 +85,7 @@ export const CLINE_FREE_DEFAULT_MODEL = 'cline-free/deepseek-v4.1-flash';
 // 隔离方式（Phase 0 实测定案）：通过 USERPROFILE/HOME 环境变量覆盖，让 cline 解析的
 // ~/.cline 落在桥目录内。不用 --data-dir——实测 3.0.65 该 flag 会破坏运行时认证加载
 //（同凭证同目录，带 flag 即 401；auth 子命令放在其前的 --data-dir 还会被忽略导致误写 ~/.cline）。
-export const CLINE_HOME = path.join(RUNTIME_ROOT, 'cline-home');
-export const CLINE_WORK_DIR = path.join(CLINE_HOME, 'work');
+// CLINE_HOME/CLINE_WORK_DIR 定义在 ./wbx-paths.mjs（v28-S 路径单点）。
 const CLINE_PROVIDER_IDS = ['cline', 'cline-pass'];   // 两个独立 provider，不得混用凭证
 
 // cline 调用/登录专用的隔离 env（USERPROFILE+HOME 指向桥目录；unset HOMEDRIVE/HOMEPATH 防拼接干扰）
@@ -279,8 +246,7 @@ export async function ensureDoubao() {
 // 关键不变量：仅 validateCodexModel 会 throw；凭证内容绝不进日志/返回值/错误文案；
 // 进程退出码绝不参与 codex 的成功/失败判定（实测失败路径退出码不可信，探针 v21p1-p2）。
 // 本区段初稿由 wbx fanout T8 双份草稿产出（job 20261014-115825-xco），ZCode 评审择优集成。
-export const CODEX_HOME = path.join(RUNTIME_ROOT, 'codex-home');
-export const CODEX_WORK_DIR = path.join(CODEX_HOME, 'work');
+// CODEX_HOME/CODEX_WORK_DIR 定义在 ./wbx-paths.mjs（v28-S 路径单点）。
 const CODEX_QUOTA_FILE = path.join(RUNTIME_ROOT, 'codex-quota.json');
 
 // 额度耗尽特征（不区分大小写）；命中即进入冷却并驱动路由跳过（D-039）
@@ -741,9 +707,8 @@ export function resolveCapsTimeoutS(explicitTimeoutS, capsSet) {
   return set.length ? CAPS_TIMEOUT_DEFAULT_S : 300;
 }
 
-// L1 的空 scratch 工作目录（读边界：白名单无写工具 + cwd 外绝对路径读取被进程级拒绝）
-export const SCRATCH_ROOT = path.join(RUNTIME_ROOT, 'scratch');
-const L0_CWD_DIR = path.join(RUNTIME_ROOT, 'l0-cwd');   // L0 专用空 cwd（常驻共享：worker 零写入，并发安全）
+// L1 的空 scratch 工作目录（读边界：白名单无写工具 + cwd 外绝对路径读取被进程级拒绝）；
+// SCRATCH_ROOT/L0_CWD_DIR 定义在 ./wbx-paths.mjs（v28-S 路径单点）
 function ensureL0Cwd() { try { fs.mkdirSync(L0_CWD_DIR, { recursive: true }); } catch { /* 竞态容错 */ } return L0_CWD_DIR; }
 export function ensureScratch(name) {
   const d = path.join(SCRATCH_ROOT, sanitizeId(name));
