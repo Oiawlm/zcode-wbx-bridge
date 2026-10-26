@@ -21,7 +21,7 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { SCRIPT_DIR, GLOBAL_BRIDGE_DIR, HOME, UI_RUN_DIR, UI_LOG_DIR, UI_STATE_FILE, UI_LOG_FILE } from './wbx-paths.mjs';
+import { SCRIPT_DIR, GLOBAL_SKILL_DIR, HOME, UI_RUN_DIR, UI_LOG_DIR, UI_STATE_FILE, UI_LOG_FILE } from './wbx-paths.mjs';
 import { WBX_VERSION, UI_DEFAULT_PORT, ensureDirs } from './wbx-core.mjs';
 
 // ---------- 纯函数集（守护判活 + 请求安全；契约见 internal 测试） ----------
@@ -436,7 +436,7 @@ export const ZCODE_CLI_CONFIG = path.join(HOME, '.zcode', 'cli', 'config.json');
 export const AUTOSTART_MARKER = path.join(UI_RUN_DIR, 'autostart-enabled-by-wbx');
 const AUTOSTART_STATUS = 'wbx 控制台保活';
 
-export function globalWbxScript() { return path.join(GLOBAL_BRIDGE_DIR, 'scripts', 'wbx.mjs'); }
+export function globalWbxScript() { return path.join(GLOBAL_SKILL_DIR, 'scripts', 'wbx.mjs'); }
 
 /** 我们的钩子条目（type:'process' 参数向量，无 shell；全局形态脚本绝对路径）。 */
 function buildHookEntry() {
