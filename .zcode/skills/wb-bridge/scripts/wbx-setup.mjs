@@ -1,22 +1,32 @@
 /**
  * wbx-setup — wbx 桥的安装 / 卸载 / 分发打包
  *
- * - selfInstall：桥复制到 ~/.zcode/wbx-bridge/，生成用户级 skill（~/.zcode/skills/wb-bridge/）、
- *   用户级斜杠命令（~/.zcode/commands/wbx.md）、~/.zcode/AGENTS.md 标记块、全局运行时 ~/.wbx/。
- *   --adopt 把项目 .wbx/ 的五 lane 凭证迁到 ~/.wbx/（--no-keep-project 迁移后删除项目侧凭证，
- *   默认保留；tasks/ 历史始终保留）。
- * - selfUninstall：上述全部移除；--purge 连 ~/.wbx/（含凭证）一起删，默认保留。
- * - exportBundle：生成零凭证分发 zip（scripts/ + SKILL.md + examples/ + docs/ + INSTALL-README.md），
- *   纯 Node 实现 zip（store），导出后自检断言不含任何凭证值。
+ * - selfInstall（v28-A 布局）：整目录安装到唯一技能目录 ~/.zcode/skills/wb-bridge/
+ *   （scripts + SKILL.md/PROMPTS.md + examples + docs + doubao/ + .wbx-install.json 安装自证
+ *   manifest），临时目录就绪后 rename 原子替换、幂等可重装；探测到 v28 前旧布局
+ *   （~/.zcode/wbx-bridge/、无脚本旧 skill 副本、~/.zcode/commands/wbx.md）时自动一次性迁移：
+ *   装新 → 冒烟（新副本 doctor --quick 输出 manifest 自证）→ 旧目录改名 <name>.backup-<时间戳>
+ *   （确认新安装正常后可删）；迁移中断后重跑自愈。--adopt 把项目 .wbx/ 的五 lane 凭证迁到
+ *   ~/.wbx/（--no-keep-project 迁移后删除项目侧凭证，默认保留；tasks/ 历史始终保留）。
+ * - selfUninstall：按 manifest 反向移除技能目录与 AGENTS 块，并清理迁移备份/staging 残留与
+ *   v28 前旧布局；--purge 连 ~/.wbx/（含凭证）一起删，默认保留。
+ * - exportBundle：生成零凭证分发 zip（scripts/ + SKILL.md + examples/ + docs/ + INSTALL-README.md，
+ *   布局同技能目录；manifest 由接收方 self-install 时生成），纯 Node 实现 zip（store），
+ *   导出后自检断言不含任何凭证值。
  *
- * 写用户目录仅限四处 + 运行时：~/.zcode/wbx-bridge/、~/.zcode/skills/wb-bridge/、
- * ~/.zcode/commands/wbx.md、~/.zcode/AGENTS.md 标记块、~/.wbx/。
+ * 写用户目录仅限三处 + 运行时：~/.zcode/skills/wb-bridge/（含安装 manifest）、~/.zcode/AGENTS.md
+ * 标记块、~/.zcode/ 下本桥迁移备份/旧布局清理、~/.wbx/。/wbx 斜杠命令（~/.zcode/commands/wbx.md）
+ * v28-A 起退役：确定性入口=AGENTS 块 + 显式 /wb-bridge 技能调用。
  */
 
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { HOME, PROJECT_ROOT, SCRIPT_DIR, GLOBAL_BRIDGE_DIR, GLOBAL_RUNTIME_DIR } from './wbx-paths.mjs';
+import { spawnSync } from 'node:child_process';
+import {
+  HOME, PROJECT_ROOT, SCRIPT_DIR, GLOBAL_SKILL_DIR, GLOBAL_BRIDGE_DIR, GLOBAL_RUNTIME_DIR,
+  INSTALL_MANIFEST_NAME, MANIFEST_SCHEMA_VERSION, readInstallManifest,
+} from './wbx-paths.mjs';
 import {
   LANE_ORDER, installUserBlock, uninstallUserBlock, WBX_VERSION, crc32,
 } from './wbx-core.mjs';
@@ -91,51 +101,36 @@ export function zipStore(entries) {
 // ---------- 模块级清单常量（self-install 完整性检查 / 复制 / export-bundle 共用同一来源） ----------
 const CORE_SCRIPTS = ['wbx.mjs', 'wbx-core.mjs', 'wbx-paths.mjs', 'wbx-ui.mjs', 'wbx-setup.mjs', 'wbx-daemon.mjs', 'ui.html'];   // wbx-paths=路径派生单点（core 五脚本 import 依赖，v28-S）；ui.html=前端模板资产（wbx ui 启动期读取，v23）
 const DOC_FILES = ['WBX.md', 'UNINSTALL.md'];
+// 豆包桥复制时剔除的包内冗余（tests/docs 目录与 source map；playwright-core 体积主体保留 lib/）
+const PRUNE_DIRS = new Set(['tests', 'test', '__tests__', 'docs']);
+const RM_OPTS = { recursive: true, force: true, maxRetries: 4, retryDelay: 150 };   // win32 删除重试（EBUSY/句柄延迟）
+const tsStamp = () => {
+  const d = new Date(), p2 = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+};
 
 // ---------- 文案模板 ----------
-const globalBridgeScript = () => path.join(GLOBAL_BRIDGE_DIR, 'scripts', 'wbx.mjs');
+const skillEntryScript = () => path.join(GLOBAL_SKILL_DIR, 'scripts', 'wbx.mjs');
 
-// 项目级 skill → 用户级 skill 的文本适配。两类改写按结构而非整句字面量匹配：
+// 项目级 skill → 用户级安装副本的文本适配。改写按结构而非整句字面量匹配：
 //   ① `<!-- wbx:project-only -->…<!-- /wbx:project-only -->` 标记段=项目形态专属内容，全局版整段删除
 //     （标记是 SKILL.md 作者与安装器之间的契约，段内文案怎么改都不影响安装）；
-//   ② 相对入口路径与项目运行时路径按模式改写为全局绝对形态。
+//   ② 相对入口路径改写为新布局安装期绝对路径（禁 `~`——PowerShell 对原生程序不展开）；
+//     项目运行时路径改写为全局数据根。
 export function globalSkillText(sourceSkill) {
-  const gscript = globalBridgeScript();
+  const gscript = skillEntryScript();
   return sourceSkill
     .replace(/<!-- wbx:project-only -->[\s\S]*?<!-- \/wbx:project-only -->\n?/g, '')
-    .replace(/node \.zcode\/skills\/wb-bridge\/scripts\/wbx\.mjs/g, `node "${gscript}"`)
-    .replace(/\.zcode\/skills\/wb-bridge\/scripts\/wbx\.mjs/g, gscript)
+    .replace(/node "?\.zcode[\\/]skills[\\/]wb-bridge[\\/]scripts[\\/]wbx\.mjs"?/g, `node "${gscript}"`)
+    .replace(/\.zcode[\\/]skills[\\/]wb-bridge[\\/]scripts[\\/]wbx\.mjs/g, gscript)
     .replace(/<项目>\/\.wbx\/jobs\//g, '~/.wbx/jobs/')
-    + '\n> 注：本文件是用户级 skill（~/.zcode/skills/wb-bridge/SKILL.md），会遮蔽同名项目级 skill（内容一致，无行为差异）。\n';
-}
-
-export function wbxCommandText() {
-  const gscript = globalBridgeScript();
-  return [
-    '---',
-    'description: 把任务描述经 wbx 桥分派给外部算力（五 lane：可选 Codex CLI（ChatGPT Plus 质量优先档，单发默认优先）+ WorkBuddy 双 lane DeepSeek V4.1 Flash + 可选 Cline CLI + 可选豆包桌面端）执行并汇总',
-    'argument-hint: <任务描述>',
-    'skills: wb-bridge',
-    '---',
-    '',
-    '用户任务：$ARGUMENTS',
-    '',
-    '请按 wb-bridge 技能的流程处理上面的任务（这是用户要的一键分派触发器）：',
-    '',
-    '1. 先自检：运行 `' + `node "${gscript}" doctor --quick` + '`（<10s 静态快检；排障才全量 doctor）；有任一 lane 可用即继续（cline 是可选 lane，未装/未登录只 WARN），全部不可用则由你自己完成任务并说明原因。',
-    '2. 判断任务是否适合分派（自包含可单轮完成、不涉密——含代码模块编写：接口清晰、材料可贴、输出可校验；v5 基线=默认分派，单个自包含任务也直接派）。适合则按技能里引用的 PROMPTS.md 模板（角色+任务+材料+输出硬约束+无工具声明）构造任务；关键产物并行 2 份择优（T8）。',
-    '3. 单条子任务用 ask，可拆分的多条用 fanout（任务写成 tasks.json）分派到外部算力；结果落 ~/.wbx/jobs/<jobId>/。',
-    '4. 校验结果后汇总输出给用户（代码模块集成前默认过一道 T7 评审批判）；标注信息来自模型已有知识、可能过时。',
-    '5. doctor FAIL、连续 >= 2 个任务失败或限流 → 停止外包，如实告知用户，剩余任务由你自己完成。',
-    '',
-    '安全：涉密、隐私、凭证、内部代码、未公开数据绝不外包给外部模型。',
-    '',
-  ].join('\n');
+    + '\n> 注：本文件是用户级安装副本（唯一技能目录 ~/.zcode/skills/wb-bridge/，命令入口为安装期绝对路径；同目录 .wbx-install.json 为安装自证 manifest）。本副本遮蔽同名项目级 skill。\n';
 }
 
 export function installReadmeText() {
   const B = '`';   // markdown 反引号
   const F = '```'; // markdown 代码围栏
+  const E = '%USERPROFILE%\\.zcode\\skills\\wb-bridge\\scripts\\wbx.mjs';   // 安装后绝对入口（cmd 写法）
   const L = [
     '# wbx 桥安装说明（v' + WBX_VERSION + '）',
     '',
@@ -158,15 +153,17 @@ export function installReadmeText() {
     '',
     F + 'bat',
     ':: 1. 解压本 zip 到任意目录（例如 D:\\Tools\\wbx-bridge），在该目录打开终端',
-    ':: 2. 全局安装（写入 ~/.zcode/ 与 ~/.wbx/，见下方"会写哪些位置"）',
-    'node wbx.mjs self-install',
+    ':: 2. 全局安装（唯一技能目录 ~/.zcode/skills/wb-bridge/ + AGENTS 块 + ~/.wbx/，见下方"会写哪些位置"）',
+    'node scripts\\wbx.mjs self-install',
     '',
     ':: 3. 登录两个 lane（各一次，凭证约 55 天有效）',
-    'node wbx.mjs login --identity cn   :: 国内版：微信扫码',
-    'node wbx.mjs login --identity ai   :: 国际版：邮箱/OneID（输出里有 state 修补锦囊）',
+    'node scripts\\wbx.mjs login --identity cn   :: 国内版：微信扫码',
+    'node scripts\\wbx.mjs login --identity ai   :: 国际版：邮箱/OneID（输出里有 state 修补锦囊）',
     F,
     '',
-    '装完自检：' + B + 'node wbx.mjs doctor' + B + '，两个 lane 全绿即就绪。',
+    '装完自检：' + B + 'node "' + E + '" doctor --quick' + B + '，两个 lane 全绿即就绪。',
+    '装过 v28 前旧布局（~/.zcode/wbx-bridge/）的机器：self-install 自动一次性迁移到新技能目录，',
+    '旧目录改名 <名称>.backup-<时间戳> 保留，确认新安装正常后可整目录删除。',
     '',
     '## 可选扩展：cline lane（第三条算力）',
     '',
@@ -174,9 +171,9 @@ export function installReadmeText() {
     '',
     F + 'bat',
     'npm install -g cline',
-    'node scripts\\wbx.mjs login --identity cline    :: 浏览器完成 OAuth 设备授权（有活跃会话时自动通过）',
+    'node "' + E + '" login --identity cline    :: 浏览器完成 OAuth 设备授权（有活跃会话时自动通过）',
     ':: 查当前免费模型组（免费组限时轮换；换默认：config set cline-model "<免费 id>"）',
-    'node scripts\\wbx.mjs models --as cline --free',
+    'node "' + E + '" models --as cline --free',
     F,
     '',
     'cline 状态只存 <运行时根>/cline-home/（桥以 HOME 覆盖实现隔离），与用户自己的 ~/.cline 互不影响；',
@@ -187,23 +184,21 @@ export function installReadmeText() {
     '',
     '## 使用',
     '',
-    '- **任何项目的 ZCode 会话**直接说「帮我调研 A、B、C…」即可触发主动分派（用户级 skill + AGENTS.md 标记块）；',
-    '- **斜杠命令**：' + B + '/wbx <任务描述>' + B + ' —— 一键把任务交给分派流程（doctor → 分派 → 校验 → 汇总）；',
+    '- **任何项目的 ZCode 会话**直接说「帮我调研 A、B、C…」即可触发主动分派（安装已写入用户级 skill + ~/.zcode/AGENTS.md 标记块）；',
+    '- 显式确定性入口：会话内输入 ' + B + '/wb-bridge' + B + ' 或按技能说明调用（斜杠命令 /wbx 已于 v28 退役）；',
     '- 手动调用（装好后任何位置可用的全局入口，路径含空格要加引号）：',
-    '  ' + B + 'node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" ask --text "…"' + B + '、',
+    '  ' + B + 'node "' + E + '" ask --text "…"' + B + '、',
     '  ' + B + 'fanout --file tasks.json' + B + '；',
-    '- 可视化：' + B + 'node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs" ui' + B +
+    '- 可视化：' + B + 'node "' + E + '" ui' + B +
     ' → 浏览器自动打开 http://127.0.0.1:7788（状态/路由开关/ask/fanout/历史/登录）；',
-    '- 历史回放：' + B + 'node scripts\\wbx.mjs history' + B + '（列出）与 ' + B + 'history <jobId>' + B + '（完整双向对话）。',
+    '- 历史回放：' + B + 'node "' + E + '" history' + B + '（列出）与 ' + B + 'history <jobId>' + B + '（完整双向对话）。',
     '',
     '## 会写哪些位置（卸载可完全还原）',
     '',
     '| 位置 | 内容 |',
     '|---|---|',
-    '| ' + B + '~/.zcode/wbx-bridge/' + B + ' | 桥本体（scripts + PROMPTS.md + examples + docs + doubao/ 豆包桥副本） |',
-    '| ' + B + '~/.zcode/skills/wb-bridge/' + B + ' | 用户级 skill（遮蔽同名项目级 skill，内容一致） |',
-    '| ' + B + '~/.zcode/commands/wbx.md' + B + ' | /wbx 斜杠命令 |',
-    '| ' + B + '~/.zcode/AGENTS.md' + B + ' | ' + B + '<!-- wbx:begin/end -->' + B + ' 标记块 |',
+    '| ' + B + '~/.zcode/skills/wb-bridge/' + B + ' | **唯一技能目录**（v28-A 收拢）：scripts 桥本体 + SKILL.md/PROMPTS.md + examples + docs 副本 + doubao/ 豆包桥副本（可选）+ .wbx-install.json 安装自证 manifest |',
+    '| ' + B + '~/.zcode/AGENTS.md' + B + ' | ' + B + '<!-- wbx:begin/end -->' + B + ' 标记块（唯一例外：每会话自动注入不可替代） |',
     '| ' + B + '~/.wbx/' + B + ' | 运行时：sessions/product 凭证、config.json、jobs/ 历史、cline-home/（可选 lane 隔离主目录）、codex-home/（可选第五 lane 隔离：auth.json 副本+work/） |',
     '',
     '绝不写 ' + B + '~/.workbuddy' + B + '、' + B + '~/.workbuddy-ai' + B + '、' + B + '~/.cline' + B + '（用户自己的 Cline 状态）、桌面版安装目录、系统环境变量。',
@@ -211,12 +206,12 @@ export function installReadmeText() {
     '## 卸载',
     '',
     F + 'bat',
-    'node scripts\\wbx.mjs self-uninstall          :: 移除上面前四处（保留 ~/.wbx/ 凭证）',
-    'node scripts\\wbx.mjs self-uninstall --purge  :: 连 ~/.wbx/（含凭证、cline-home/）一起删',
+    `node "${E}" self-uninstall          :: 移除技能目录+AGENTS 块（保留 ~/.wbx/ 凭证）`,
+    `node "${E}" self-uninstall --purge  :: 连 ~/.wbx/（含凭证、cline-home/）一起删`,
     ':: 若装过可选 cline lane：npm uninstall -g cline',
     F,
     '',
-    '解压出来的本目录可随手删（self-install 已复制到 ~/.zcode/wbx-bridge/）。',
+    '解压出来的本目录可随手删（self-install 已复制到 ~/.zcode/skills/wb-bridge/）。',
     '',
     '## 常见问题',
     '',
@@ -225,8 +220,33 @@ export function installReadmeText() {
     '- doctor 提示缺模板缓存：启动一次对应桌面版即可。',
     '- 登录国际版遇到「登录失败」页：复制 login 命令输出里的锦囊 A URL 到地址栏回车。',
     '- cline lane 报 Unauthorized：OAuth 凭证过期 → 重新 ' + B + 'login --identity cline' + B + '。',
+    '- 报「manifest schema_version … 拒绝降级」：本副本版本低于已装版本——升级本目录副本后重跑 self-install。',
   ];
   return L.join('\n') + '\n';
+}
+
+// ---------- 安装 manifest（写入/原子写） ----------
+function buildInstallManifest(installRoot, createdRel) {
+  return { schema_version: MANIFEST_SCHEMA_VERSION, version: WBX_VERSION, installRoot, created: createdRel, state: 'active' };
+}
+
+async function writeManifestAtomic(file, manifest) {
+  const tmp = `${file}.tmp-${tsStamp()}-${Math.random().toString(36).slice(2, 6)}`;
+  await fsp.writeFile(tmp, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+  await fsp.rename(tmp, file);
+}
+
+async function listCreatedRel(root) {
+  const out = [];
+  const walk = async (dir, rel) => {
+    for (const e of await fsp.readdir(dir, { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) await walk(path.join(dir, e.name), r);
+      else out.push(r);
+    }
+  };
+  await walk(root, '');
+  return out.sort();
 }
 
 // ---------- self-install / self-uninstall ----------
@@ -240,87 +260,161 @@ async function copyDir(src, dest) {
   }
 }
 
+// doubao 副本复制：剔除包内 tests/docs 目录与 source map（体积与文件数优化，运行时零依赖它们）
+async function copyDirPruned(src, dest) {
+  await fsp.mkdir(dest, { recursive: true });
+  for (const e of await fsp.readdir(src, { withFileTypes: true })) {
+    if (e.isDirectory() && PRUNE_DIRS.has(e.name)) continue;
+    if (e.isFile() && e.name.endsWith('.map')) continue;
+    const s = path.join(src, e.name), d = path.join(dest, e.name);
+    if (e.isDirectory()) await copyDirPruned(s, d);
+    else await fsp.copyFile(s, d);
+  }
+}
+
 async function copyIfExists(src, dest) {
   try { await fsp.copyFile(src, dest); return true; } catch { return false; }
 }
 
+// 冒烟：新安装副本跑 doctor --quick，输出必须含 manifest 自证（form=global + installRoot=本技能目录）。
+// 不要求 doctor 退出码 0——lane 未登录/CLI 未装是环境态不是安装缺陷（先装后登是支持流程）。
+function runInstallSmoke() {
+  const r = spawnSync(process.execPath, [skillEntryScript(), 'doctor', '--quick'], {
+    encoding: 'utf8', timeout: 60000, env: { ...process.env },
+  });
+  const out = `${r.stdout || ''}${r.stderr || ''}`;
+  const ok = typeof r.status === 'number' && out.includes('form=global') && out.includes(`installRoot=${GLOBAL_SKILL_DIR}`);
+  return { ok, out: out.split(/\r?\n/).filter((l) => /runtime|根解析|form=|installRoot|FAIL/.test(l)).slice(0, 6).join(' | ') };
+}
+
+// 旧布局退役：改名 <路径>.backup-<时间戳>（确认后可删）；备份已存在=上次迁移中断，直接删旧自愈
+async function retireToBackup(p, label, ts, report) {
+  if (!fs.existsSync(p)) return;
+  const bak = `${p}.backup-${ts}`;
+  if (fs.existsSync(bak)) {
+    await fsp.rm(p, RM_OPTS);
+    report.push(`已删除 ${label}（先前备份已存在=迁移续跑自愈）`);
+    return;
+  }
+  await fsp.rename(p, bak);
+  report.push(`旧布局退役：${label} -> ${bak}（确认新安装正常后可整目录删除）`);
+}
+
 export async function selfInstall({ adopt = false, keepProject = true } = {}) {
   const report = [];
+  const ts = tsStamp();
   const srcScripts = SCRIPT_DIR;
   const srcSkillDir = path.dirname(srcScripts);
-  const dstScripts = path.join(GLOBAL_BRIDGE_DIR, 'scripts');
 
   // 0. 源完整性
   for (const f of CORE_SCRIPTS) {
     if (!fs.existsSync(path.join(srcScripts, f))) throw new Error(`桥源不完整：缺 ${path.join(srcScripts, f)}`);
   }
 
-  // 1. 桥本体 → ~/.zcode/wbx-bridge/（CORE_SCRIPTS 含 wbx-ui.mjs 与 ui.html——`wbx ui` 启动期读取前端模板资产，缺文件运行时才崩=必选）
-  await fsp.mkdir(dstScripts, { recursive: true });
-  const copiedScripts = [];
-  for (const f of CORE_SCRIPTS) {
-    await fsp.copyFile(path.join(srcScripts, f), path.join(dstScripts, f));
-    copiedScripts.push(f);
-  }
-  let skillCopied = false, examplesCopied = false, docsCopied = false;
-  try { await copyDir(path.join(srcSkillDir, 'examples'), path.join(GLOBAL_BRIDGE_DIR, 'examples')); examplesCopied = true; } catch { /* 无 examples */ }
-  const promptsCopied = await copyIfExists(path.join(srcSkillDir, 'PROMPTS.md'), path.join(GLOBAL_BRIDGE_DIR, 'PROMPTS.md'));
-  const copiedDocs = [];
-  for (const d of DOC_FILES) {
-    if (await copyIfExists(path.join(PROJECT_ROOT, d), path.join(GLOBAL_BRIDGE_DIR, d))) copiedDocs.push(d);
-  }
-  docsCopied = copiedDocs.length > 0;
-  report.push(`桥本体 -> ${GLOBAL_BRIDGE_DIR}（scripts: ${copiedScripts.join(', ')}${examplesCopied ? ' + examples' : ''}${promptsCopied ? ' + PROMPTS.md' : ''}${docsCopied ? ' + docs: ' + copiedDocs.join(', ') : ''}）`);
+  // 0b. 降级护栏：已装副本 manifest schema 高于本桥 → 拒绝覆盖（防旧版装新版安装之上）
+  const prevManifestRead = readInstallManifest(path.join(GLOBAL_SKILL_DIR, 'scripts'));
+  if (prevManifestRead.status === 'incompatible') throw new Error(prevManifestRead.message);
 
-  // 1b. 豆包桥（第四 lane 的运行时 + 手工直通旁路）：tools/doubao-bridge/ 整目录 -> ~/.zcode/wbx-bridge/doubao/。
-  //     先清旧副本再复制（node_modules 内文件可能改名/删除，纯覆盖会留残留）；缺失/失败只 WARN
-  //     不阻断；export-bundle 分发包不含它（可选工具，接收方自行从源码仓取）。
+  // 0c. 旧布局探测（v28 前三处：wbx-bridge 目录 / 无脚本旧 skill 副本 / commands/wbx.md）
+  const legacy = {
+    bridgeDir: fs.existsSync(GLOBAL_BRIDGE_DIR),
+    legacySkill: fs.existsSync(GLOBAL_SKILL_DIR) && !fs.existsSync(path.join(GLOBAL_SKILL_DIR, 'scripts', 'wbx.mjs')),
+    cmdFile: fs.existsSync(path.join(HOME, '.zcode', 'commands', 'wbx.md')),
+  };
+  if (legacy.bridgeDir || legacy.legacySkill || legacy.cmdFile) {
+    report.push(`探测到 v28 前旧布局（${[legacy.bridgeDir && '~/.zcode/wbx-bridge/', legacy.legacySkill && '无脚本旧 skill 副本', legacy.cmdFile && '~/.zcode/commands/wbx.md'].filter(Boolean).join('、')}）：本次安装将一次性迁移`);
+  }
+
+  // 1. 临时目录就绪（与目标同父目录=同卷，rename 原子替换；中断残留由下次运行/uninstall 清理）
+  const skillsParent = path.dirname(GLOBAL_SKILL_DIR);
+  const staging = path.join(skillsParent, `.wb-bridge.staging-${ts}`);
+  await fsp.rm(staging, RM_OPTS);
+  await fsp.mkdir(path.join(staging, 'scripts'), { recursive: true });
+  for (const f of CORE_SCRIPTS) await fsp.copyFile(path.join(srcScripts, f), path.join(staging, 'scripts', f));
+  const srcSkill = path.join(srcSkillDir, 'SKILL.md');
+  if (!fs.existsSync(srcSkill)) throw new Error(`桥源不完整：缺 ${srcSkill}`);
+  await fsp.writeFile(path.join(staging, 'SKILL.md'), globalSkillText(await fsp.readFile(srcSkill, 'utf8')), 'utf8');
+  await copyIfExists(path.join(srcSkillDir, 'PROMPTS.md'), path.join(staging, 'PROMPTS.md'));
+  try { await copyDir(path.join(srcSkillDir, 'examples'), path.join(staging, 'examples')); } catch { /* 无 examples */ }
+  await fsp.mkdir(path.join(staging, 'docs'), { recursive: true });
+  for (const d of DOC_FILES) {
+    await copyIfExists(path.join(PROJECT_ROOT, d), path.join(staging, 'docs', d));
+  }
+  report.push(`技能目录内容就绪 -> ${staging}{scripts×${CORE_SCRIPTS.length}, SKILL.md${fs.existsSync(path.join(staging, 'PROMPTS.md')) ? ', PROMPTS.md' : ''}${fs.existsSync(path.join(staging, 'examples')) ? ', examples' : ''}${fs.existsSync(path.join(staging, 'docs')) ? ', docs' : ''}}`);
+
+  // 1b. 豆包桥（第四 lane 的运行时 + 手工直通旁路）：tools/doubao-bridge/ 剔冗余后 -> <技能目录>/doubao/。
+  //     缺失/失败只 WARN 不阻断；export-bundle 分发包不含它（可选工具，接收方自行从源码仓取）。
   let doubaoCopied = false;
   const srcDoubao = path.join(PROJECT_ROOT, 'tools', 'doubao-bridge');
   if (fs.existsSync(path.join(srcDoubao, 'doubao.mjs'))) {
     try {
-      await fsp.rm(path.join(GLOBAL_BRIDGE_DIR, 'doubao'), { recursive: true, force: true });
-      await copyDir(srcDoubao, path.join(GLOBAL_BRIDGE_DIR, 'doubao'));
+      await copyDirPruned(srcDoubao, path.join(staging, 'doubao'));
       // 装完即验：入口/锚点/依赖缺一即视为复制不完整，走 WARN 路径提示手动整拷
       const essential = ['doubao.mjs', 'anchors.json', 'launch.ps1', path.join('node_modules', 'playwright-core')];
-      const missing = essential.filter((f) => !fs.existsSync(path.join(GLOBAL_BRIDGE_DIR, 'doubao', f)));
+      const missing = essential.filter((f) => !fs.existsSync(path.join(staging, 'doubao', f)));
       if (missing.length) throw new Error(`复制不完整，缺 ${missing.join('、')}`);
       doubaoCopied = true;
-      report.push(`豆包桥 -> ${path.join(GLOBAL_BRIDGE_DIR, 'doubao')}${path.sep}（可选工具；入口 wbx doubao <子命令>，含 node_modules 副本）`);
+      report.push(`豆包桥 -> ${path.join(GLOBAL_SKILL_DIR, 'doubao')}${path.sep}（可选工具；入口 wbx doubao <子命令>；已剔除 tests/docs/source map）`);
     } catch (e) {
-      report.push(`[WARN] 豆包桥复制失败（${e && e.message}）——不影响其余 lane；可手动整目录复制 ${srcDoubao} -> ${path.join(GLOBAL_BRIDGE_DIR, 'doubao')}`);
+      await fsp.rm(path.join(staging, 'doubao'), RM_OPTS);
+      report.push(`[WARN] 豆包桥复制失败（${e && e.message}）——不影响其余 lane；可手动整目录复制 ${srcDoubao} -> ${path.join(GLOBAL_SKILL_DIR, 'doubao')}`);
     }
   } else {
     report.push(`[WARN] 未找到 ${srcDoubao}（豆包桥为可选工具，跳过；不影响其余 lane）`);
   }
 
-  // 2. 用户级 skill（绝对路径版；PROMPTS.md 原样随附，供 SKILL.md 相对引用）
-  const srcSkill = path.join(srcSkillDir, 'SKILL.md');
-  if (!fs.existsSync(srcSkill)) throw new Error(`桥源不完整：缺 ${srcSkill}`);
-  const userSkillDir = path.join(HOME, '.zcode', 'skills', 'wb-bridge');
-  await fsp.mkdir(userSkillDir, { recursive: true });
-  await fsp.writeFile(path.join(userSkillDir, 'SKILL.md'), globalSkillText(await fsp.readFile(srcSkill, 'utf8')), 'utf8');
-  await copyIfExists(path.join(srcSkillDir, 'PROMPTS.md'), path.join(userSkillDir, 'PROMPTS.md'));
-  skillCopied = true;
-  report.push(`用户级 skill -> ${path.join(userSkillDir, 'SKILL.md')}${fs.existsSync(path.join(userSkillDir, 'PROMPTS.md')) ? ' + PROMPTS.md' : ''}（同名遮蔽项目级 skill，内容一致）`);
+  // 2. manifest（最后写入临时目录；installRoot=最终技能目录——rename 后即自证）
+  await writeManifestAtomic(path.join(staging, INSTALL_MANIFEST_NAME), buildInstallManifest(GLOBAL_SKILL_DIR, await listCreatedRel(staging)));
 
-  // 3. 用户级斜杠命令 /wbx
-  const cmdDir = path.join(HOME, '.zcode', 'commands');
-  await fsp.mkdir(cmdDir, { recursive: true });
-  await fsp.writeFile(path.join(cmdDir, 'wbx.md'), wbxCommandText(), 'utf8');
-  report.push(`斜杠命令 -> ${path.join(cmdDir, 'wbx.md')}（/wbx <任务描述>，skills: wb-bridge 自动挂载）`);
+  // 3. 原子替换：旧目标挪走 → staging 转正（失败即回滚保旧）→ 旧目标按来源处置
+  const hadTarget = fs.existsSync(GLOBAL_SKILL_DIR);
+  const replaced = `${GLOBAL_SKILL_DIR}.replaced-${ts}`;
+  if (hadTarget) await fsp.rename(GLOBAL_SKILL_DIR, replaced);
+  try {
+    await fsp.rename(staging, GLOBAL_SKILL_DIR);
+  } catch (e) {
+    if (hadTarget) await fsp.rename(replaced, GLOBAL_SKILL_DIR);
+    throw new Error(`技能目录替换失败（${e && e.message}）；已回滚保持原状`);
+  }
+  report.push(`技能目录已转正 -> ${GLOBAL_SKILL_DIR}（rename 原子替换）`);
+  if (hadTarget) {
+    const oldWasOurs = fs.existsSync(path.join(replaced, INSTALL_MANIFEST_NAME));
+    if (oldWasOurs) {
+      await fsp.rm(replaced, RM_OPTS);   // 本桥自身旧安装（幂等重装）：直接清理，不留备份
+    } else {
+      // v28 前无 manifest 的旧 skill 副本：时间戳备份（确认后可删）；备份已存在=迁移续跑自愈
+      const skillBak = `${GLOBAL_SKILL_DIR}.backup-${ts}`;
+      if (fs.existsSync(skillBak)) await fsp.rm(replaced, RM_OPTS);
+      else await fsp.rename(replaced, skillBak);
+      report.push(`旧布局退役：无脚本旧 skill 副本 -> ${skillBak}（确认新安装正常后可整目录删除）`);
+    }
+  }
 
-  // 4. ~/.zcode/AGENTS.md 标记块
-  const agPath = await installUserBlock(globalBridgeScript());
-  report.push(`全局指令块 -> ${agPath}（指向 ${globalBridgeScript()}）`);
+  // 4. 冒烟：新副本 doctor --quick 必须 manifest 自证通过；失败则旧布局不退役（迁移可续跑）
+  const smoke = runInstallSmoke();
+  if (!smoke.ok) {
+    throw new Error(`安装冒烟失败：新副本 doctor --quick 未输出 manifest 自证（${smoke.out || '无输出'}）。新布局已就位、旧布局未退役；重跑 self-install 自愈`);
+  }
+  report.push(`冒烟通过：新副本 doctor --quick 输出 form=global + installRoot=${GLOBAL_SKILL_DIR}`);
 
-  // 5. 全局运行时 ~/.wbx/
+  // 5. 旧布局退役（仅在冒烟通过后；一次性迁移。无脚本旧 skill 副本已随第 3 步时间戳备份）
+  if (legacy.bridgeDir) await retireToBackup(GLOBAL_BRIDGE_DIR, '旧布局 ~/.zcode/wbx-bridge/', ts, report);
+  if (legacy.cmdFile) {
+    await fsp.rm(path.join(HOME, '.zcode', 'commands', 'wbx.md'), { force: true });
+    report.push('旧斜杠命令 ~/.zcode/commands/wbx.md 已删除（/wbx v28 退役，文件无保留价值不备份）');
+  }
+
+  // 6. ~/.zcode/AGENTS.md 标记块（指向新技能目录入口）
+  const agPath = await installUserBlock(skillEntryScript());
+  report.push(`全局指令块 -> ${agPath}（指向 ${skillEntryScript()}）`);
+
+  // 7. 全局运行时 ~/.wbx/
   for (const sub of ['sessions', 'product', 'config', 'jobs']) {
     await fsp.mkdir(path.join(GLOBAL_RUNTIME_DIR, sub), { recursive: true });
   }
   report.push(`全局运行时 -> ${GLOBAL_RUNTIME_DIR}{/sessions,/product,/config,/jobs}`);
 
-  // 6. --adopt：项目 .wbx/ 凭证迁移到 ~/.wbx/
+  // 8. --adopt：项目 .wbx/ 凭证迁移到 ~/.wbx/
   const srcWbx = path.join(PROJECT_ROOT, '.wbx');
   const hasProjectCreds = LANE_ORDER.some((l) => fs.existsSync(path.join(srcWbx, 'sessions', `${l}.json`)));
   if (adopt) {
@@ -344,9 +438,9 @@ export async function selfInstall({ adopt = false, keepProject = true } = {}) {
       if (fs.existsSync(sCfg)) { try { await copyDir(sCfg, path.join(GLOBAL_RUNTIME_DIR, 'config', l)); } catch { /* 非必需 */ } }
     }
     if (!keepProject) {
-      await fsp.rm(path.join(srcWbx, 'sessions'), { recursive: true, force: true });
-      await fsp.rm(path.join(srcWbx, 'product'), { recursive: true, force: true });
-      await fsp.rm(path.join(srcWbx, 'config'), { recursive: true, force: true });
+      await fsp.rm(path.join(srcWbx, 'sessions'), RM_OPTS);
+      await fsp.rm(path.join(srcWbx, 'product'), RM_OPTS);
+      await fsp.rm(path.join(srcWbx, 'config'), RM_OPTS);
       report.push(`--adopt 完成：凭证迁移 ${moved.join(', ') || '（无）'}；--no-keep-project：项目 .wbx/ 的 sessions/product/config 已删除（tasks/ 历史保留）`);
     } else {
       report.push(`--adopt 完成：凭证迁移 ${moved.join(', ') || '（无）'}；项目 .wbx/ 原凭证保留（默认）`);
@@ -359,19 +453,19 @@ export async function selfInstall({ adopt = false, keepProject = true } = {}) {
   }
 
   return {
-    ok: true, bridgeDir: GLOBAL_BRIDGE_DIR, script: globalBridgeScript(),
-    runtimeDir: GLOBAL_RUNTIME_DIR, report,
-    skillCopied, examplesCopied, docsCopied, doubaoCopied,
+    ok: true, skillDir: GLOBAL_SKILL_DIR, script: skillEntryScript(),
+    runtimeDir: GLOBAL_RUNTIME_DIR, report, doubaoCopied,
+    migration: { detected: legacy.bridgeDir || legacy.legacySkill || legacy.cmdFile, retired: legacy.bridgeDir || legacy.cmdFile },
   };
 }
 
 export async function selfUninstall({ purge = false } = {}) {
   const report = [];
   const rm = async (p, label) => {
-    try { await fsp.rm(p, { recursive: true, force: true }); report.push(`已删除 ${label}（${p}）`); }
+    try { await fsp.rm(p, RM_OPTS); report.push(`已删除 ${label}（${p}）`); }
     catch { report.push(`跳过 ${label}（${p} 不存在或不可删）`); }
   };
-  // 先停守护进程、摘自启钩子（都在删桥本体之前，保证可执行文件还在时完成清理）
+  // 先停守护进程、摘自启钩子（都在删技能目录之前，保证可执行文件还在时完成清理）
   try {
     const { stopUi } = await import('./wbx-daemon.mjs');
     const r = await stopUi();
@@ -382,12 +476,25 @@ export async function selfUninstall({ purge = false } = {}) {
     const r = await removeAutostart();
     report.push(`${r.removed ? '已摘除' : '无需摘除'}自启钩子：${r.message}`);
   } catch (e) { report.push(`跳过自启钩子摘除（${e && e.message}；如曾 --install-autostart 请手动检查 ~/.zcode/cli/config.json 的 hooks`); }
-  const hadDoubao = fs.existsSync(path.join(GLOBAL_BRIDGE_DIR, 'doubao'));
-  await rm(GLOBAL_BRIDGE_DIR, '桥本体 ~/.zcode/wbx-bridge/' + (hadDoubao ? '（含豆包桥 doubao/ 全局副本）' : ''));
-  await rm(path.join(HOME, '.zcode', 'skills', 'wb-bridge'), '用户级 skill ~/.zcode/skills/wb-bridge/');
+  // 技能目录（manifest 反向：整目录即 manifest.created 的安装面）
+  const manifestRead = readInstallManifest(path.join(GLOBAL_SKILL_DIR, 'scripts'));
+  const verNote = manifestRead.status === 'ok' ? `（v${manifestRead.manifest.version} 安装；.wbx-install.json 随目录移除）` : '';
+  await rm(GLOBAL_SKILL_DIR, `技能目录 ~/.zcode/skills/wb-bridge/${verNote}`);
+  // 迁移/安装过程残留与 v28 前旧布局（含备份）：一键还原承诺=本桥名下零残留
+  const skillsParent = path.dirname(GLOBAL_SKILL_DIR);
+  for (const name of (fs.existsSync(skillsParent) ? await fsp.readdir(skillsParent) : [])) {
+    if (name.startsWith('.wb-bridge.staging-') || /^wb-bridge\.(replaced|backup)-/.test(name)) {
+      await rm(path.join(skillsParent, name), `技能目录旁残留 ${name}`);
+    }
+  }
+  const zcodeDir = path.join(HOME, '.zcode');
+  for (const name of (fs.existsSync(zcodeDir) ? await fsp.readdir(zcodeDir) : [])) {
+    if (name === 'wbx-bridge') await rm(path.join(zcodeDir, name), 'v28 前旧布局 ~/.zcode/wbx-bridge/');
+    else if (/^wbx-bridge\.backup-/.test(name)) await rm(path.join(zcodeDir, name), `旧布局备份 ${name}`);
+  }
   try {
     await fsp.rm(path.join(HOME, '.zcode', 'commands', 'wbx.md'), { force: true });
-    report.push('已删除斜杠命令 ~/.zcode/commands/wbx.md');
+    report.push('已删除斜杠命令 ~/.zcode/commands/wbx.md（v28 已退役；旧机器残留一并清理）');
   } catch { report.push('跳过斜杠命令（不存在）'); }
   const ub = await uninstallUserBlock();
   report.push(ub.removed
@@ -428,7 +535,7 @@ function collectBundleEntries() {
     const p = path.join(PROJECT_ROOT, d);
     if (fs.existsSync(p)) add(`${root}docs/${d}`, fs.readFileSync(p));
   }
-  // INSTALL-README.md（随包生成）
+  // INSTALL-README.md（随包生成；布局同技能目录，manifest 由接收方 self-install 时生成）
   add(`${root}INSTALL-README.md`, installReadmeText());
   return entries;
 }

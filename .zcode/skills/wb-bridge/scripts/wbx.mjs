@@ -542,7 +542,7 @@ async function cmdInstallUser() {
   const p = await installUserBlock(path.join(SCRIPT_DIR, 'wbx.mjs'));
   console.log(`[OK] 已注入/更新全局分派块 -> ${p}`);
   console.error('生效范围：所有项目的 ZCode 会话（用户级 AGENTS.md）。移除：node wbx.mjs uninstall-user');
-  console.error('提示：要完整全局形态（用户级 skill + /wbx 命令 + ~/.wbx 运行时），用 wbx self-install');
+  console.error('提示：要完整全局形态（用户级 skill 目录 + AGENTS 块 + ~/.wbx 运行时），用 wbx self-install');
   await exitWith(0);
 }
 
@@ -560,8 +560,8 @@ async function cmdSelfInstall(opts) {
     const r = await selfInstall({ adopt: !!opts.adopt, keepProject: !opts.noKeepProject });
     console.log(`[OK] 全局安装完成（v${WBX_VERSION}）：`);
     for (const line of r.report) console.log(`  - ${line}`);
-    console.error(`\n入口：node "${r.script}"`);
-    console.error('任何项目的 ZCode 会话现在都能主动分派；/wbx <任务描述> 一键触发。');
+    console.error(`\n入口：node "${r.script}"（唯一技能目录 ~/.zcode/skills/wb-bridge/，.wbx-install.json 自证）`);
+    console.error('任何项目的 ZCode 会话现在都能主动分派（AGENTS 块 + 显式 /wb-bridge 技能调用；/wbx 斜杠命令已退役）。');
     console.error('本项目桥后续也使用 ~/.wbx/ 全局运行时（凭证共享）。卸载：node wbx.mjs self-uninstall [--purge]');
     await exitWith(0);
   } catch (e) {
@@ -657,8 +657,8 @@ async function cmdDoubao(restArgs) {
   const dir = resolveDoubaoDir();
   if (!dir) {
     die(
-      '未找到豆包桥 doubao.mjs（已查：全局 ~/.zcode/wbx-bridge/doubao/ 与仓库 tools/doubao-bridge/）。\n' +
-      '全局形态：在装有本桥的源码仓里跑 wbx self-install，会把 tools/doubao-bridge/ 一并复制到 ~/.zcode/wbx-bridge/doubao/。\n' +
+      '未找到豆包桥 doubao.mjs（已查：全局 ~/.zcode/skills/wb-bridge/doubao/ 与仓库 tools/doubao-bridge/）。\n' +
+      '全局形态：在装有本桥的源码仓里跑 wbx self-install，会把 tools/doubao-bridge/ 一并复制到 ~/.zcode/skills/wb-bridge/doubao/。\n' +
       '豆包桥是可选工具（Windows-only），缺失不影响其余 lane（ai/cn/cline）。'
     );
   }
@@ -759,7 +759,7 @@ const COMMANDS = [
   { name: 'history', fn: (o) => cmdHistory(o), desc: '历史列表 / 完整回放双向对话' },
   { name: 'install-user', fn: () => cmdInstallUser(), desc: 'legacy：向 ~/.zcode/AGENTS.md 注入标记块' },
   { name: 'uninstall-user', fn: () => cmdUninstallUser(), desc: 'legacy：移除用户级标记块' },
-  { name: 'self-install', fn: (o) => cmdSelfInstall(o), desc: '用户级全局安装（~/.zcode/wbx-bridge + skill + ~/.wbx）' },
+  { name: 'self-install', fn: (o) => cmdSelfInstall(o), desc: '用户级全局安装（~/.zcode/skills/wb-bridge 单技能目录 + AGENTS 块 + ~/.wbx；旧布局自动迁移）' },
   { name: 'self-uninstall', fn: (o) => cmdSelfUninstall(o), desc: '全局卸载（--purge 连凭证目录删）' },
   { name: 'export-bundle', fn: (o) => cmdExportBundle(o), desc: '分发打包（零凭证 zip + 自检）' },
   { name: 'ui', fn: (o) => cmdUi(o), desc: '本地 Web UI（--detach 守护 / --stop / --status / 自启钩子）' },
@@ -782,7 +782,7 @@ lane：codex = Codex CLI（可选第五 lane·ChatGPT Plus 质量优先档：单
 cn→ai→cline→codex→doubao 各一次（免费 lane 失败不自动烧 Plus/会员额度，付费两档排后）。
 失败/限流自动跨 lane 回退（仍是 DeepSeek；cline 内部绝不换非 DeepSeek 模型顶替）；cline 未装/未登录
 直接跳过；doubao 调试口不在线时 ask 秒退失败自然跳过；codex 额度冷却期 laneReady=false 自动跳过。
-运行时根：WBX_HOME env -> ~/.wbx/（装过 self-install 即全局形态） -> 项目 .wbx/
+运行时根：WBX_HOME env -> ~/.wbx/（安装 manifest 自证=全局形态；WBX_FORM=global|project 逃生门） -> 项目 .wbx/
 cline 隔离：桥的 cline 状态只在 <运行时根>/cline-home/（HOME 覆盖），绝不读写用户 ~/.cline。
 codex 隔离：CODEX_HOME=<运行时根>/codex-home（--ignore-user-config 运行）；凭证=login --identity codex
 一次性只读复制 ~/.codex/auth.json（唯一显式授权例外，绝不回写）。
@@ -853,8 +853,10 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                      [--install-autostart]         装 ZCode SessionStart 钩子：新开会话自动拉起控制台（需全局形态）
                      [--remove-autostart]          摘除自启钩子（config.json 其余键原样保留）
   node wbx.mjs self-install [--adopt] [--no-keep-project]
-                                                   全局安装：~/.zcode/wbx-bridge + 用户级 skill + /wbx 命令
-                                                   + AGENTS.md 标记块 + ~/.wbx 运行时（--adopt 迁移项目凭证）
+                                                   全局安装：唯一技能目录 ~/.zcode/skills/wb-bridge/（scripts+SKILL+
+                                                   docs+doubao 可选+.wbx-install.json 安装自证 manifest）+ AGENTS.md
+                                                   标记块 + ~/.wbx 运行时（--adopt 迁移项目凭证；检测到 v28 前旧布局
+                                                   ~/.zcode/wbx-bridge/ 时自动一次性迁移并时间戳备份，可续跑自愈）
   node wbx.mjs self-uninstall [--purge]            全局卸载（--purge 连 ~/.wbx/ 凭证一起删，默认保留）
   node wbx.mjs export-bundle [--out <dir|.zip>]    生成分发 zip（零凭证自检；含 INSTALL-README.md）
   node wbx.mjs install-user | uninstall-user       向 ~/.zcode/AGENTS.md 注入/移除全局分派标记块（v2 兼容）
@@ -863,8 +865,8 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                                                    参数原样转发，子命令说明见 doubao.mjs 自身 usage；不经调度、
                                                    零落盘副作用、不入历史——调度请用 ask --as doubao / fanout 任务绑定）
                                                    需豆包以调试口 9225 运行（cmd 写法；PowerShell 换 $env:USERPROFILE）：
-                                                   powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"
-                                                   目录解析：全局 ~/.zcode/wbx-bridge/doubao/（self-install 复制）
+                                                   powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\skills\\wb-bridge\\doubao\\launch.ps1"
+                                                   目录解析：全局 ~/.zcode/skills/wb-bridge/doubao/（self-install 复制）
                                                    -> 仓库 tools/doubao-bridge/（v12 源；未装则明确报错，不影响其余 lane）
 
 tasks.json 格式：[{"id":"t1","prompt":"...","as?":"codex|ai|cn|cline|doubao","model?":"...","effort?":"low","file?":"p.txt","files?":["a.js"],"filesMode?":"reference（需任务级 caps 显式含 read）","caps?":"net,read（能力集或 L1 别名）","maxTurns?":24}]

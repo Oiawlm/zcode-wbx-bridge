@@ -65,20 +65,20 @@ flowchart LR
 git clone https://github.com/Oiawlm/zcode-wbx-bridge.git
 cd zcode-wbx-bridge
 
-:: 2) 在本仓库目录：全局安装（写入 ~/.zcode/ 与 ~/.wbx/）
+:: 2) 在本仓库目录：全局安装（唯一技能目录 ~/.zcode/skills/wb-bridge/ + AGENTS 块 + ~/.wbx/）
 node .zcode\skills\wb-bridge\scripts\wbx.mjs self-install
 
 :: 3) 登录（国内版微信扫码；各一次，凭证约 55 天）
-node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" login --identity cn
-node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" login --identity ai
+node "%USERPROFILE%\.zcode\skills\wb-bridge\scripts\wbx.mjs" login --identity cn
+node "%USERPROFILE%\.zcode\skills\wb-bridge\scripts\wbx.mjs" login --identity ai
 ::    可选 lane：cline 加 login --identity cline（浏览器 OAuth）；codex 加 login --identity codex
 ::    （一次性只读复制 ~/.codex/auth.json 入隔离目录）；doubao 在豆包客户端内自理、无需登录
 
 :: 4) 自检（快检 <10s；全量含模型探测排障用）
-node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" doctor --quick
+node "%USERPROFILE%\.zcode\skills\wb-bridge\scripts\wbx.mjs" doctor --quick
 ```
 
-装完即用：任何项目的 ZCode 会话直接说「帮我调研 A、B、C」就会自动分派；`/wbx <任务描述>` 一键触发。（self-install 已把 wbx 调用块写入用户级 `~/.zcode/AGENTS.md`，故任何项目皆可；卸载时随 `self-uninstall` 一并清除。）
+装完即用：任何项目的 ZCode 会话直接说「帮我调研 A、B、C」就会自动分派，也可显式调用 `/wb-bridge` 技能（`/wbx` 斜杠命令已于 v28 退役）。（self-install 已把 wbx 调用块写入用户级 `~/.zcode/AGENTS.md`，故任何项目皆可；检测到 v28 前旧布局会自动迁移；卸载时随 `self-uninstall` 一并清除。）
 
 ## 核心命令
 
@@ -89,7 +89,7 @@ node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" doctor --quick
 | `wbx doctor [--quick]` | 自检（`--quick` 秒级快检；全量含各 lane 模型探测） |
 | `wbx ui --detach` | 本地控制台 http://127.0.0.1:7788（状态/调用/历史/登录四页签，浅深双主题） |
 
-（`wbx` = `node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs"`；全部命令与旗标见 `wbx --help`。单发也可 `wbx ask --text "任务描述"` 直接传；冒烟与连通性验证一律加 `--ephemeral`——真实执行但零落盘、不入历史。）
+（`wbx` = `node "%USERPROFILE%\.zcode\skills\wb-bridge\scripts\wbx.mjs"`；全部命令与旗标见 `wbx --help`。单发也可 `wbx ask --text "任务描述"` 直接传；冒烟与连通性验证一律加 `--ephemeral`——真实执行但零落盘、不入历史。）
 
 批量任务文件最小示例（`tasks.json`；完整字段见仓库 `examples/tasks.example.json`）：
 

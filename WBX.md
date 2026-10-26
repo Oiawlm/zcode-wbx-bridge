@@ -58,7 +58,7 @@
 
 ## 3 运行时布局
 
-根解析优先级：`WBX_HOME` env → `~/.wbx/`（全局形态，装过 `wbx self-install` 即全局）→ 项目内 `.wbx/`；命中即止。全局形态桥本体在 `~/.zcode/wbx-bridge/`。
+根解析优先级（v28-A 起）：`WBX_HOME` env → `WBX_FORM=global|project` 逃生门 → 安装 manifest 自证（运行副本 realpath 落在 `~/.zcode/skills/wb-bridge/.wbx-install.json` 声明的 installRoot 内 → 全局形态，数据根 `~/.wbx/`）→ 项目内 `.wbx/`；schema_version 与本桥不符明确报错拒绝降级；doctor 输出根解析表（form/installRoot/runtime/scratch/jobs）。全局形态桥本体=唯一技能目录 `~/.zcode/skills/wb-bridge/`（v28 前旧布局 `~/.zcode/wbx-bridge/` 由 self-install 一次性迁移，时间戳备份）。
 
 | 目录 | 内容 |
 |---|---|
@@ -152,4 +152,4 @@ CLI：0 成功 / 1 失败（含参数校验错误）。特例：`usage` 自然�
 ### 9.2 维护经验（迁自 MEMORY 欠账）
 
 1. **新增页签级加载函数须两处挂钩**：`activateTab` 切页钩子 + 启动区直调 `loadStatus()`——只挂一处会出现首屏空态或切页不刷新。
-2. **全局形态副本改动后须重启守护生效**：改 `~/.zcode/wbx-bridge/` 下文件后 `wbx ui --stop` 再 `--detach`（模板串在守护进程启动时载入内存）；且全局副本与源码仓有五路部署物，改动须同步（self-install 幂等重跑 + sha 校验）。
+2. **全局形态副本改动后须重启守护生效**：改 `~/.zcode/skills/wb-bridge/` 下文件后 `wbx ui --stop` 再 `--detach`（模板串在守护进程启动时载入内存）；且已装副本与源码仓为两路部署物（v28-A 收拢后；分发 zip 第三路），改动须同步（self-install 幂等重跑 + sha 校验）。
