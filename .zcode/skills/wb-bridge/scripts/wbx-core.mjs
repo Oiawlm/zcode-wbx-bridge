@@ -19,8 +19,8 @@ import http from 'node:http';
 import https from 'node:https';
 import path from 'node:path';
 import {
-  PROJECT_ROOT, HOME, GLOBAL_BRIDGE_DIR, RUNTIME_ROOT, JOBS_DIR, SESSIONS_DIR, PRODUCT_DIR,
-  CONFIG_FILE, LEGACY_TASKS_DIR, LEGACY_JOBS_DIR, bridgeForm,
+  PROJECT_ROOT, HOME, GLOBAL_SKILL_DIR, RUNTIME_ROOT, JOBS_DIR, SESSIONS_DIR, PRODUCT_DIR,
+  CONFIG_FILE, LEGACY_TASKS_DIR, LEGACY_JOBS_DIR, detectInstall,
   CLINE_HOME, CLINE_WORK_DIR, CODEX_HOME, CODEX_WORK_DIR, SCRATCH_ROOT, L0_CWD_DIR,
 } from './wbx-paths.mjs';
 
@@ -151,7 +151,7 @@ export function clineReady() {
 // 以调试口 9225 驱动桌面端，不读写任何豆包账号信息。目录双候选解析与 wbx.mjs cmdDoubao 同款。
 export function resolveDoubaoDir() {
   const candidates = [
-    path.join(GLOBAL_BRIDGE_DIR, 'doubao'),            // 全局形态：~/.zcode/wbx-bridge/doubao/（self-install 复制）
+    path.join(GLOBAL_SKILL_DIR, 'doubao'),             // 全局形态：~/.zcode/skills/wb-bridge/doubao/（self-install 复制，v28-A 布局）
     path.join(PROJECT_ROOT, 'tools', 'doubao-bridge'), // 仓库形态：桥源码仓的 v12 交付物
   ];
   return candidates.find((d) => fs.existsSync(path.join(d, 'doubao.mjs'))) || null;
@@ -2833,7 +2833,11 @@ export async function doctorStatus({ probe = true, onLine = null, quick = false 
   const laneRows = [];
   let fail = 0;
   const cfg = loadConfig();
-  const form = bridgeForm();
+  // 形态判定（v28-A 起单点=安装 manifest 自证；异常明确 FAIL，绝不静默降级）
+  let inst;
+  try { inst = detectInstall(); }
+  catch (e) { inst = { form: 'unknown', source: `manifest 异常：${e && e.message}`, installRoot: null }; }
+  const form = inst.form;
 
   const step = (name, good, detail) => {
     steps.push({ name, good, detail });
@@ -2861,9 +2865,12 @@ export async function doctorStatus({ probe = true, onLine = null, quick = false 
     step('cli', cliExists, cliExists ? cliPath : `入口不存在（${cliPath}）；App 升级后路径可能变化 -> 修复：wbx config set cli-path "<新路径>"`);
   }
 
-  // 3) 运行时布局
-  const formNote = process.env.WBX_HOME ? 'WBX_HOME 指定' : (form === 'global' ? '全局形态' : '项目形态');
-  step('runtime', true, `${formNote}：${RUNTIME_ROOT}{/sessions,/product,/config/<lane>,/jobs}${form === 'global' && !process.env.WBX_HOME ? '' : '（不入 git）'}`);
+  // 3) 运行时布局 + 根解析表（v28-A：form/installRoot/runtime/scratch/jobs 一屏可见）
+  const formNote = process.env.WBX_HOME ? 'WBX_HOME 指定' : (form === 'global' ? '全局形态' : form === 'project' ? '项目形态' : '形态判定失败');
+  step('runtime', form !== 'unknown',
+    `${formNote}（${inst.source}）：${RUNTIME_ROOT}{/sessions,/product,/config/<lane>,/jobs}${form === 'global' && !process.env.WBX_HOME ? '' : '（不入 git）'}\n` +
+    `    根解析表：form=${form}  installRoot=${inst.installRoot || '(项目形态无安装根)'}\n` +
+    `    runtime=${RUNTIME_ROOT}  scratch=${SCRATCH_ROOT}  jobs=${JOBS_DIR}`);
 
   // 4) 路由配置
   const dl = cfg['default-lane'];
@@ -3122,6 +3129,7 @@ export async function doctorStatus({ probe = true, onLine = null, quick = false 
 
   return {
     ok: fail === 0, fail, form, runtimeRoot: RUNTIME_ROOT, version: WBX_VERSION,
+    installRoot: inst.installRoot, installSource: inst.source,
     cliPath, steps, lanes: laneRows, config: cfg, readyLanes: ready,
     nightWindow: nightWindowState(),   // v24：结构化窗口字段（UI /api/doctor 消费，与 cn 段行同源）
   };
@@ -3133,20 +3141,17 @@ export const USER_BLOCK_BEGIN = '<!-- wbx:begin -->';
 export const USER_BLOCK_END = '<!-- wbx:end -->';
 
 // 用户级块=跨项目最小指针版（v22 三层注入分工：全局只留指针，lane 细节归各仓库 AGENTS/SKILL——
-// 消除用户级块与仓库规则面约 90% 的双注入重复）
+// 消除用户级块与仓库规则面约 90% 的双注入重复；v28-A 收拢：入口指向唯一技能目录，≤10 行）
 export function userBlockText(bridgeScriptPath) {
   const wbx = `node "${bridgeScriptPath}"`;
   return [
     USER_BLOCK_BEGIN,
-    '## wbx 外部算力桥（本项目装有 wbx 桥：五 lane 外部 Agent 当作子代理，默认分派）',
-    '',
+    '## wbx 外部算力桥（默认分派：自包含子任务派外部五 lane 子代理）',
     `- 自检：\`${wbx} doctor --quick\`（<10s 静态检查；排障用全量 doctor）`,
-    `- 单条：\`${wbx} ask --file <p.txt>\`（--as codex|ai|cn|cline|doubao 指定 lane，缺省 codex 优先，失败自动回退）`,
-    `- 批量：\`${wbx} fanout --file <tasks.json>\`（任务可用 files:[路径] 拼材料、as:"codex" 点名）`,
+    `- 单条：\`${wbx} ask --file <p.txt>\`（--as codex|ai|cn|cline|doubao 点名，失败自动回退）`,
+    `- 批量：\`${wbx} fanout --file <tasks.json>\`（任务可用 files:[路径] 拼材料）`,
     `- 控制台：\`${wbx} ui --detach\`（http://127.0.0.1:7788；--stop 停止）`,
-    '',
-    '调用准则与安全红线以各仓库 AGENTS.md / .zcode/skills/wb-bridge/SKILL.md 为准（自包含任务默认分派；',
-    '涉密/隐私/凭证绝不外包；结果必校验；连续 ≥2 失败或限流停止外包自己做）。',
+    '- 准则与红线以各仓库 AGENTS.md / .zcode/skills/wb-bridge/SKILL.md 为准（涉密绝不外包；结果必校验）。',
     USER_BLOCK_END,
   ].join('\n');
 }

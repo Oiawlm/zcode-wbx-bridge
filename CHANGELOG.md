@@ -3,6 +3,15 @@
 本文件只记**用户可感知**的变更，每版 ≤15 行；格式参考 Keep a Changelog（新增/变更/修复）。
 历史版本（6.10.0 及更早）的完整条目已原文迁入 [HISTORY.md](HISTORY.md)（v22 历史外置定案），不在本文件重复维护。
 
+## [Unreleased]
+
+v28 轮草稿（S/A/B/C 并行执行窗口各自起草小节；D 集成发布时定版号与日期，S/A/B/C 不改版本常量）。
+
+- **v28-A 安装收拢**：全局安装足迹 5 处→3 处——桥本体/文档/豆包桥全部收进唯一技能目录 `~/.zcode/skills/wb-bridge/`（+AGENTS 标记块+`~/.wbx/` 运行时）；安装改临时目录就绪后 rename 原子替换、幂等可重装。
+- **v28-A 安装自证**：安装时原子写 `.wbx-install.json` manifest（schema_version=2/version/installRoot/created/state）；全局形态检测由「`~/.zcode/wbx-bridge` 目录存在」哨兵改为 manifest 自证（副本 realpath ∈ installRoot），`WBX_FORM=global|project` 逃生门、schema 不符明确报错拒绝降级；doctor 新增根解析表（form/installRoot/runtime/scratch/jobs）。
+- **v28-A 一次性迁移**：self-install 探测 v28 前旧布局（wbx-bridge 目录/无脚本 skill 副本/`commands/wbx.md`）自动迁移——装新→doctor --quick 冒烟→旧目录改名 `.backup-<时间戳>` 待确认后删；中断重跑自愈；self-uninstall 反向清理（含迁移备份与 staging 残留）。
+- **v28-A 入口收拢**：`/wbx` 斜杠命令退役（不再写 `~/.zcode/commands/wbx.md`，确定性入口=AGENTS 块+显式 `/wb-bridge`）；AGENTS 块瘦身 ≤10 行且入口指向新技能目录绝对路径；INSTALL-README/UNINSTALL/README/WBX 安装面同步。
+
 ## [6.14.0] - 2026-10-19
 
 v27 轮：泄露审计整改（定案=internal/RESEARCH-V27.md；HISTORY 脱敏随版推送、不改写公开 git 历史，用户 2026-10-19 裁决）。

@@ -58,8 +58,9 @@ let DAEMON_CTX = null;   // { token, persist(state), clear(), onShutdown() }
 let SERVER = null;
 
 // ---------- 模板插值常量（路径/lane 选项单源；新增第六 lane 只改这里与 core LANE_ORDER） ----------
-const WBX_ENTRY_CMD = 'node "%USERPROFILE%\\.zcode\\wbx-bridge\\scripts\\wbx.mjs"';   // 全局入口命令（cmd 写法，复制即用）
-const DOUBAO_LAUNCH_CMD = 'powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"';
+// 入口路径=安装期绝对路径（v28-A 唯一技能目录布局；联动同步：与 selfInstall 安装面同源，改布局两处一起改）
+const WBX_ENTRY_CMD = 'node "%USERPROFILE%\\.zcode\\skills\\wb-bridge\\scripts\\wbx.mjs"';   // 全局入口命令（cmd 写法，复制即用）
+const DOUBAO_LAUNCH_CMD = 'powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\skills\\wb-bridge\\doubao\\launch.ps1"';
 const LANE_ROUTE_LABELS = { codex: '固定 Codex', ai: '固定 WorkBuddy AI', cn: '固定 WorkBuddy', cline: '固定 Cline', doubao: '固定 豆包' };
 const LANE_SHORT_LABELS = { codex: 'Codex', ai: 'WorkBuddy AI', cn: 'WorkBuddy', cline: 'Cline', doubao: '豆包' };
 const laneRouteButtons = LANE_ORDER.map((k) => `<button data-v="${k}">${LANE_ROUTE_LABELS[k]}</button>`).join('\n          ');

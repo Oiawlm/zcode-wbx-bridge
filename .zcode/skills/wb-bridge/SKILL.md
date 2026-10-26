@@ -10,7 +10,8 @@ description: >-
   收集参考素材或做法、批量生成/处理文本（翻译、摘要、改写、变体、结构化抽取、分类打标）、
   编写或并行编写代码模块/纯函数/组件/测试用例（接口清晰、材料可贴进提示词、输出可校验的自包含编码任务）、
   对产物做评审批判或双份择优（best-of-N）、对失败产物做定向修复迭代，
-  或用户明确提到「并行处理、批量任务、外包出去、用免费额度、用 DeepSeek、Codex、GPT、WorkBuddy、Cline、豆包跑」，或使用 /wbx 命令。
+  或用户明确提到「并行处理、批量任务、外包出去、用免费额度、用 DeepSeek、Codex、GPT、WorkBuddy、Cline、豆包跑」，
+  或显式调用 /wb-bridge 技能。
   前提：子任务自包含（输入可由编排器打包进提示词、输出可独立校验）。单个自包含任务也默认分派。
 ---
 
@@ -83,7 +84,7 @@ AGENTS.md 是常驻最小规则面；本文件承接全部下沉细节，两者�
 | `wbx ui [--port 7788] [--detach\|--stop\|--status\|--install-autostart\|--remove-autostart]` | 本地 Web 控制台（127.0.0.1）：五 lane 状态/路由/ask/fanout/历史/登录；守护幂等复用绝不新起 |
 | `wbx doubao <doubao.mjs 子命令…>` | 豆包桌面桥手工直通（零落盘旁路：不经调度、不入历史——调度用 `ask --as doubao`）；需调试口 9225；子命令 status/new-task/configure/send/read/ask |
 | `wbx export-bundle [--out <dir>]` | 分发打包（零凭证 zip + INSTALL-README + 自检断言；不含豆包桥） |
-| `wbx self-install / self-uninstall [--purge]` | 用户级全局安装（~/.zcode/wbx-bridge + skill + /wbx + AGENTS 块 + ~/.wbx）/ 一键还原 |
+| `wbx self-install / self-uninstall [--purge]` | 用户级全局安装（v28-A：唯一技能目录 ~/.zcode/skills/wb-bridge 含 manifest 自证 + AGENTS 块 + ~/.wbx；检测到旧布局自动迁移）/ 一键还原 |
 | `wbx install-user / uninstall-user` | legacy：仅注入/移除用户级 AGENTS 标记块（完整安装用 self-install） |
 
 任务字段（tasks.json）：`id` / `prompt`（或 `file`）/ `as` / `model` / `effort` / `caps` / `maxTurns` / `files`（路径数组，桥代拼材料）/ `filesMode`。
@@ -137,6 +138,8 @@ AGENTS.md 是常驻最小规则面；本文件承接全部下沉细节，两者�
 - 产物限本项目文件夹（例外仅二：用户级 AGENTS wbx 块经 install-user/self-install 管理；glm-prompt-crafter 部署物经 tools 脚本管理）。
 - 涉密/隐私/凭证绝不外包；本桥为临时工具（免费期/低价期结束即废弃，见 WBX.md 诚实声明）。
 
-## 10 /wbx 斜杠命令
+## 10 安装与入口（v28-A 收拢）
 
-装过 self-install 后任何项目可用 `/wbx <任务描述>` 一键触发分派流程（doctor --quick → 适合性判断 → 构造 worker 提示词 → ask/fanout → 校验 → 汇总）；命令文件在 `~/.zcode/commands/wbx.md`。
+- 全局安装=**唯一技能目录** `~/.zcode/skills/wb-bridge/`（scripts+SKILL.md/PROMPTS.md+examples+docs+doubao/ 可选+`.wbx-install.json` 安装自证 manifest）+ `~/.zcode/AGENTS.md` 标记块 + `~/.wbx/` 运行时，共三处；形态检测=manifest 自证（不再用「目录存在」哨兵），doctor 输出根解析表。
+- 装过 v28 前旧布局（`~/.zcode/wbx-bridge/` 等）的机器：`self-install` 自动一次性迁移（装新→冒烟→旧目录改名 `.backup-<时间戳>` 待确认后删；中断重跑自愈）。
+- 确定性入口=AGENTS 块 + 会话内显式 `/wb-bridge`（skill 显式调用是确定性的）；`/wbx` 斜杠命令已退役（v28 起不再写入 `~/.zcode/commands/wbx.md`，迁移时清除旧残留）。
