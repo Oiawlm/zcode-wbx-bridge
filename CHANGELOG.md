@@ -58,3 +58,13 @@ v23 轮：历史净化 + 用量 token 整链删除 + 前端资产化（授权=�
 - **修复** `wbx fanout` 省略 --timeout 时误记「显式 300s」的观测说谎（签名默认改 null，超时单点决策）；ask 汇总「总耗时」恒 0.0s 改为真实值；`--help` 的 models 枚举漏 codex/doubao；doctor 遇损坏的 cline 二进制可能崩溃。
 - **修复** 豆包桥：new-task 锚点失配不再被 Ctrl+N 兜底掩盖（显式失败）；launch.ps1 pid 归因链容错（健康启动曾被误判失败）。
 - 退出协议统一（die 等待子进程清理后再退出）；HELP 改由命令/旗标表生成（命令一览/旗标总表/退出码语义入 HELP）；self-install 必选文件补全 wbx-ui.mjs。
+
+## Unreleased 草稿（6.15.0 待 D 集成定稿；本节 v28B 执行窗口起草，标题不带版本号以保 docs-governance ②a 首版本==WBX_VERSION 门禁绿）
+
+v28B 轮：产物生命周期（定案=internal/RESEARCH-V28.md §4.3/§4.4；拓扑零变化零迁移，只加寿命）。
+
+- **新增** `wbx clean` 产物回收命令：缺省只读干跑报告（候选表 `KIND|PATH|AGE|SIZE|ACTION` + `Total reclaimed` 预估，零删除）；`--apply` 实删（`--force` 仅免确认）；`--jobs <days>` / `--scratch <hours>` / `--lane-cache` 分域；安全五条（候选仅扫描枚举、realpath 白名单前缀、绝不删白名单根本身、symlink/junction 一律跳过、mtime 安全窗=域 TTL+24h 防删在写）；删除失败记 skipped 不影响退出码。
+- **新增** scratch 惰性 GC：ask/fanout 收尾路径（成功失败均达）按 `scratch-ttl-hours`（默认 168h）回收超龄条目，每日至多一次（stamp 判窗，Cargo 语义）；`--ephemeral` 的 `eph-*` scratch 任务完成即删。
+- **新增** 单件输出护栏 `output-max-bytes`（默认 5MB）：失败 attempt 全量输出 / `*-stream.jsonl` / transcript 三条落盘通道统一截断+尾行标记，杜绝单件 450M 输出再现。
+- **新增** config 三键 `scratch-ttl-hours` / `jobs-retention-days` / `output-max-bytes`（均 0=关）；doctor 增产物三键生效值与 scratch/jobs/lane-cache 体积概览。
+- **变更** 门禁沙箱自清（test-helpers 单点）：mkSandbox 登记+进程退出兜底删除+套件启动清扫 os.tmpdir() 内 >24h 孤儿（`wbx-gate-`/`wbx-ui-gate-` 前缀）。

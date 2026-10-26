@@ -74,11 +74,13 @@
 
 其余根级文件（codex-quota.json / cline-free-models.json / l0-cwd/ 等）与完整登记见 UNINSTALL.md 第〇节登记表。
 
+**产物寿命（v28B，拓扑零变化零迁移——只加寿命不改路径）**：`scratch/` 条目 TTL=`scratch-ttl-hours`（默认 168h；ask/fanout 收尾惰性 GC，每日至多一次；`eph-*` 随 `--ephemeral` 任务完成即删）；`jobs/` 保留=`jobs-retention-days`（默认 30 天，仅 `wbx clean` 执行回收）；单件输出（失败 attempt 全量输出 / `*-stream.jsonl` / transcript 三通道）受 `output-max-bytes`（默认 5MB）护栏，超限截断+尾行 `[truncated by wbx output-max-bytes=N]`；三键均 0=关。lane 缓存仅 `config/{ai,cn}/{traces,logs,shell-snapshots}` 白名单可被 `wbx clean --lane-cache` 剪枝（30d+24h 安全窗）；凭证四目录与非白名单子目录任何代码路径不可达删除。
+
 **凭证边界**：sessions/product/providers.json/auth.json 内容绝不进日志、文档、HTTP 响应、导出包；`.wbx/` 与 `~/.wbx/` 均 gitignore。
 
 ## 4 命令指针
 
-唯一权威源=`wbx --help`。一句话清单：`doctor [--quick]`（自检向导）/ `login --identity cn|ai|cline|codex` / `ask [--ephemeral]` / `fanout [--ephemeral]` / `history` / `config list|get|set` / `models` / `usage` / `ui`（守护与自启钩子）/ `doubao <子命令>`（豆包桥手工直通，零落盘旁路）/ `export-bundle`（零凭证分发 zip）/ `self-install` / `self-uninstall` / `install-user` / `uninstall-user`（legacy）。`--ephemeral`（v23）=真实执行零落盘：回退/重试/超时/caps 原样，不建 job 不入历史（冒烟/连通性验证专用；fanout 结果 JSON 走 stdout；UI 发起的调用永远是真实调度）。
+唯一权威源=`wbx --help`。一句话清单：`doctor [--quick]`（自检向导；含产物三键生效值与 scratch/jobs/lane-cache 体积概览）/ `login --identity cn|ai|cline|codex` / `ask [--ephemeral]` / `fanout [--ephemeral]` / `history` / `clean [--jobs N] [--scratch H] [--lane-cache] [--apply] [--force]`（产物回收：缺省只读干跑报告零删，`--apply` 实删；候选仅扫描枚举+realpath 白名单+symlink 跳过；skipped 不影响退出码）/ `config list|get|set` / `models` / `usage` / `ui`（守护与自启钩子）/ `doubao <子命令>`（豆包桥手工直通，零落盘旁路）/ `export-bundle`（零凭证分发 zip）/ `self-install` / `self-uninstall` / `install-user` / `uninstall-user`（legacy）。`--ephemeral`（v23）=真实执行零落盘：回退/重试/超时/caps 原样，不建 job 不入历史（冒烟/连通性验证专用；fanout 结果 JSON 走 stdout；UI 发起的调用永远是真实调度）。
 
 **质量门禁（六域常青套件，internal/）**：core-matrix（lane/caps/回退/错误分类/冷却矩阵）、cli-blackbox（假 CLI 沙箱黑盒）、ui-contract（UI 设计契约 + `--print-sha`）、ui-redtest（护栏红测）、daemon-lifecycle（守护与安全面）、docs-governance（文档治理），共用 test-helpers.mjs；旧 11 套件断言迁移台账见 `internal/archive/v22/suite-migration-map.md`（门禁=维护者本地面：internal/ 不入库、无 CI，外部贡献验收走全命令回归——见 CONTRIBUTING）。
 
