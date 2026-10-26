@@ -24,7 +24,7 @@ import {
   CLINE_HOME, CLINE_WORK_DIR, CODEX_HOME, CODEX_WORK_DIR, SCRATCH_ROOT, L0_CWD_DIR,
 } from './wbx-paths.mjs';
 
-export const WBX_VERSION = '6.14.0';
+export const WBX_VERSION = '6.15.0';
 
 // ---------- v1 迁移源（项目 .wbx/ 旧凭证/旧产品配置；路径派生单点见 ./wbx-paths.mjs） ----------
 const OLD_SESSION_PATH = path.join(PROJECT_ROOT, '.wbx', 'session.json');        // v1 凭证（迁移源）
