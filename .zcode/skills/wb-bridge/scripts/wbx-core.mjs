@@ -716,6 +716,212 @@ export function ensureScratch(name) {
   return d;
 }
 
+// ---------- 产物生命周期（v28B）：scratch 惰性 GC + 单件输出护栏 + wbx clean 扫描回收 ----------
+// 回收面铁律（RESEARCH-V28 §4.3/§4.4）：删除候选只来自扫描枚举（绝不收用户传路径）；
+// 真实路径必须严格落在白名单根内部（root+path.sep 前缀，绝不删根本身）；symlink/junction 一律
+// lstat 跳过。凭证四目录（sessions/product/cline-home/codex-home）与 config/{ai,cn} 非缓存
+// 子目录在任何代码路径均不可达删除——白名单常量本节单点定义，core-matrix LC4 测试锁。
+export const SCRATCH_ENTRY_PREFIXES = ['l1-', 'job-', 'eph-'];            // scratch 合法条目前缀（ensureScratch 全部调用点收敛）
+export const LANE_CACHE_LANES = ['ai', 'cn'];                             // WorkBuddy 自身 home 所在 lane（config/<lane>/）
+export const LANE_CACHE_SUBDIRS = ['traces', 'logs', 'shell-snapshots'];  // 可重建缓存白名单子目录（plugins 等绝不入列）
+export const LANE_CACHE_TTL_DAYS = 30;                                    // lane 缓存剪枝窗（固定保守值；mtime 再加 24h 安全缓冲）
+export const CLEAN_SAFE_BUFFER_MS = 24 * 3600 * 1000;                     // clean 安全缓冲：只碰超窗且 24h 未动的条目，防删在写
+const SCRATCH_GC_STAMP = path.join(SCRATCH_ROOT, '.gc-stamp');            // GC 每日至多一次的判窗 stamp（内容=上次运行 epoch ms）
+
+// 目录体积递归求和（clean 报告与 doctor 概览共用；symlink 不跟随防环；任何失败按 0 计绝不抛）
+export function dirSizeBytes(p) {
+  let total = 0;
+  const walk = (d) => {
+    let es;
+    try { es = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of es) {
+      const full = path.join(d, e.name);
+      try {
+        const st = fs.lstatSync(full);
+        if (st.isSymbolicLink()) continue;
+        if (st.isDirectory()) walk(full);
+        else total += st.size;
+      } catch { /* 条目消失/不可读：跳过 */ }
+    }
+  };
+  walk(p);
+  return total;
+}
+
+export function fmtBytes(n) {
+  if (!Number.isFinite(n) || n < 0) return '?';
+  if (n >= 1073741824) return (n / 1073741824).toFixed(1) + 'GB';
+  if (n >= 1048576) return (n / 1048576).toFixed(1) + 'MB';
+  if (n >= 1024) return (n / 1024).toFixed(1) + 'KB';
+  return `${n}B`;
+}
+
+function fmtAge(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '?';
+  if (ms >= 86400000) return (ms / 86400000).toFixed(1) + 'd';
+  if (ms >= 3600000) return (ms / 3600000).toFixed(1) + 'h';
+  return Math.max(0, Math.round(ms / 60000)) + 'm';
+}
+
+// 唯一删除原语（GC 与 clean 共用；自建 eph scratch 即删也走此单点）：
+// realpath 必须严格在 allowedRoot 内部（绝不等于根本身=preserveRoot 语义）；
+// symlink/junction 一律 lstat 跳过；fs.rm 带 Windows 重试；只读 EPERM 先 chmod 0o666 再试；
+// 残余失败返回原因串绝不抛（调用方记 skipped、不中断、退出码不受影响）。
+async function safeRemoveEntry(entry, allowedRoot) {
+  try {
+    const st = await fsp.lstat(entry);
+    if (st.isSymbolicLink()) return 'symlink';
+    let rootRp;
+    try { rootRp = await fsp.realpath(allowedRoot); } catch { return 'root-unavailable'; }
+    let rp;
+    try { rp = await fsp.realpath(entry); } catch { return 'realpath-failed'; }
+    if (rp === rootRp || !rp.startsWith(rootRp + path.sep)) return 'outside-root';
+    const rmOpts = { recursive: true, force: true, maxRetries: 4, retryDelay: 150 };
+    try { await fsp.rm(entry, rmOpts); }
+    catch (e) {
+      if (process.platform === 'win32' && /EPERM/i.test(String(e?.code || e))) {
+        try { await fsp.chmod(entry, 0o666); } catch { /* 目录/占用态 chmod 失败交由下方重试 */ }
+      }
+      await fsp.rm(entry, rmOpts).catch(() => {});
+    }
+    return fs.existsSync(entry) ? 'rm-failed' : null;
+  } catch { return 'lstat-failed'; }
+}
+
+// scratch 惰性 GC（Cargo 语义：操作后触发+每日至多一次）：删 mtime 超 scratch-ttl-hours 的
+// scratch 条目（仅前缀白名单）；stamp 与当前同一本地日则不重扫；EPERM/EBUSY 跳过不炸；
+// TTL=0 关（不扫也不写 stamp）。ask/fanout 收尾路径 finally 调用（成功失败均达）。
+export async function scratchGcOnce({ now = Date.now() } = {}) {
+  const ttlHours = loadConfig()['scratch-ttl-hours'];
+  if (!Number.isInteger(ttlHours) || ttlHours <= 0) return { ran: false, reason: 'ttl-off', removed: 0, skipped: [] };
+  if (!fs.existsSync(SCRATCH_ROOT)) return { ran: false, reason: 'no-scratch-root', removed: 0, skipped: [] };
+  try {
+    const last = Number((await fsp.readFile(SCRATCH_GC_STAMP, 'utf8')).trim());
+    if (Number.isFinite(last) && new Date(last).toDateString() === new Date(now).toDateString()) {
+      return { ran: false, reason: 'window-closed', removed: 0, skipped: [] };
+    }
+  } catch { /* 无 stamp=首次运行 */ }
+  const cutoff = now - ttlHours * 3600 * 1000;
+  const removed = [];
+  const skipped = [];
+  let entries = [];
+  try { entries = await fsp.readdir(SCRATCH_ROOT); } catch { return { ran: false, reason: 'scratch-unreadable', removed: 0, skipped: [] }; }
+  for (const name of entries) {
+    if (!SCRATCH_ENTRY_PREFIXES.some((p) => name.startsWith(p))) continue;   // 前缀白名单：stamp/异名条目/越界目录永不入集
+    const full = path.join(SCRATCH_ROOT, name);
+    let mtimeMs;
+    try { mtimeMs = (await fsp.stat(full)).mtimeMs; } catch { continue; }
+    if (mtimeMs > cutoff) continue;
+    const err = await safeRemoveEntry(full, SCRATCH_ROOT);
+    if (err) skipped.push({ path: full, reason: err });
+    else removed.push(full);
+  }
+  try { await fsp.writeFile(SCRATCH_GC_STAMP, String(now), 'utf8'); } catch { /* stamp 失败不阻断（次日至多重扫一次） */ }
+  return { ran: true, removed: removed.length, skipped };
+}
+
+// 单件输出护栏（v28B）：超限截断+尾行标记（护栏必须覆盖每条落盘通道——Codex 反例教训）。
+// 纯函数可测；maxBytes<=0=关（原样返回）；截断点回退到多字节字符边界，产物恒 ≤ maxBytes。
+export function capOutputText(text, maxBytes) {
+  const s = String(text ?? '');
+  if (!Number.isInteger(maxBytes) || maxBytes <= 0) return s;
+  const buf = Buffer.from(s, 'utf8');
+  if (buf.length <= maxBytes) return s;
+  const marker = `\n[truncated by wbx output-max-bytes=${maxBytes}]`;
+  let cut = Math.max(0, maxBytes - Buffer.byteLength(marker, 'utf8'));
+  while (cut > 0 && (buf[cut] & 0xc0) === 0x80) cut--;   // 不切断多字节字符
+  const out = buf.subarray(0, cut).toString('utf8') + marker;
+  if (Buffer.byteLength(out, 'utf8') <= maxBytes) return out;
+  // 极小上限（容不下标记行）退化：整体按字节截断——此配置形态属病态，仅保证硬上限成立
+  const ob = Buffer.from(out, 'utf8');
+  let c2 = maxBytes;
+  while (c2 > 0 && (ob[c2] & 0xc0) === 0x80) c2--;
+  return ob.subarray(0, c2).toString('utf8');
+}
+
+// 三通道（attempt 输出 / *-stream.jsonl / transcript）统一写入 helper：读 output-max-bytes 生效值
+export async function writeGuarded(file, text) {
+  await fsp.writeFile(file, capOutputText(text, loadConfig()['output-max-bytes']), 'utf8');
+}
+
+// wbx clean（v28B）：缺省只读报告（候选表 KIND|PATH|AGE|SIZE|ACTION + 尾行 Total reclaimed: X MB），
+// --apply 才执行；--force 仅免确认（≠--apply；TTY 下 --apply 未加 --force 会要求确认，非 TTY 自动放行）。
+// 分域：--jobs <days>（缺省取 config jobs-retention-days）/--scratch <hours>（缺省取 config
+// scratch-ttl-hours）/--lane-cache（config/{ai,cn}/{traces,logs,shell-snapshots} 白名单剪枝）。
+// 安全窗：域 TTL+24h 缓冲（防删在写）；jobs 只回收 <运行时根>/jobs（项目内旧 tasks/jobs 只读兼容根不碰）。
+// 退出语义：残余删除失败记 skipped 不中断、仍算成功（硬错误=非法旗标取值才非 0）。
+export async function runClean({ apply = false, force = false, jobsDays = null, scratchHours = null, laneCache = false, now = Date.now(), onLine = null } = {}) {
+  const say = onLine || ((m) => console.log(m));
+  for (const [v, name] of [[jobsDays, '--jobs'], [scratchHours, '--scratch']]) {
+    if (v != null && (!Number.isInteger(v) || v < 0)) throw new Error(`${name} 需为非负整数（收到 ${v}）`);
+  }
+  const cfg = loadConfig();
+  const jobsWin = jobsDays != null ? jobsDays : cfg['jobs-retention-days'];
+  const scratchWin = scratchHours != null ? scratchHours : cfg['scratch-ttl-hours'];
+  const candidates = [];
+  const collect = (kind, root, thresholdMs, { prefixes = null } = {}) => {
+    if (!root || !fs.existsSync(root)) return;
+    let names = [];
+    try { names = fs.readdirSync(root); } catch { return; }
+    for (const name of names) {
+      if (prefixes && !prefixes.some((p) => name.startsWith(p))) continue;
+      const full = path.join(root, name);
+      let st;
+      try { st = fs.statSync(full); } catch { continue; }   // stat 跟随链接：junction 的年龄取目标（删除判定仍以 lstat 跳过）
+      if (now - st.mtimeMs <= thresholdMs) continue;
+      let action = 'delete';
+      try { if (fs.lstatSync(full).isSymbolicLink()) action = 'skip(symlink)'; } catch { /* 竞态消失：枚举态照报 */ }
+      candidates.push({ kind, path: full, mtimeMs: st.mtimeMs, sizeBytes: dirSizeBytes(full), action });
+    }
+  };
+  if (jobsWin > 0) collect('jobs', JOBS_DIR, jobsWin * 86400000 + CLEAN_SAFE_BUFFER_MS);
+  if (scratchWin > 0) collect('scratch', SCRATCH_ROOT, scratchWin * 3600000 + CLEAN_SAFE_BUFFER_MS, { prefixes: SCRATCH_ENTRY_PREFIXES });
+  if (laneCache) {
+    for (const lane of LANE_CACHE_LANES) {
+      for (const sub of LANE_CACHE_SUBDIRS) {
+        collect('lane-cache', path.join(RUNTIME_ROOT, 'config', lane, sub), LANE_CACHE_TTL_DAYS * 86400000 + CLEAN_SAFE_BUFFER_MS);
+      }
+    }
+  }
+  // TTY 且 --apply 未加 --force：确认一次（非 TTY 自动放行——脚本/门禁环境确定性优先）
+  if (apply && !force && process.stdin.isTTY && candidates.some((c) => c.action === 'delete')) {
+    const total = candidates.filter((c) => c.action === 'delete').reduce((a, c) => a + c.sizeBytes, 0);
+    process.stdout.write(`将删除 ${candidates.filter((c) => c.action === 'delete').length} 个条目共 ${fmtBytes(total)}（干跑预览：wbx clean）。确认执行？[y/N] `);
+    const chunk = process.stdin.read();
+    if (!chunk || !/^y(es)?$/i.test(String(chunk).trim())) {
+      say(`已取消（未删除任何条目）。`);
+      return { ok: true, cancelled: true, deleted: 0, skipped: [], candidates };
+    }
+  }
+  say('KIND|PATH|AGE|SIZE|ACTION');
+  const skipped = [];
+  let reclaimed = 0;
+  let deletedCount = 0;
+  for (const c of candidates) {
+    if (!apply || c.action !== 'delete') {
+      say(`${c.kind}|${c.path}|${fmtAge(now - c.mtimeMs)}|${fmtBytes(c.sizeBytes)}|${c.action}`);
+      if (c.action === 'delete') reclaimed += c.sizeBytes;
+      else skipped.push({ path: c.path, reason: 'symlink' });
+      continue;
+    }
+    // allowedRoot=候选所在白名单根（jobs→JOBS_DIR、scratch→SCRATCH_ROOT、lane-cache→白名单子目录本身；
+    // 枚举只产根的子条目，preserveRoot 由 safeRemoveEntry 的 realpath 前缀校验兜底）
+    const err = await safeRemoveEntry(c.path, path.dirname(c.path));
+    if (err) {
+      skipped.push({ path: c.path, reason: err });
+      say(`${c.kind}|${c.path}|${fmtAge(now - c.mtimeMs)}|${fmtBytes(c.sizeBytes)}|skip(${err})`);
+    } else {
+      reclaimed += c.sizeBytes;
+      deletedCount++;
+      say(`${c.kind}|${c.path}|${fmtAge(now - c.mtimeMs)}|${fmtBytes(c.sizeBytes)}|deleted`);
+    }
+  }
+  say(`Total reclaimed: ${(reclaimed / 1048576).toFixed(1)} MB${apply ? '' : '（dry-run 预估，--apply 实删）'}`);
+  if (skipped.length) console.error(`[WARN] ${skipped.length} 个条目跳过（${skipped.map((s) => s.reason).join('/')})，不影响退出码`);
+  if (!candidates.length) console.error('（无可回收条目——各域均空或全在安全窗内）');
+  return { ok: true, deleted: deletedCount, skipped, candidates };
+}
+
 // L1 工具轨迹摘要：从 codebuddy transcript 数组提取 function_call 事件（P2 实测事件形态）
 // 返回 { counts: {工具名: 次数}, samples: ['工具名|参数前80字符', ...]（≤20 条） }
 export function extractToolTrace(arr) {
@@ -960,6 +1166,19 @@ export const CONFIG_DEFS = {
     type: 'string', default: '2026-10-31',
     desc: '夜间免费活动截止 YYYY-MM-DD（北京日期，截止日全天仍有效；空串=无截止；过期恒白天档，doctor/WARN 提示。官方公告转述，以官方为准）',
   },
+  // v28B 产物生命周期三键（0=关；RESEARCH-V28 §4.3：拓扑零变化零迁移，只加寿命）
+  'scratch-ttl-hours': {
+    type: 'int', min: 0, max: 8760, default: 168,
+    desc: 'scratch 条目寿命（小时；ask/fanout 收尾惰性 GC，每日至多一次，0=关）',
+  },
+  'jobs-retention-days': {
+    type: 'int', min: 0, max: 3650, default: 30,
+    desc: 'jobs 台账保留天数（仅 wbx clean 执行回收，0=关）',
+  },
+  'output-max-bytes': {
+    type: 'int', min: 0, max: 1073741824, default: 5242880,
+    desc: '单件输出护栏（attempt 输出/stream/transcript 三通道字节上限，超限截断+尾行标记，0=关）',
+  },
 };
 
 // loadConfig 不缓存（D-048）：每次直读（~1KB JSON，成本可忽略）——mtime 失效键在 OS 时钟粒度下无法
@@ -1032,6 +1251,10 @@ export function loadConfig() {
   {
     const ne = String(out['night-expires'] ?? '').trim();
     if (ne !== '' && !NIGHT_EXPIRES_RE.test(ne)) out['night-expires'] = '2026-10-31';
+  }
+  // v28B 生命周期三键：非整数/越界一律回缺省（0=关为合法显式值，原样保留）
+  for (const k of ['scratch-ttl-hours', 'jobs-retention-days', 'output-max-bytes']) {
+    if (!Number.isInteger(out[k]) || out[k] < 0 || out[k] > CONFIG_DEFS[k].max) out[k] = CONFIG_DEFS[k].default;
   }
   return { ...out };
 }
@@ -2123,7 +2346,7 @@ async function dumpFailedAttempt(jobDir, taskId, attemptN, res) {
   if (typeof combined !== 'string') return;
   const file = path.join(jobDir, `${sanitizeId(taskId)}.attempt${attemptN}.output.txt`);
   try {
-    await fsp.writeFile(file, combined, 'utf8');
+    await writeGuarded(file, combined);   // 三通道统一护栏（v28B）：超 output-max-bytes 截断+标记
   } catch (e) {
     // 诊断落盘绝不影响主流程（T7 建议#2）：写失败仅告警，不追加指针、不抛出
     console.error(`[WARN] 失败输出落盘失败（${e?.message || e}）：${file}`);
@@ -2353,81 +2576,88 @@ export async function runAskJob({ prompt, as = null, model = null, effort = null
   const job = ephemeral ? null : await createJob('ask', { promptPreview: brief(prompt, 120), as: as || 'auto', model: resolveModel(model), effort, timeoutS: effTimeoutS, ...(capsSet.length ? { caps: capsNorm } : {}), ...(['ai', 'cn'].includes(primary) ? { policy: ((p) => ({ model: p.model, effort: p.effort || null, context: p.context || null, windowActive: !!p.window.active }))(resolveModelPolicy(primary, { model, effort })) } : {}) }, { lanes: chain, tasksInput: [{ id: 'ask', prompt, ...(capsSet.length ? { caps: capsNorm } : {}), ...(mt != null ? { maxTurns: mt } : {}) }], jobId });
   const capsScratch = capsSet.length ? ensureScratch(job ? 'job-' + job.id : 'eph-ask-' + stamp()) : null;
 
-  // 显式点名 codex 且额度冷却中：放行但打 WARN（auto 路由不会解析到冷却中的 codex——laneReady=false）
-  if (chain.includes('codex')) {
-    const qs = codexQuotaState();
-    if (qs.active) console.error(`[WARN] codex 额度冷却中（剩余约 ${qs.remainingMin}m，${qs.reason || 'usage limit'}）——显式点名放行，失败将按回退链改投`);
-  }
-  // 夜间免费档 stderr 一行（D-5 ②）：链含 cn 才相关；消费 nightWindowState 单对象，每次投递现算
-  if (chain.includes('cn')) console.error(nightWindowLine());
+  // v28B 收尾路径（成功失败均达）：--ephemeral 的 eph-* scratch 即删（best-effort）+ scratch 惰性 GC
+  try {
+    // 显式点名 codex 且额度冷却中：放行但打 WARN（auto 路由不会解析到冷却中的 codex——laneReady=false）
+    if (chain.includes('codex')) {
+      const qs = codexQuotaState();
+      if (qs.active) console.error(`[WARN] codex 额度冷却中（剩余约 ${qs.remainingMin}m，${qs.reason || 'usage limit'}）——显式点名放行，失败将按回退链改投`);
+    }
+    // 夜间免费档 stderr 一行（D-5 ②）：链含 cn 才相关；消费 nightWindowState 单对象，每次投递现算
+    if (chain.includes('cn')) console.error(nightWindowLine());
 
-  const jobT0 = Date.now();
-  let usedLane = null, res = null, resLane = null, attempts = 0, clineHeal = null;
-  let attemptSeq = 0;   // 全局尝试序号：跨回退 lane 连续（attempt 落盘编号与 rec.attempts 同源）
-  let lastPolicy = null;   // 最近一次投递的策略解析（ai/cn 才有值；成功 attempt 即实际下发面）
-  for (const lane of chain) {
-    const run = await runAttempts({
-      lane,
-      call: (m) => {
-        // 回退链换 lane 按新 lane 重解析（D-4）；每次投递现算，不缓存窗口判定（W2 反模式）。
-        // 非 ai/cn（cline/doubao/codex）策略返回 null——走既有单点原样透传，绝不改道。
-        const pol = resolveModelPolicy(lane, { model: m, effort }, new Date());
-        if (!pol) return askOnce({ lane, prompt, model: m, effort, timeoutMs: effTimeoutS * 1000, caps: capsNorm || 'L0', scratchDir: capsScratch, maxTurns: mt });
-        lastPolicy = pol;
-        return askOnce({ lane, prompt, model: pol.model, effort: pol.effort, context: pol.context, timeoutMs: effTimeoutS * 1000, caps: capsNorm || 'L0', scratchDir: capsScratch, maxTurns: mt });
-      },
-      dump: job ? (r) => dumpFailedAttempt(job.dir, 'ask', ++attemptSeq, r) : async () => {},
-      say: (msg) => console.error(msg),
-      usedModel: model,
-      healNote: (to) => `cline auto-heal -> ${to}，重投一次`,
-    });
-    attempts += run.attempts;
-    if (run.healed) clineHeal = run.healed;
-    res = run.res;
-    resLane = lane;
-    if (res.ok) { usedLane = lane; break; }
-    if (lane !== primary) break;
-    if (fb) console.error(`[WARN] lane ${lane} 失败（kind=${res.kind}），自动改投 lane ${fb}…`);
-  }
-  // 策略快照（D-5 ④）：实际下发面 model/effort/context + 窗口态（ai/cn 专属；其余 lane 走既有单点）
-  const recPolicy = lastPolicy ? { model: lastPolicy.model, effort: lastPolicy.effort || null, context: lastPolicy.context || null, windowActive: !!lastPolicy.window.active } : null;
-  const rec = {
-    id: 'ask',
-    lane: res?.ok ? usedLane : primary,
-    status: res?.ok ? 'success' : 'failed',
-    attempts,
-    durationMs: res?.durationMs ?? 0,
-    model: res?.ok ? res.model : (lastPolicy?.model ?? resolveModel(model)),
-    effort: lastPolicy ? (lastPolicy.effort || null) : (effort || null),   // 实际下发面（策略 lane）；其余 lane 保持任务级语义
-    caps: capsNorm || 'L0',
-  };
-  if (recPolicy) {
-    rec.policy = recPolicy;
-    if (recPolicy.context) rec.context = recPolicy.context;
-  }
-  if (clineHeal && usedLane === 'cline') rec['cline-model-healed'] = `${clineHeal.from}→${clineHeal.to}`;   // 结果 meta：旧→新（仅 heal 重投真正产出结果时标注）
-  if (res?.autostart) rec['doubao-autostart'] = res.autostart;                     // 结果 meta：launched|restarted|online|failed
-  if (res?.ok) rec.result = res.text; else { rec.error = `${res?.kind}: ${res?.error || ''}`; if (res?.hint) rec.hint = res.hint; if (res?.resetIn) rec.resetIn = res.resetIn; }
-  if (res?.ok && res.toolTrace) rec.toolTrace = res.toolTrace;   // L1 工具轨迹摘要（工具名+次数+参数截断）
-  if (job && res?.rawStream) {
-    // 流式 lane（cline/codex）原始事件流全文落盘，供回放与解析器迭代；文件名按产出 lane 泛化（cline 字节兼容）
-    await fsp.writeFile(path.join(job.dir, `ask.${resLane || usedLane || primary}-stream.jsonl`), res.rawStream, 'utf8');
-  }
-  if (job && res?.rawTranscript) {
-    // L1 原始 transcript 落盘（联网内容不可冻结复现，轨迹全文留档供回放核对）
-    await fsp.writeFile(path.join(job.dir, 'ask.transcript.json'), res.rawTranscript, 'utf8');
-  }
-  if (job) {
-    await writeTaskRecord(job.dir, rec);
-    await finalizeJob(job.dir, { total: 1, ok: res?.ok ? 1 : 0, durationMs: Date.now() - jobT0 });
-    const md = buildSummaryMd({ type: 'ask', tasks: [{ id: 'ask' }], results: [rec], totalMs: Date.now() - jobT0, jobId: job.id });
-    await fsp.writeFile(path.join(job.dir, 'summary.md'), md, 'utf8');
-  }
+    const jobT0 = Date.now();
+    let usedLane = null, res = null, resLane = null, attempts = 0, clineHeal = null;
+    let attemptSeq = 0;   // 全局尝试序号：跨回退 lane 连续（attempt 落盘编号与 rec.attempts 同源）
+    let lastPolicy = null;   // 最近一次投递的策略解析（ai/cn 才有值；成功 attempt 即实际下发面）
+    for (const lane of chain) {
+      const run = await runAttempts({
+        lane,
+        call: (m) => {
+          // 回退链换 lane 按新 lane 重解析（D-4）；每次投递现算，不缓存窗口判定（W2 反模式）。
+          // 非 ai/cn（cline/doubao/codex）策略返回 null——走既有单点原样透传，绝不改道。
+          const pol = resolveModelPolicy(lane, { model: m, effort }, new Date());
+          if (!pol) return askOnce({ lane, prompt, model: m, effort, timeoutMs: effTimeoutS * 1000, caps: capsNorm || 'L0', scratchDir: capsScratch, maxTurns: mt });
+          lastPolicy = pol;
+          return askOnce({ lane, prompt, model: pol.model, effort: pol.effort, context: pol.context, timeoutMs: effTimeoutS * 1000, caps: capsNorm || 'L0', scratchDir: capsScratch, maxTurns: mt });
+        },
+        dump: job ? (r) => dumpFailedAttempt(job.dir, 'ask', ++attemptSeq, r) : async () => {},
+        say: (msg) => console.error(msg),
+        usedModel: model,
+        healNote: (to) => `cline auto-heal -> ${to}，重投一次`,
+      });
+      attempts += run.attempts;
+      if (run.healed) clineHeal = run.healed;
+      res = run.res;
+      resLane = lane;
+      if (res.ok) { usedLane = lane; break; }
+      if (lane !== primary) break;
+      if (fb) console.error(`[WARN] lane ${lane} 失败（kind=${res.kind}），自动改投 lane ${fb}…`);
+    }
+    // 策略快照（D-5 ④）：实际下发面 model/effort/context + 窗口态（ai/cn 专属；其余 lane 走既有单点）
+    const recPolicy = lastPolicy ? { model: lastPolicy.model, effort: lastPolicy.effort || null, context: lastPolicy.context || null, windowActive: !!lastPolicy.window.active } : null;
+    const rec = {
+      id: 'ask',
+      lane: res?.ok ? usedLane : primary,
+      status: res?.ok ? 'success' : 'failed',
+      attempts,
+      durationMs: res?.durationMs ?? 0,
+      model: res?.ok ? res.model : (lastPolicy?.model ?? resolveModel(model)),
+      effort: lastPolicy ? (lastPolicy.effort || null) : (effort || null),   // 实际下发面（策略 lane）；其余 lane 保持任务级语义
+      caps: capsNorm || 'L0',
+    };
+    if (recPolicy) {
+      rec.policy = recPolicy;
+      if (recPolicy.context) rec.context = recPolicy.context;
+    }
+    if (clineHeal && usedLane === 'cline') rec['cline-model-healed'] = `${clineHeal.from}→${clineHeal.to}`;   // 结果 meta：旧→新（仅 heal 重投真正产出结果时标注）
+    if (res?.autostart) rec['doubao-autostart'] = res.autostart;                     // 结果 meta：launched|restarted|online|failed
+    if (res?.ok) rec.result = res.text; else { rec.error = `${res?.kind}: ${res?.error || ''}`; if (res?.hint) rec.hint = res.hint; if (res?.resetIn) rec.resetIn = res.resetIn; }
+    if (res?.ok && res.toolTrace) rec.toolTrace = res.toolTrace;   // L1 工具轨迹摘要（工具名+次数+参数截断）
+    if (job && res?.rawStream) {
+      // 流式 lane（cline/codex）原始事件流全文落盘，供回放与解析器迭代；文件名按产出 lane 泛化（cline 字节兼容）
+      await writeGuarded(path.join(job.dir, `ask.${resLane || usedLane || primary}-stream.jsonl`), res.rawStream);
+    }
+    if (job && res?.rawTranscript) {
+      // L1 原始 transcript 落盘（联网内容不可冻结复现，轨迹全文留档供回放核对）
+      await writeGuarded(path.join(job.dir, 'ask.transcript.json'), res.rawTranscript);
+    }
+    if (job) {
+      await writeTaskRecord(job.dir, rec);
+      await finalizeJob(job.dir, { total: 1, ok: res?.ok ? 1 : 0, durationMs: Date.now() - jobT0 });
+      const md = buildSummaryMd({ type: 'ask', tasks: [{ id: 'ask' }], results: [rec], totalMs: Date.now() - jobT0, jobId: job.id });
+      await fsp.writeFile(path.join(job.dir, 'summary.md'), md, 'utf8');
+    }
 
-  if (res?.ok) {
-    return { ok: true, jobId: job ? job.id : null, jobDir: job ? job.dir : null, lane: usedLane, fallbackFrom: usedLane !== primary ? primary : null, model: res.model, durationMs: res.durationMs, text: res.text, caps: capsNorm || 'L0', ...(res.toolTrace ? { toolTrace: res.toolTrace } : {}), ...((clineHeal && usedLane === 'cline') ? { clineModelHealed: clineHeal } : {}) };
+    if (res?.ok) {
+      return { ok: true, jobId: job ? job.id : null, jobDir: job ? job.dir : null, lane: usedLane, fallbackFrom: usedLane !== primary ? primary : null, model: res.model, durationMs: res.durationMs, text: res.text, caps: capsNorm || 'L0', ...(res.toolTrace ? { toolTrace: res.toolTrace } : {}), ...((clineHeal && usedLane === 'cline') ? { clineModelHealed: clineHeal } : {}) };
+    }
+    return { ok: false, jobId: job ? job.id : null, jobDir: job ? job.dir : null, lane: primary, kind: res?.kind, error: res?.error, hint: res?.hint, caps: capsNorm || 'L0', ...(res?.resetIn ? { resetIn: res.resetIn } : {}) };
+  } finally {
+    // v28B：eph scratch 即删走唯一删除原语（self 建目录，SCRATCH_ROOT 白名单内）；GC 失败绝不影响主流程
+    if (ephemeral && capsScratch) await safeRemoveEntry(capsScratch, SCRATCH_ROOT).catch(() => {});
+    await scratchGcOnce().catch(() => {});
   }
-  return { ok: false, jobId: job ? job.id : null, jobDir: job ? job.dir : null, lane: primary, kind: res?.kind, error: res?.error, hint: res?.hint, caps: capsNorm || 'L0', ...(res?.resetIn ? { resetIn: res.resetIn } : {}) };
 }
 
 /**
@@ -2587,107 +2817,112 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     const taskTimeoutMs = resolveCapsTimeoutS(timeoutS, task.effSet) * 1000;
     // 非 ∅ 能力集任务级独立 scratch（读边界）；ephemeral 时以 eph-<run>-<task> 命名（不挂 job id）
     const capsScratch = task.effSet.length ? ensureScratch(job ? `job-${job.id}-${task.id}` : `eph-${ephTag}-${task.id}`) : null;
-    // 材料播种：reference 任务把 files 复制进 scratch（保持相对路径结构，rel 已在任务校验防越界），
-    // 提示词材料区只有清单+路径——worker 用 Read 工具自行读取（重试复用同一 scratch，不重复播种判断）
-    let seededFiles = null;
-    let seedError = null;
-    if (task.filesMode === 'reference' && capsScratch && !task._seeded) {
-      seededFiles = [];
-      try {
-        for (const f of task.files) {
-          const dest = path.join(capsScratch, f.rel);
-          fs.mkdirSync(path.dirname(dest), { recursive: true });
-          fs.copyFileSync(f.abs, dest);
-          seededFiles.push(f.rel);
+    // v28B：--ephemeral 的任务级 eph-* scratch 完成即 best-effort 删（成功失败均达；失败留 TTL GC 兜底）
+    try {
+      // 材料播种：reference 任务把 files 复制进 scratch（保持相对路径结构，rel 已在任务校验防越界），
+      // 提示词材料区只有清单+路径——worker 用 Read 工具自行读取（重试复用同一 scratch，不重复播种判断）
+      let seededFiles = null;
+      let seedError = null;
+      if (task.filesMode === 'reference' && capsScratch && !task._seeded) {
+        seededFiles = [];
+        try {
+          for (const f of task.files) {
+            const dest = path.join(capsScratch, f.rel);
+            fs.mkdirSync(path.dirname(dest), { recursive: true });
+            fs.copyFileSync(f.abs, dest);
+            seededFiles.push(f.rel);
+          }
+        } catch (e) {
+          seedError = `材料播种失败：${e?.message || e}`;
+          seededFiles = null;
         }
-      } catch (e) {
-        seedError = `材料播种失败：${e?.message || e}`;
-        seededFiles = null;
+        if (!seedError) {
+          task._seeded = true;   // 全部成功才置位（半份材料绝不静默复用）
+          say(`${task.id} 材料播种 -> scratch（${seededFiles.length} 个文件）`);
+        }
       }
-      if (!seedError) {
-        task._seeded = true;   // 全部成功才置位（半份材料绝不静默复用）
-        say(`${task.id} 材料播种 -> scratch（${seededFiles.length} 个文件）`);
+      if (seedError) {
+        // 播种失败=任务级失败：无材料投递无意义，不重试不回退，如实落盘
+        const rec = {
+          id: task.id, lane, status: 'failed', attempts: 0,
+          durationMs: Date.now() - started,
+          model: resolveModel(task.model), effort: task.effort || null,
+          caps: task.effCaps, error: seedError,
+          ...(task.filesMode === 'reference' ? { filesMode: 'reference' } : {}),
+        };
+        results[task.index] = rec;
+        if (job) await writeTaskRecord(job.dir, rec);
+        say(`${task.id}@${lane} -> failed（${seedError}）`);
+        return;
       }
-    }
-    if (seedError) {
-      // 播种失败=任务级失败：无材料投递无意义，不重试不回退，如实落盘
+      let attemptSeq = 0;   // 全局尝试序号：跨重试/自愈/回退连续（attempt 落盘编号与 rec.attempts 同源）
+      let recPol = null;   // 最终投递 lane 的策略解析（ai/cn 才有值；每次投递现算，不缓存）
+      const run = await runAttempts({
+        lane,
+        call: (m) => {
+          const pol = resolveModelPolicy(lane, { model: m, effort: task.effort }, new Date());
+          if (!pol) return askOnce({ lane, prompt: task.prompt, model: m, effort: task.effort, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });
+          recPol = pol;
+          return askOnce({ lane, prompt: task.prompt, model: pol.model, effort: pol.effort, context: pol.context, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });
+        },
+        dump: job ? (r) => dumpFailedAttempt(job.dir, task.id, ++attemptSeq, r) : async () => {},
+        say,
+        retryN,
+        usedModel: mdl,
+        tag: `${task.id}@${lane} `,
+        healNote: (to) => `${task.id}@cline auto-heal -> ${to}，重投一次`,
+      });
+      let res = run.res, attempts = run.attempts, clineHeal = run.healed;   // attempts=真实尝试次数（dump 计数只作落盘编号——末次成功时旧算法少计 1，v23 评审 P1）
+      let usedLane = lane, fallbackFrom = null;
+      if (!res.ok) {
+        // L1 跨 lane 回退只在 ai/cn 之间（cline/doubao 不承载 L1，不得进入回退目标）
+        let fb = fallbackLane(lane);
+        if (task.effSet.length && fb !== 'ai' && fb !== 'cn') fb = null;
+        if (fb) {
+          attempts = run.attempts + 1;
+          say(`${task.id}@${lane} 用尽重试（${res.kind}），跨 lane 回退 -> ${fb}`);
+          const polFb = resolveModelPolicy(fb, { model: mdl, effort: task.effort }, new Date());   // 回退链换 lane 按新 lane 重解析（D-4；非 ai/cn 返回 null 走既有单点）
+          recPol = polFb;
+          res = await askOnce({ lane: fb, prompt: task.prompt, model: polFb ? polFb.model : mdl, effort: polFb ? polFb.effort : task.effort, context: polFb ? polFb.context : null, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });
+          if (!res.ok && job) await dumpFailedAttempt(job.dir, task.id, attempts, res);   // 回退 attempt 同样落盘
+          if (res.ok) { usedLane = fb; fallbackFrom = lane; }
+        }
+      }
       const rec = {
-        id: task.id, lane, status: 'failed', attempts: 0,
+        id: task.id,
+        lane: usedLane,
+        ...(fallbackFrom ? { fallbackFrom } : {}),
+        status: res.ok ? 'success' : 'failed',
+        attempts,
         durationMs: Date.now() - started,
-        model: resolveModel(task.model), effort: task.effort || null,
-        caps: task.effCaps, error: seedError,
-        ...(task.filesMode === 'reference' ? { filesMode: 'reference' } : {}),
+        model: res.ok ? res.model : (recPol?.model ?? resolveModel(mdl)),
+        effort: recPol ? (recPol.effort || null) : (task.effort || null),   // 实际下发面（策略 lane）；其余 lane 保持任务级语义
+        caps: task.effCaps,
       };
+      if (recPol) {
+        rec.policy = { model: recPol.model, effort: recPol.effort || null, context: recPol.context || null, windowActive: !!recPol.window.active };   // 策略快照（D-5 ④）
+        if (recPol.context) rec.context = recPol.context;
+      }
+      if (clineHeal && usedLane === 'cline') rec['cline-model-healed'] = `${clineHeal.from}→${clineHeal.to}`;   // 结果 meta：旧→新（仅 heal 重投真正产出结果时标注）
+      if (res.autostart) rec['doubao-autostart'] = res.autostart;                      // 结果 meta：launched|restarted|online|failed
+      if (task.filesMode === 'reference') { rec.filesMode = 'reference'; rec.seededFiles = seededFiles; }   // scratch 播种快照记入 job
+      if (res.ok) rec.result = res.text;
+      else rec.error = `${res.kind}: ${res.error || ''}`;
+      if (res.ok && res.toolTrace) rec.toolTrace = res.toolTrace;   // L1 工具轨迹摘要
+      if (job && res.rawStream) {
+        // 流式 lane（cline/codex）：原始事件流全文落盘，供回放与解析器迭代；文件名按产出 lane 泛化（cline 字节兼容）
+        await writeGuarded(path.join(job.dir, `${sanitizeId(task.id)}.${usedLane}-stream.jsonl`), res.rawStream);
+      }
+      if (job && res.rawTranscript) {
+        // L1：codebuddy transcript 全文落盘（联网内容不可冻结复现，轨迹留档供回放核对）
+        await writeGuarded(path.join(job.dir, `${sanitizeId(task.id)}.transcript.json`), res.rawTranscript);
+      }
       results[task.index] = rec;
       if (job) await writeTaskRecord(job.dir, rec);
-      say(`${task.id}@${lane} -> failed（${seedError}）`);
-      return;
+      say(`${task.id}${fallbackFrom ? `（${fallbackFrom}→${usedLane} 回退）` : `@${usedLane}`} -> ${rec.status}（${fmtMs(rec.durationMs)}，尝试 ${attempts}${task.effSet.length ? `，caps ${task.effCaps}` : ''}）`);
+    } finally {
+      if (ephemeral && capsScratch) await safeRemoveEntry(capsScratch, SCRATCH_ROOT).catch(() => {});
     }
-    let attemptSeq = 0;   // 全局尝试序号：跨重试/自愈/回退连续（attempt 落盘编号与 rec.attempts 同源）
-    let recPol = null;   // 最终投递 lane 的策略解析（ai/cn 才有值；每次投递现算，不缓存）
-    const run = await runAttempts({
-      lane,
-      call: (m) => {
-        const pol = resolveModelPolicy(lane, { model: m, effort: task.effort }, new Date());
-        if (!pol) return askOnce({ lane, prompt: task.prompt, model: m, effort: task.effort, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });
-        recPol = pol;
-        return askOnce({ lane, prompt: task.prompt, model: pol.model, effort: pol.effort, context: pol.context, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });
-      },
-      dump: job ? (r) => dumpFailedAttempt(job.dir, task.id, ++attemptSeq, r) : async () => {},
-      say,
-      retryN,
-      usedModel: mdl,
-      tag: `${task.id}@${lane} `,
-      healNote: (to) => `${task.id}@cline auto-heal -> ${to}，重投一次`,
-    });
-    let res = run.res, attempts = run.attempts, clineHeal = run.healed;   // attempts=真实尝试次数（dump 计数只作落盘编号——末次成功时旧算法少计 1，v23 评审 P1）
-    let usedLane = lane, fallbackFrom = null;
-    if (!res.ok) {
-      // L1 跨 lane 回退只在 ai/cn 之间（cline/doubao 不承载 L1，不得进入回退目标）
-      let fb = fallbackLane(lane);
-      if (task.effSet.length && fb !== 'ai' && fb !== 'cn') fb = null;
-      if (fb) {
-        attempts = run.attempts + 1;
-        say(`${task.id}@${lane} 用尽重试（${res.kind}），跨 lane 回退 -> ${fb}`);
-        const polFb = resolveModelPolicy(fb, { model: mdl, effort: task.effort }, new Date());   // 回退链换 lane 按新 lane 重解析（D-4；非 ai/cn 返回 null 走既有单点）
-        recPol = polFb;
-        res = await askOnce({ lane: fb, prompt: task.prompt, model: polFb ? polFb.model : mdl, effort: polFb ? polFb.effort : task.effort, context: polFb ? polFb.context : null, timeoutMs: taskTimeoutMs, caps: task.effCaps, scratchDir: capsScratch, maxTurns: task.maxTurns ?? null });
-        if (!res.ok && job) await dumpFailedAttempt(job.dir, task.id, attempts, res);   // 回退 attempt 同样落盘
-        if (res.ok) { usedLane = fb; fallbackFrom = lane; }
-      }
-    }
-    const rec = {
-      id: task.id,
-      lane: usedLane,
-      ...(fallbackFrom ? { fallbackFrom } : {}),
-      status: res.ok ? 'success' : 'failed',
-      attempts,
-      durationMs: Date.now() - started,
-      model: res.ok ? res.model : (recPol?.model ?? resolveModel(mdl)),
-      effort: recPol ? (recPol.effort || null) : (task.effort || null),   // 实际下发面（策略 lane）；其余 lane 保持任务级语义
-      caps: task.effCaps,
-    };
-    if (recPol) {
-      rec.policy = { model: recPol.model, effort: recPol.effort || null, context: recPol.context || null, windowActive: !!recPol.window.active };   // 策略快照（D-5 ④）
-      if (recPol.context) rec.context = recPol.context;
-    }
-    if (clineHeal && usedLane === 'cline') rec['cline-model-healed'] = `${clineHeal.from}→${clineHeal.to}`;   // 结果 meta：旧→新（仅 heal 重投真正产出结果时标注）
-    if (res.autostart) rec['doubao-autostart'] = res.autostart;                      // 结果 meta：launched|restarted|online|failed
-    if (task.filesMode === 'reference') { rec.filesMode = 'reference'; rec.seededFiles = seededFiles; }   // scratch 播种快照记入 job
-    if (res.ok) rec.result = res.text;
-    else rec.error = `${res.kind}: ${res.error || ''}`;
-    if (res.ok && res.toolTrace) rec.toolTrace = res.toolTrace;   // L1 工具轨迹摘要
-    if (job && res.rawStream) {
-      // 流式 lane（cline/codex）：原始事件流全文落盘，供回放与解析器迭代；文件名按产出 lane 泛化（cline 字节兼容）
-      await fsp.writeFile(path.join(job.dir, `${sanitizeId(task.id)}.${usedLane}-stream.jsonl`), res.rawStream, 'utf8');
-    }
-    if (job && res.rawTranscript) {
-      // L1：codebuddy transcript 全文落盘（联网内容不可冻结复现，轨迹留档供回放核对）
-      await fsp.writeFile(path.join(job.dir, `${sanitizeId(task.id)}.transcript.json`), res.rawTranscript, 'utf8');
-    }
-    results[task.index] = rec;
-    if (job) await writeTaskRecord(job.dir, rec);
-    say(`${task.id}${fallbackFrom ? `（${fallbackFrom}→${usedLane} 回退）` : `@${usedLane}`} -> ${rec.status}（${fmtMs(rec.durationMs)}，尝试 ${attempts}${task.effSet.length ? `，caps ${task.effCaps}` : ''}）`);
   }
 
   async function runWorker(lane) {
@@ -2703,21 +2938,26 @@ export async function runFanoutJob({ tasksIn, lanes = null, parallel = null, tim
     }
   }
 
-  const workers = [];
-  for (const lane of laneKeys) {
-    const n = Math.min(laneParallelOf(lane), tasks.length);
-    for (let i = 0; i < n; i++) workers.push(runWorker(lane));
-  }
-  await Promise.all(workers);
+  try {
+    const workers = [];
+    for (const lane of laneKeys) {
+      const n = Math.min(laneParallelOf(lane), tasks.length);
+      for (let i = 0; i < n; i++) workers.push(runWorker(lane));
+    }
+    await Promise.all(workers);
 
-  const totalMs = Date.now() - t0;
-  const okCount = results.filter((r) => r && r.status === 'success').length;
-  if (job) {
-    await finalizeJob(job.dir, { total: tasks.length, ok: okCount, durationMs: totalMs });
-    const md = buildSummaryMd({ type: 'fanout', tasks, results, totalMs, laneKeys, laneParallel, timeoutS, retry: retryN, jobId: job.id });
-    await fsp.writeFile(path.join(job.dir, 'summary.md'), md, 'utf8');
+    const totalMs = Date.now() - t0;
+    const okCount = results.filter((r) => r && r.status === 'success').length;
+    if (job) {
+      await finalizeJob(job.dir, { total: tasks.length, ok: okCount, durationMs: totalMs });
+      const md = buildSummaryMd({ type: 'fanout', tasks, results, totalMs, laneKeys, laneParallel, timeoutS, retry: retryN, jobId: job.id });
+      await fsp.writeFile(path.join(job.dir, 'summary.md'), md, 'utf8');
+    }
+    return { jobId: job ? job.id : null, jobDir: job ? job.dir : null, okCount, total: tasks.length, results };
+  } finally {
+    // v28B 收尾路径（成功失败均达）：scratch 惰性 GC（每日至多一次；失败绝不影响批次结果）
+    await scratchGcOnce().catch(() => {});
   }
-  return { jobId: job ? job.id : null, jobDir: job ? job.dir : null, okCount, total: tasks.length, results };
 }
 
 // ---------- 登录（SSO 协议，分步可被 UI 复用） ----------
@@ -2864,6 +3104,14 @@ export async function doctorStatus({ probe = true, onLine = null, quick = false 
   // 3) 运行时布局
   const formNote = process.env.WBX_HOME ? 'WBX_HOME 指定' : (form === 'global' ? '全局形态' : '项目形态');
   step('runtime', true, `${formNote}：${RUNTIME_ROOT}{/sessions,/product,/config/<lane>,/jobs}${form === 'global' && !process.env.WBX_HOME ? '' : '（不入 git）'}`);
+
+  // 3b) 产物生命周期（v28B）：三键生效值 + 三域体积概览（静态只读，--quick 亦显示；回收预览走 wbx clean 干跑）
+  {
+    const sizeOf = (p) => (fs.existsSync(p) ? dirSizeBytes(p) : 0);
+    const laneCacheBytes = LANE_CACHE_LANES.reduce((a, l) => a + LANE_CACHE_SUBDIRS.reduce((b, s) => b + sizeOf(path.join(RUNTIME_ROOT, 'config', l, s)), 0), 0);
+    const detail = `scratch-ttl=${cfg['scratch-ttl-hours']}h jobs-retention=${cfg['jobs-retention-days']}d output-max=${fmtBytes(cfg['output-max-bytes'])}；体积 scratch=${fmtBytes(sizeOf(SCRATCH_ROOT))} jobs=${fmtBytes(sizeOf(JOBS_DIR))} lane-cache=${fmtBytes(laneCacheBytes)}（回收预览：wbx clean 干跑）`;
+    step('lifecycle', null, detail);
+  }
 
   // 4) 路由配置
   const dl = cfg['default-lane'];

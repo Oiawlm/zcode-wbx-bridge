@@ -30,7 +30,7 @@ import {
   loadConfig, setConfig,
   resolveDefaultLane, parseLane, laneReady, resolveDoubaoDir,
   askOnce, resolveModel, fetchClineFreeModels, laneBalance,
-  runAskJob, runFanoutJob,
+  runAskJob, runFanoutJob, runClean,
   listJobs, getJob,
   startLogin, pollLoginToken, fetchAccountInfo, persistLogin,
   doctorStatus,
@@ -537,6 +537,22 @@ async function cmdHistory(opts) {
   await exitWith(0);
 }
 
+// ---------- 子命令：clean（v28B 产物回收：缺省干跑报告零删，--apply 才实删） ----------
+async function cmdClean(opts) {
+  try {
+    await runClean({
+      apply: !!opts.apply,
+      force: !!opts.force,   // 仅免确认（≠--apply）：TTY 下 --apply 未加 --force 会要求确认
+      jobsDays: opts.jobs ?? null,
+      scratchHours: opts.scratch ?? null,
+      laneCache: !!opts.laneCache,
+    });
+    await exitWith(0);
+  } catch (e) {
+    die(e.message);
+  }
+}
+
 // ---------- 子命令：install-user / uninstall-user（v2 兼容，保留原语义） ----------
 async function cmdInstallUser() {
   const p = await installUserBlock(path.join(SCRIPT_DIR, 'wbx.mjs'));
@@ -685,6 +701,10 @@ const FLAGS = [
   { name: '--parallel', alias: ['--lane-parallel'], val: 'int' },
   { name: '--timeout', val: 'int' },
   { name: '--retry', val: 'int' },
+  { name: '--apply', val: 'bool' },        // v28B clean：执行删除（缺省只读干跑）
+  { name: '--jobs', val: 'int' },          // v28B clean：jobs 域保留天数覆盖（缺省取 config jobs-retention-days；0=关）
+  { name: '--scratch', val: 'int' },       // v28B clean：scratch 域 TTL 小时覆盖（缺省取 config scratch-ttl-hours；0=关）
+  { name: '--lane-cache', val: 'bool' },   // v28B clean：lane 缓存白名单剪枝（config/{ai,cn}/{traces,logs,shell-snapshots}）
   { name: '--ephemeral', val: 'bool' },   // v23 包 A：真实执行零落盘（不建 job 不入历史；冒烟/连通性验证专用，ask/fanout）
   { name: '--wait', val: 'int' },
   { name: '--probe', val: 'str' },
@@ -757,6 +777,7 @@ const COMMANDS = [
   { name: 'usage', fn: (o) => cmdUsage(o), desc: '各 lane 余额（社区端点显式标非官方，诚实降级）' },
   { name: 'config', fn: (o) => cmdConfig(o), desc: 'list | get <key> | set <key> <value>（存 config.json）' },
   { name: 'history', fn: (o) => cmdHistory(o), desc: '历史列表 / 完整回放双向对话' },
+  { name: 'clean', fn: (o) => cmdClean(o), desc: '产物回收（缺省干跑报告零删；--apply 实删；--jobs/--scratch/--lane-cache 分域；--force 免确认）' },
   { name: 'install-user', fn: () => cmdInstallUser(), desc: 'legacy：向 ~/.zcode/AGENTS.md 注入标记块' },
   { name: 'uninstall-user', fn: () => cmdUninstallUser(), desc: 'legacy：移除用户级标记块' },
   { name: 'self-install', fn: (o) => cmdSelfInstall(o), desc: '用户级全局安装（~/.zcode/wbx-bridge + skill + ~/.wbx）' },
@@ -843,10 +864,23 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                                                    effort/context（cn 白天思考档/ai+cn 上下文预算）与
                                                    night-model/night-effort/night-context/night-window/
                                                    night-expires（v24 cn 夜间免费档五键：夜间窗内自动切
-                                                   hy4-preview+high+960k，窗外白天档；纯时钟判定每次投递现算）
+                                                   hy4-preview+high+960k，窗外白天档；纯时钟判定每次投递现算）、
+                                                   scratch-ttl-hours=168/jobs-retention-days=30/
+                                                   output-max-bytes=5242880（v28B 产物生命周期三键：scratch
+                                                   惰性 GC TTL / jobs 保留窗 / 单件输出护栏，0=关）
                                                    （存 <运行时根>/config.json）
   node wbx.mjs history [--last 10]                 历史列表（时间/类型/任务数/成功率/lane 分布/目录）
   node wbx.mjs history <jobId> [--task <id>]       完整回放一次 job 的双向对话（prompt+回复全文）
+  node wbx.mjs clean    [--jobs N] [--scratch H] [--lane-cache] [--apply] [--force]
+                                                   产物回收（v28B）：缺省=只读干跑（候选表
+                                                   KIND|PATH|AGE|SIZE|ACTION + 尾行 Total reclaimed 预估，
+                                                   零删除）；--apply 才执行（TTY 未加 --force 会要求确认，
+                                                   非 TTY 自动放行）；--jobs <days>/--scratch <hours> 覆盖
+                                                   域窗（缺省取 config：30 天/168 小时；0=关该域）；
+                                                   --lane-cache 剪 config/{ai,cn}/{traces,logs,shell-snapshots}
+                                                   白名单（30d+24h 安全窗；plugins/projects 等绝不入列）；
+                                                   候选仅由扫描枚举、凭证四目录任何路径不可达；
+                                                   symlink/junction 跳过；删除失败记 skipped 不影响退出码
   node wbx.mjs ui      [--port 7788] [--no-open]   本地 Web UI（仅 127.0.0.1；状态/路由/免费模型选择/ask/fanout/历史/登录）
                      [--detach]                    后台守护启动（幂等：已在跑则复用，绝不重复拉起；日志 ~/.wbx/logs/ui.log）
                      [--stop] / [--status]         停止守护进程（HTTP 优雅优先）/ 查看三态（运行中/残留/未运行）

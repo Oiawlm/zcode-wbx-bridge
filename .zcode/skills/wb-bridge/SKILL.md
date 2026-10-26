@@ -77,6 +77,7 @@ AGENTS.md 是常驻最小规则面；本文件承接全部下沉细节，两者�
 | `wbx ask --file p.txt \| --text "…" [--as codex\|ai\|cn\|cline\|doubao] [--model M] [--effort low] [--caps 能力集] [--max-turns N] [--timeout S] [--json] [--stdin] [--ephemeral]` | 单次调用：stdout=结果、stderr=lane/耗时；失败自动跨 lane 回退；落盘 job 可回放；`--ephemeral`=真实执行零落盘（不建 job 不入历史） |
 | `wbx fanout --file t.json [--lanes codex,ai,cn,cline,doubao] [--parallel 2] [--timeout S] [--retry 1] [--ephemeral]` | 多 lane 并发池批量（缺省池不含 codex，点名才投）；结果落 `<运行时根>/jobs/<jobId>/`（summary.md 掌全局 → 各 `<id>.json` 取内容 → 校验后汇总）；`--ephemeral`=零落盘、结果 JSON 走 stdout |
 | `wbx history [--last 10]` / `wbx history <jobId> [--task id]` | 历史列表 / 完整回放双向对话（含旧 tasks/ 兼容） |
+| `wbx clean [--jobs N] [--scratch H] [--lane-cache] [--apply] [--force]` | 产物回收（v28B）：缺省=只读干跑报告（`KIND\|PATH\|AGE\|SIZE\|ACTION` + `Total reclaimed` 预估，零删除）；`--apply` 实删（`--force` 免确认≠`--apply`）；候选仅扫描枚举，凭证四目录任何路径不可达，symlink/junction 跳过，删除失败记 skipped 不影响退出码 |
 | `wbx config list\|get\|set` | 配置（键集与缺省见 §6；权威=`wbx config list`） |
 | `wbx models [--as cn\|ai\|cline] [--free]` | 模型探测 + 产品配置清单；`--as cline --free` 列当前免费组（codex/doubao 无模型清单概念，明确报错指路） |
 | `wbx usage [--json] [--force]` | 各 lane 余额（WorkBuddy 双 lane 社区端点显式标非官方；cline/doubao/codex 如实标无端点；TTL 缓存） |
@@ -101,6 +102,7 @@ AGENTS.md 是常驻最小规则面；本文件承接全部下沉细节，两者�
 | codex | `codex-model=gpt-6.1-sol`（≥GPT-6 护栏）、`codex-reasoning=medium`、`codex-parallel=1`、`codex-quota-cooldown-min=30` |
 | caps | `caps-l1-max-turns=24`、`caps-l2-enabled=false` |
 | 夜间档（v24） | `effort=max`（cn 白天思考档）、`context=1m`（ai/cn 白天上下文预算）、`night-model=hy4-preview`、`night-effort=high`、`night-context=960k`、`night-window=23:00-08:00`（北京时间，支持跨午夜）、`night-expires=2026-10-31`（空串=无截止） |
+| 产物寿命（v28B） | `scratch-ttl-hours=168`（scratch 惰性 GC，ask/fanout 收尾触发、每日至多一次）、`jobs-retention-days=30`（仅 wbx clean 回收）、`output-max-bytes=5242880`（attempt 输出/stream/transcript 三通道单件护栏）；三键 0=关 |
 
 （表列分组速览；全集与键数以 `wbx config list` / CONFIG_DEFS 单点为准。）
 
