@@ -1398,6 +1398,42 @@ ask/fanout 选择器；登录页 Codex 收割说明卡；/api 校验与 errorHin
 画像章+成本口径「免费三 lane+付费两 lane」）；commit/push 按 FROZEN 二.2 全流程（敏感模式另加
 `codex-home|auth\.json` 零命中审计）。桥版本 `WBX_VERSION` 6.10.0。
 
+## v29 章：纯 Skill 化（单技能目录分发 · 运行时落各项目 .wbx/ · 家目录零写入）
+
+> 状态：叙事草稿（E2 文档面窗口撰写；E4 终稿定版时校订）。定案与验收判据唯一事实源=
+> internal/goal-v29/SPEC.md（2026-10-28 冻结）；执行拆分 E1 scripts+质量门 → E2 发布面文档 ∥ E3
+> 分家 → E4 终稿发布。授权：v28 立项原话「所有东西放在某个 Agent 的 Skills 目录下，别拆成零散
+> 配置/MD 散落各处」的一贯方向 + v29 立项显式授权删除安装面命令（覆盖 FROZEN 二.6 兼容口径）。
+
+**第一性目标**：分发单元=技能目录（SKILL.md/PROMPTS.md/examples/scripts/docs）——安装=复制这一个
+目录（self-install 原子复制或手动复制），运行时全落「当前项目」`.wbx/`，家目录唯一写入=安装副本
+本身。技能发现回归官方 Agent Skills 机制：SKILL.md frontmatter description 常驻会话层（触发词+
+when-to-use 驱动发现），正文=最小工作流层，PROMPTS.md=引用层一层深（渐进披露三层，依据
+Anthropic Agent Skills 最佳实践）。AGENTS 标记块注入、ZCode 自启钩子等旁路入口全部退役——
+发现即技能本体。
+
+**路径模型**（wbx-paths 单点）：根解析=`WBX_HOME` env（沙箱/测试注入）→ `<git 根>/.wbx/`（git 根=
+从 process.cwd() 向上最近含 .git 的目录，realpath 归一；无 .git 则 cwd）；PROJECT_ROOT 同源。删除
+WBX_FORM 双形态判定、manifest realpath∈installRoot 自证与「拒绝降级」护栏、GLOBAL_RUNTIME_DIR/
+GLOBAL_BRIDGE_DIR 常量、LEGACY_TASKS/JOBS 兼容读。家目录常驻读取仅二（~/.workbuddy*/cache 登录
+模板、~/.codex/auth.json 单文件只读复制例外）。运行时布局为锁定闭集：jobs/sessions/product/
+config.json/config<ai|cn>/cline-home/codex-home/scratch/l0-cwd/run/logs + **export/**（export-bundle
+默认落点从桌面改此，--out 可覆盖）；禁止 RT 外新增运行时条目。
+
+**安装面终态**：manifest schema v3=仅版本自证（schema_version/version/created），v3 遇 v2/v3 副本
+均可运行、遇 v2 manifest 输出升级提示（幂等重装收口）；安装不写 ~/.zcode/AGENTS.md、不装
+~/.zcode/cli/config.json 钩子、不 mkdir ~/.wbx。卸载=删技能目录+停 UI+各项目自删 .wbx/（--purge/
+--adopt 随全局运行时退役；UNINSTALL.md 缩写，旧全局形态只在迁移指引一小节出现一次）。
+
+**迁移与守护**：self-install 升级时探测 v28 全局形态痕迹（v2 manifest/旧 ~/.zcode/wbx-bridge//
+~/.zcode/commands/wbx.md/AGENTS 块/钩子条目）一次性幂等清扫，逐项报告成功/跳过/失败；凭证绝不
+自动迁移/复制/删除（doctor 检测旧 ~/.wbx/ 凭证且当前项目凭证为空时输出一次性 INFO 指引）。控制台
+守护每项目化：绑定启动时解析的项目运行时根，状态/日志落各项目 .wbx/run|logs；默认端口 7788 被
+他项目守护占用时明确报错，新增 `ui --port` 旗标换端口。行为面（路由/caps/回退/T7/T8）零改动。
+
+**分家**：glm-prompt-crafter 提示词工艺库迁出为独立仓库（E3），本仓库不再分发该技能目录与部署
+脚本；文档提及处一律按「已分家独立仓库」口径。桥版本 6.16.0。
+
 ## CHANGELOG 归档
 
 ## 6.10.0 - 2026-10-14
