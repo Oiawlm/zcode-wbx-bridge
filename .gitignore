@@ -9,3 +9,6 @@ internal/
 
 # ZCode 会话本地计划（一次性产物，不入库不挂 status）
 .zcode/plans/
+
+# v29 worktree 协议（git worktree 会话目录）
+.wt/
