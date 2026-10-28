@@ -12,14 +12,14 @@
 发送任务 → 取回结果文本。模型与推理强度的配置状态以输入框上方状态栏文字为准（如「豆包 2.1 Pro高」），
 每步操作后都会读回校验。
 
-## 全局形态（v6.3 起，装过 `wbx self-install` 后全项目通用）
+## 用户级入口（装过 `wbx self-install` 后全项目可用）
 
 - 任何项目、任何目录直接走 wbx 直通入口（cmd 写法；PowerShell 换 `$env:USERPROFILE`）：
-  `node "%USERPROFILE%\.zcode\wbx-bridge\scripts\wbx.mjs" doubao ask "任务文本"`——子命令与参数
-  原样转发给本工具（status/new-task/configure/send/read/ask 及全部旗标）。
-- 全局副本在 `~\.zcode\wbx-bridge\doubao\`（self-install 从本目录整目录复制，含 node_modules）；
+  `node "%USERPROFILE%\.zcode\skills\wbx-bridge\scripts\wbx.mjs" doubao ask "任务文本"`——子命令与参数
+  原样转发给本工具（status/new-task/configure/send/read/ask 及全部旗标）；运行时随 cwd 所在项目落各自 `.wbx/`。
+- 用户级副本在 `~\.zcode\skills\wbx-bridge\doubao\`（self-install 从本目录整目录复制，含 node_modules）；
   本目录（`tools/doubao-bridge/`）是源与开发形态，改动后重跑 `wbx self-install` 即同步。
-- 启动调试口同样用全局副本：`powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.zcode\wbx-bridge\doubao\launch.ps1"`。
+- 启动调试口同样用用户级副本：`powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\.zcode\skills\wbx-bridge\doubao\launch.ps1"`。
 
 ## 前置条件
 
