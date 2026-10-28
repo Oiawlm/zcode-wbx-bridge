@@ -1,6 +1,6 @@
 # WBX 桥技术总文档
 
-> 纯当前态：只写现行行为与不变量。版本史与验收记录见 [HISTORY.md](HISTORY.md)；卸载见 [UNINSTALL.md](UNINSTALL.md)；UI 设计契约见 [UI-SPEC.md](UI-SPEC.md)。命令旗标一律以 `wbx --help` 为准（表驱动生成，随代码更新不漂移）。
+> 纯当前态：只写现行行为与不变量。版本史与验收记录见 [HISTORY.md](HISTORY.md)；卸载见 [UNINSTALL.md](UNINSTALL.md)；UI 设计契约见 [UI-SPEC.md](UI-SPEC.md)。命令旗标一律以 `wbx --help` 为准（表驱动生成，随代码更新不漂移）。预算：九节 ≤30KB。
 
 ## 1 定位与边界
 
@@ -58,7 +58,7 @@
 
 ## 3 运行时布局
 
-根解析优先级（v28-A 起）：`WBX_HOME` env → `WBX_FORM=global|project` 逃生门 → 安装 manifest 自证（运行副本 realpath 落在 `~/.zcode/skills/wb-bridge/.wbx-install.json` 声明的 installRoot 内 → 全局形态，数据根 `~/.wbx/`）→ 项目内 `.wbx/`；schema_version 与本桥不符明确报错拒绝降级；doctor 输出根解析表（form/installRoot/runtime/scratch/jobs）。全局形态桥本体=唯一技能目录 `~/.zcode/skills/wb-bridge/`（v28 前旧布局 `~/.zcode/wbx-bridge/` 由 self-install 一次性迁移，时间戳备份）。
+根解析（单点=wbx-paths）：`WBX_HOME` env（沙箱/测试注入）→ 否则 `<git 根>/.wbx/`——git 根=从 process.cwd() 向上最近含 `.git` 的目录（一律 realpath 归一，无 `.git` 时 fallback=cwd）；PROJECT_ROOT 与运行时根同源。doctor 输出根解析（runtime/scratch/jobs 等）。家目录唯一写入=用户级安装副本本身（`~/.zcode/skills/wb-bridge/`，经 self-install 原子复制，manifest v3 仅版本自证：schema_version/version/created）；家目录常驻读取仅二：`~/.workbuddy*/cache` 登录模板、`~/.codex/auth.json` 单文件一次性只读复制（既有显式授权例外）。装过旧版的机器由 self-install 升级时一次性清扫旧形态痕迹（凭证绝不自动迁移，指引见 UNINSTALL.md）。
 
 | 目录 | 内容 |
 |---|---|
@@ -71,16 +71,17 @@
 | `codex-home/` | 隔离 CODEX_HOME（auth.json 副本 + work/ read-only 沙箱 cwd） |
 | `run/` | 守护状态 ui.json（pid/port/token/version） |
 | `logs/` | ui.log（守护日志，不含凭证） |
+| `export/` | export-bundle 默认落点（`--out` 可覆盖） |
 
-其余根级文件（codex-quota.json / cline-free-models.json / l0-cwd/ 等）与完整登记见 UNINSTALL.md 第〇节登记表。
+根级 `config.json`（配置，键集权威=`wbx config list`，仅补丁目标键语义）、`l0-cwd/`（L0 专用空 cwd）与 codex-quota.json / cline-free-models.json 同在 RT 下；上表即 RT 条目闭集，禁止 RT 外新增运行时条目（全布局速查另见 SKILL.md）。
 
-**产物寿命（v28B，拓扑零变化零迁移——只加寿命不改路径）**：`scratch/` 条目 TTL=`scratch-ttl-hours`（默认 168h；ask/fanout 收尾惰性 GC，每日至多一次；`eph-*` 随 `--ephemeral` 任务完成即删）；`jobs/` 保留=`jobs-retention-days`（默认 30 天，仅 `wbx clean` 执行回收）；单件输出（失败 attempt 全量输出 / `*-stream.jsonl` / transcript 三通道）受 `output-max-bytes`（默认 5MB）护栏，超限截断+尾行 `[truncated by wbx output-max-bytes=N]`；三键均 0=关。lane 缓存仅 `config/{ai,cn}/{traces,logs,shell-snapshots}` 白名单可被 `wbx clean --lane-cache` 剪枝（30d+24h 安全窗）；凭证四目录与非白名单子目录任何代码路径不可达删除。
+**产物寿命**：`scratch/` 条目 TTL=`scratch-ttl-hours`（默认 168h；ask/fanout 收尾惰性 GC，每日至多一次；`eph-*` 随 `--ephemeral` 任务完成即删）；`jobs/` 保留=`jobs-retention-days`（默认 30 天，仅 `wbx clean` 执行回收）；单件输出（失败 attempt 全量输出 / `*-stream.jsonl` / transcript 三通道）受 `output-max-bytes`（默认 5MB）护栏，超限截断+尾行 `[truncated by wbx output-max-bytes=N]`；三键均 0=关。lane 缓存仅 `config/{ai,cn}/{traces,logs,shell-snapshots}` 白名单可被 `wbx clean --lane-cache` 剪枝（30d+24h 安全窗）；凭证四目录与非白名单子目录任何代码路径不可达删除。
 
 **凭证边界**：sessions/product/providers.json/auth.json 内容绝不进日志、文档、HTTP 响应、导出包；`.wbx/` 与 `~/.wbx/` 均 gitignore。
 
 ## 4 命令指针
 
-唯一权威源=`wbx --help`。一句话清单：`doctor [--quick]`（自检向导；含产物三键生效值与 scratch/jobs/lane-cache 体积概览）/ `login --identity cn|ai|cline|codex` / `ask [--ephemeral]` / `fanout [--ephemeral]` / `history` / `clean [--jobs N] [--scratch H] [--lane-cache] [--apply] [--force]`（产物回收：缺省只读干跑报告零删，`--apply` 实删；候选仅扫描枚举+realpath 白名单+symlink 跳过；skipped 不影响退出码）/ `config list|get|set` / `models` / `usage` / `ui`（守护与自启钩子）/ `doubao <子命令>`（豆包桥手工直通，零落盘旁路）/ `export-bundle`（零凭证分发 zip）/ `self-install` / `self-uninstall` / `install-user` / `uninstall-user`（legacy）。`--ephemeral`（v23）=真实执行零落盘：回退/重试/超时/caps 原样，不建 job 不入历史（冒烟/连通性验证专用；fanout 结果 JSON 走 stdout；UI 发起的调用永远是真实调度）。
+唯一权威源=`wbx --help`。一句话清单：`doctor [--quick]`（自检向导；含产物三键生效值与 scratch/jobs/lane-cache 体积概览）/ `login --identity cn|ai|cline|codex` / `ask [--ephemeral]` / `fanout [--ephemeral]` / `history` / `clean [--jobs N] [--scratch H] [--lane-cache] [--apply] [--force]`（产物回收：缺省只读干跑报告零删，`--apply` 实删；候选仅扫描枚举+realpath 白名单+symlink 跳过；skipped 不影响退出码）/ `config list|get|set` / `models` / `usage` / `ui [--port 7788]`（本地控制台守护，每项目化，端口被占明确报错） / `doubao <子命令>`（豆包桥手工直通，零落盘旁路）/ `export-bundle`（零凭证分发 zip，默认落 `<项目>/.wbx/export/`）/ `self-install`（原子复制技能目录+manifest v3+旧形态一次性清扫）/ `self-uninstall`（删技能目录+停守护+痕迹清扫）。`--ephemeral`（v23）=真实执行零落盘：回退/重试/超时/caps 原样，不建 job 不入历史（冒烟/连通性验证专用；fanout 结果 JSON 走 stdout；UI 发起的调用永远是真实调度）。
 
 **质量门禁（六域常青套件，internal/）**：core-matrix（lane/caps/回退/错误分类/冷却矩阵）、cli-blackbox（假 CLI 沙箱黑盒）、ui-contract（UI 设计契约 + `--print-sha`）、ui-redtest（护栏红测）、daemon-lifecycle（守护与安全面）、docs-governance（文档治理），共用 test-helpers.mjs；旧 11 套件断言迁移台账见 `internal/archive/v22/suite-migration-map.md`（门禁=维护者本地面：internal/ 不入库、无 CI，外部贡献验收走全命令回归——见 CONTRIBUTING）。
 
@@ -113,7 +114,7 @@
 
 ### 6.3 退出码
 
-CLI：0 成功 / 1 失败（含参数校验错误）。特例：`usage` 自然排空不强制退出（Windows libuv 兼容）；`ui --detach` 恒 0（钩子路径须秒回，失败只落日志）。`wbx-daemon` 专用码 78（守护协议，不经 CLI）。`doubao.mjs`（0-5）与 `launch.ps1`（0-5）为互相独立的码空间，同码不同义，消费方按来源进程区分。
+CLI：0 成功 / 1 失败（含参数校验错误）。特例：`usage` 自然排空不强制退出（Windows libuv 兼容）；`ui --detach` 恒 0（守护托付后台即回，失败只落日志）。`wbx-daemon` 专用码 78（守护协议，不经 CLI）。`doubao.mjs`（0-5）与 `launch.ps1`（0-5）为互相独立的码空间，同码不同义，消费方按来源进程区分。
 
 ### 6.4 config 键集
 
@@ -134,6 +135,7 @@ CLI：0 成功 / 1 失败（含参数校验错误）。特例：`usage` 自然�
 | codex 额度耗尽 | Plus 5h 窗口/周上限 | 自动冷却让位（等冷却或显式点名放行）；余额看 ChatGPT 网页端 Settings→Usage |
 | 豆包 CDP 不可达 | 客户端未以调试口 9225 运行 | doubao-autostart（默认开）自动经 launch.ps1 拉起/-Force 重启；或手动跑 launch.ps1 |
 | 凭证过期 401/Authentication required | 登录态失效 | 重新 `wbx login`（WorkBuddy 约 55 天；cline OAuth；codex --force 重收割） |
+| 控制台 7788 被占用 | 他项目守护已在跑（守护每项目化，同端口互斥） | `wbx ui --port <N>` 换端口起本项目守护 |
 | 超长提示词 | 命令行长度上限 | >12k 自动走 stdin（doubao 走 --file 临时文件），无需干预 |
 
 ## 8 风险红线
@@ -149,9 +151,9 @@ CLI：0 成功 / 1 失败（含参数校验错误）。特例：`usage` 自然�
 
 ### 9.1 卸载
 
-一键 `wbx self-uninstall`（--purge 连 `~/.wbx/` 凭证一起删，默认保留）；安装物登记表与还原细节见 UNINSTALL.md。
+一键 `wbx self-uninstall`（删技能目录+停守护+旧痕迹清扫）；各项目 `.wbx/`（含凭证）按需自行删除；安装物登记表与还原细节见 UNINSTALL.md。
 
 ### 9.2 维护经验（迁自 MEMORY 欠账）
 
 1. **新增页签级加载函数须两处挂钩**：`activateTab` 切页钩子 + 启动区直调 `loadStatus()`——只挂一处会出现首屏空态或切页不刷新。
-2. **全局形态副本改动后须重启守护生效**：改 `~/.zcode/skills/wb-bridge/` 下文件后 `wbx ui --stop` 再 `--detach`（模板串在守护进程启动时载入内存）；且已装副本与源码仓为两路部署物（v28-A 收拢后；分发 zip 第三路），改动须同步（self-install 幂等重跑 + sha 校验）。
+2. **已装副本改动后须重启守护生效**：改 `~/.zcode/skills/wb-bridge/` 下文件后 `wbx ui --stop` 再 `--detach`（模板串在守护进程启动时载入内存；守护每项目化，多项目并用时各项目守护分别重启）；且已装副本与源码仓为两路部署物（分发 zip 第三路），改动须同步（self-install 幂等重跑 + sha 校验）。
