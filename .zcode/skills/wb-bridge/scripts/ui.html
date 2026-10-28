@@ -698,7 +698,7 @@ async function loadStatus(){
   try{
     const s=await api('GET','/api/status');
     CUR=s;
-    $('hdr-meta').textContent='v'+s.version+' · '+(s.form==='global'?'全局形态':'项目形态')+' · '+shortRoot(s.runtimeRoot);
+    $('hdr-meta').textContent='v'+s.version+' · '+shortRoot(s.runtimeRoot);
     $('hdr-meta').title=String(s.runtimeRoot||'');
     $('status-error').hidden=true;
     renderOvw(s);

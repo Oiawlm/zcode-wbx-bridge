@@ -12,21 +12,21 @@
  * 默认路由三分：单发 auto=codex 就绪即优先、否则 ai 免费优先；fanout 批量缺省免费池（codex 点名才投）；
  * 失败/限流自动回退下一 lane（各一次，付费两档排后）。
  *
- * 约束：绝不写 ~/.workbuddy、~/.workbuddy-ai；凭证只存 .wbx/ 或 ~/.wbx/（均 gitignore），
+ * 约束：绝不写 ~/.workbuddy、~/.workbuddy-ai；凭证只存 <git 根>/.wbx/（已 gitignore），
  * 绝不打印其内容。
  */
 
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { SCRIPT_DIR, RUNTIME_ROOT, JOBS_DIR, LEGACY_TASKS_DIR, HOME, CODEX_HOME } from './wbx-paths.mjs';
+import { SCRIPT_DIR, RUNTIME_ROOT, JOBS_DIR, HOME, CODEX_HOME } from './wbx-paths.mjs';
 import {
   WBX_VERSION,
   IDENTITIES, LANE_ORDER, STDIN_THRESHOLD, CONFIG_DEFS,
   UI_DEFAULT_PORT,
   clineReady, clineProvidersFile, clineHomeDir, runClineAuth,
   die, DieSignal, redact, brief, fmtMs,
-  ensureDirs, readStdin, migrateIfNeeded,
+  ensureDirs, readStdin,
   loadConfig, setConfig,
   resolveDefaultLane, parseLane, laneReady, resolveDoubaoDir,
   askOnce, resolveModel, fetchClineFreeModels, laneBalance,
@@ -491,7 +491,7 @@ async function cmdHistory(opts) {
     const last = opts.last ?? 10;
     const jobs = listJobs().slice(0, last);
     if (!jobs.length) {
-      console.log(`（没有历史 job：${JOBS_DIR} 与旧 ${LEGACY_TASKS_DIR} 均为空）`);
+      console.log(`（没有历史 job：${JOBS_DIR} 为空）`);
       await exitWith(0);
     }
     const w = { time: 20, type: 8, total: 6, rate: 8, lanes: 16 };
@@ -500,7 +500,7 @@ async function cmdHistory(opts) {
       const t = j.createdAt ? new Date(j.createdAt).toLocaleString('zh-CN', { hour12: false }) : j.id;
       console.log([
         String(t).padEnd(w.time),
-        (j.type + (j.legacy ? '(旧)' : '')).padEnd(w.type),
+        j.type.padEnd(w.type),
         String(j.total ?? '?').padEnd(w.total),
         (j.successRate == null ? '?' : j.successRate + '%').padEnd(w.rate),
         fmtLaneDist(j.laneDist).padEnd(w.lanes),
@@ -511,10 +511,10 @@ async function cmdHistory(opts) {
     await exitWith(0);
   }
   const job = await getJob(arg);
-  if (!job) die(`找不到 job ${arg}（在 ${JOBS_DIR} 与旧 ${LEGACY_TASKS_DIR} 中均无）`);
+  if (!job) die(`找不到 job ${arg}（在 ${JOBS_DIR} 中无）`);
   const tasks = opts.task ? job.tasks.filter((t) => t.id === opts.task) : job.tasks;
   if (opts.task && !tasks.length) die(`job ${arg} 中没有任务 ${opts.task}（可用：${job.tasks.map((t) => t.id).join(', ')}）`);
-  console.error(`job ${job.id}  类型=${job.type}${job.legacy ? '（旧 tasks/ 兼容）' : ''}  状态=${job.status}  目录=${job.dir}`);
+  console.error(`job ${job.id}  类型=${job.type}  状态=${job.status}  目录=${job.dir}`);
   console.error(`任务数=${job.total ?? '?'}  成功率=${job.successRate == null ? '?' : job.successRate + '%'}  lane 分布=${fmtLaneDist(job.laneDist)}${job.durationMs != null ? `  总耗时=${fmtMs(job.durationMs)}` : ''}\n`);
   for (const t of tasks) {
     const r = t.record;
@@ -803,7 +803,7 @@ lane：codex = Codex CLI（可选第五 lane·ChatGPT Plus 质量优先档：单
 cn→ai→cline→codex→doubao 各一次（免费 lane 失败不自动烧 Plus/会员额度，付费两档排后）。
 失败/限流自动跨 lane 回退（仍是 DeepSeek；cline 内部绝不换非 DeepSeek 模型顶替）；cline 未装/未登录
 直接跳过；doubao 调试口不在线时 ask 秒退失败自然跳过；codex 额度冷却期 laneReady=false 自动跳过。
-运行时根：WBX_HOME env -> ~/.wbx/（安装 manifest 自证=全局形态；WBX_FORM=global|project 逃生门） -> 项目 .wbx/
+运行时根：WBX_HOME env（测试注入） -> <git 根>/.wbx（从 cwd 向上找 .git，无则 cwd 兜底）——每项目独立。
 cline 隔离：桥的 cline 状态只在 <运行时根>/cline-home/（HOME 覆盖），绝不读写用户 ~/.cline。
 codex 隔离：CODEX_HOME=<运行时根>/codex-home（--ignore-user-config 运行）；凭证=login --identity codex
 一次性只读复制 ~/.codex/auth.json（唯一显式授权例外，绝不回写）。
@@ -928,7 +928,6 @@ async function main() {
     if (opts.help) { console.log(HELP); await exitWith(0); }   // 显式 --help=正常输出（stdout/0）；裸调用=用法提示（stderr/1）
     console.error(HELP); await exitWith(1);
   }
-  migrateIfNeeded();
   const hit = COMMANDS.find((c) => c.name === cmd);
   if (!hit || !hit.fn) die(`未知子命令 ${cmd}（--help 查看用法）`);
   return hit.fn(opts);
