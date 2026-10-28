@@ -19,7 +19,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { SCRIPT_DIR, RUNTIME_ROOT, JOBS_DIR, HOME, CODEX_HOME } from './wbx-paths.mjs';
+import { RUNTIME_ROOT, JOBS_DIR, HOME, CODEX_HOME } from './wbx-paths.mjs';
 import {
   WBX_VERSION,
   IDENTITIES, LANE_ORDER, STDIN_THRESHOLD, CONFIG_DEFS,
@@ -34,7 +34,6 @@ import {
   listJobs, getJob,
   startLogin, pollLoginToken, fetchAccountInfo, persistLogin,
   doctorStatus,
-  USER_AGENTS_PATH, installUserBlock, uninstallUserBlock,
   openBrowser, exitWith,
 } from './wbx-core.mjs';
 import { selfInstall, selfUninstall, exportBundle } from './wbx-setup.mjs';
@@ -553,41 +552,23 @@ async function cmdClean(opts) {
   }
 }
 
-// ---------- 子命令：install-user / uninstall-user（v2 兼容，保留原语义） ----------
-async function cmdInstallUser() {
-  const p = await installUserBlock(path.join(SCRIPT_DIR, 'wbx.mjs'));
-  console.log(`[OK] 已注入/更新全局分派块 -> ${p}`);
-  console.error('生效范围：所有项目的 ZCode 会话（用户级 AGENTS.md）。移除：node wbx.mjs uninstall-user');
-  console.error('提示：要完整全局形态（用户级 skill 目录 + AGENTS 块 + ~/.wbx 运行时），用 wbx self-install');
-  await exitWith(0);
-}
-
-async function cmdUninstallUser() {
-  const r = await uninstallUserBlock();
-  console.log(r.removed
-    ? (r.fileDeleted ? `[OK] 已移除全局分派块；文件已空，连同 ${USER_AGENTS_PATH} 一起删除` : `[OK] 已移除全局分派块（保留 ${USER_AGENTS_PATH} 其余内容）`)
-    : `[OK] 无需移除（${r.reason === 'file-missing' ? `${USER_AGENTS_PATH} 不存在` : '没有 wbx 标记块'}）`);
-  await exitWith(0);
-}
-
 // ---------- 子命令：self-install / self-uninstall ----------
-async function cmdSelfInstall(opts) {
+async function cmdSelfInstall() {
   try {
-    const r = await selfInstall({ adopt: !!opts.adopt, keepProject: !opts.noKeepProject });
-    console.log(`[OK] 全局安装完成（v${WBX_VERSION}）：`);
+    const r = await selfInstall();
+    console.log(`[OK] 安装完成（v${WBX_VERSION}）：`);
     for (const line of r.report) console.log(`  - ${line}`);
-    console.error(`\n入口：node "${r.script}"（唯一技能目录 ~/.zcode/skills/wb-bridge/，.wbx-install.json 自证）`);
-    console.error('任何项目的 ZCode 会话现在都能主动分派（AGENTS 块 + 显式 /wb-bridge 技能调用；/wbx 斜杠命令已退役）。');
-    console.error('本项目桥后续也使用 ~/.wbx/ 全局运行时（凭证共享）。卸载：node wbx.mjs self-uninstall [--purge]');
+    console.error(`\n入口：node "${r.script}"（唯一技能目录 ~/.zcode/skills/wb-bridge/，.wbx-install.json 版本自证）`);
+    console.error('运行时随项目走：任何项目内 cwd 即得 <git 根>/.wbx（新项目零配置即用）。卸载：node wbx.mjs self-uninstall');
     await exitWith(0);
   } catch (e) {
     die(e.message);
   }
 }
 
-async function cmdSelfUninstall(opts) {
-  const r = await selfUninstall({ purge: !!opts.purge });
-  console.log('[OK] 全局卸载完成：');
+async function cmdSelfUninstall() {
+  const r = await selfUninstall();
+  console.log('[OK] 卸载完成：');
   for (const line of r.report) console.log(`  - ${line}`);
   await exitWith(0);
 }
@@ -726,9 +707,6 @@ const FLAGS = [
   { name: '--no-probe', val: 'bool' },
   { name: '--quick', val: 'bool' },
   { name: '--force', val: 'bool' },
-  { name: '--adopt', val: 'bool' },
-  { name: '--no-keep-project', val: 'bool' },
-  { name: '--purge', val: 'bool' },
   { name: '--version', alias: ['-v'], val: 'bool' },
   { name: '--help', alias: ['-h'], val: 'bool' },
 ];
@@ -778,11 +756,9 @@ const COMMANDS = [
   { name: 'config', fn: (o) => cmdConfig(o), desc: 'list | get <key> | set <key> <value>（存 config.json）' },
   { name: 'history', fn: (o) => cmdHistory(o), desc: '历史列表 / 完整回放双向对话' },
   { name: 'clean', fn: (o) => cmdClean(o), desc: '产物回收（缺省干跑报告零删；--apply 实删；--jobs/--scratch/--lane-cache 分域；--force 免确认）' },
-  { name: 'install-user', fn: () => cmdInstallUser(), desc: 'legacy：向 ~/.zcode/AGENTS.md 注入标记块' },
-  { name: 'uninstall-user', fn: () => cmdUninstallUser(), desc: 'legacy：移除用户级标记块' },
-  { name: 'self-install', fn: (o) => cmdSelfInstall(o), desc: '用户级全局安装（~/.zcode/skills/wb-bridge 单技能目录 + AGENTS 块 + ~/.wbx；旧布局自动迁移）' },
-  { name: 'self-uninstall', fn: (o) => cmdSelfUninstall(o), desc: '全局卸载（--purge 连凭证目录删）' },
-  { name: 'export-bundle', fn: (o) => cmdExportBundle(o), desc: '分发打包（零凭证 zip + 自检）' },
+  { name: 'self-install', fn: () => cmdSelfInstall(), desc: '安装（复制技能目录到 ~/.zcode/skills/wb-bridge + 一次性清扫旧形态痕迹；不写 AGENTS/钩子/全局运行时）' },
+  { name: 'self-uninstall', fn: () => cmdSelfUninstall(), desc: '卸载（删技能目录+停守护+清扫；各项目 .wbx/ 含凭证保留）' },
+  { name: 'export-bundle', fn: (o) => cmdExportBundle(o), desc: '分发打包（零凭证 zip + 自检；默认落 <git 根>/.wbx/export/）' },
   { name: 'ui', fn: (o) => cmdUi(o), desc: '本地 Web UI（--detach 守护 / --stop / --status / 自启钩子）' },
   { name: 'doubao', fn: null, desc: '豆包桌面桥手工直通（参数原样转发 doubao.mjs，零落盘旁路）' },
 ];
@@ -886,14 +862,13 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                      [--stop] / [--status]         停止守护进程（HTTP 优雅优先）/ 查看三态（运行中/残留/未运行）
                      [--install-autostart]         装 ZCode SessionStart 钩子：新开会话自动拉起控制台（需全局形态）
                      [--remove-autostart]          摘除自启钩子（config.json 其余键原样保留）
-  node wbx.mjs self-install [--adopt] [--no-keep-project]
-                                                   全局安装：唯一技能目录 ~/.zcode/skills/wb-bridge/（scripts+SKILL+
-                                                   docs+doubao 可选+.wbx-install.json 安装自证 manifest）+ AGENTS.md
-                                                   标记块 + ~/.wbx 运行时（--adopt 迁移项目凭证；检测到 v28 前旧布局
-                                                   ~/.zcode/wbx-bridge/ 时自动一次性迁移并时间戳备份，可续跑自愈）
-  node wbx.mjs self-uninstall [--purge]            全局卸载（--purge 连 ~/.wbx/ 凭证一起删，默认保留）
-  node wbx.mjs export-bundle [--out <dir|.zip>]    生成分发 zip（零凭证自检；含 INSTALL-README.md）
-  node wbx.mjs install-user | uninstall-user       向 ~/.zcode/AGENTS.md 注入/移除全局分派标记块（v2 兼容）
+  node wbx.mjs self-install                         安装：复制技能目录到 ~/.zcode/skills/wb-bridge/（scripts+SKILL+
+                                                    docs+doubao 可选+.wbx-install.json 版本自证 manifest）；
+                                                    不写 AGENTS 块/自启钩子/全局运行时；检测到 v28 及更早旧形态
+                                                    痕迹（AGENTS 块/钩子/旧目录/commands/wbx.md）时一次性清扫
+                                                    （幂等；~/.wbx 凭证绝不自动迁移，仅提示）
+  node wbx.mjs self-uninstall                       卸载（删技能目录+停守护+一次性清扫；各项目 .wbx/ 含凭证保留）
+  node wbx.mjs export-bundle [--out <dir|.zip>]     生成分发 zip（零凭证自检；含 INSTALL-README.md；默认落 <git 根>/.wbx/export/）
   node wbx.mjs doubao  <doubao.mjs 子命令与参数…>   豆包桌面桥手工直通（v6.3 可选工具·v13 兼第四 lane 的零落盘旁路·
                                                    Windows-only：status | new-task | configure | send | read | ask；
                                                    参数原样转发，子命令说明见 doubao.mjs 自身 usage；不经调度、
