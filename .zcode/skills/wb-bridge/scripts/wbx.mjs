@@ -587,23 +587,9 @@ async function cmdExportBundle(opts) {
   }
 }
 
-// ---------- 子命令：ui（守护化 + 自启钩子） ----------
+// ---------- 子命令：ui（守护化；每项目独立状态与日志） ----------
 async function cmdUi(opts) {
   const daemon = await import('./wbx-daemon.mjs');
-  if (opts.installAutostart) {
-    try {
-      const r = await daemon.installAutostart();
-      console.log(`[OK] ${r.message}`);
-    } catch (e) { die(e.message); }
-    await exitWith(0);
-  }
-  if (opts.removeAutostart) {
-    try {
-      const r = await daemon.removeAutostart();
-      console.log(`[OK] ${r.message}`);
-    } catch (e) { die(e.message); }
-    await exitWith(0);
-  }
   if (opts.stop) {
     const r = await daemon.stopUi({ port: opts.port ?? UI_DEFAULT_PORT });   // 自定端口的无状态实例也能探测到
     console.log(`${r.ok ? '[OK] ' : '[FAIL] '}${r.message}`);
@@ -621,8 +607,8 @@ async function cmdUi(opts) {
     await exitWith(0);
   }
   if (opts.detach) {
-    // 钩子路径（SessionStart 也走这里）：必须秒回且永远 exit 0，失败只打印/落日志。
-    // 输出走 stderr：宿主会把钩子 stdout 按 JSON 严格 schema 解析，保持 stdout 为空最稳。
+    // 必须秒回且永远 exit 0（脚本化拉起路径），失败只打印/落日志。
+    // 输出走 stderr：宿主按 stdout JSON 严格解析的场景保持 stdout 为空最稳。
     const r = await daemon.detachUi({ port: opts.port ?? UI_DEFAULT_PORT });
     console.error(`${r.ok ? '[OK] ' : '[FAIL] '}${r.message}`);
     await exitWith(0);
@@ -698,8 +684,6 @@ const FLAGS = [
   { name: '--stop', val: 'bool' },
   { name: '--status', val: 'bool' },
   { name: '--daemon', val: 'bool' },
-  { name: '--install-autostart', val: 'bool' },
-  { name: '--remove-autostart', val: 'bool' },
   { name: '--out', val: 'str' },
   { name: '--json', val: 'bool' },
   { name: '--stdin', val: 'bool' },
@@ -759,7 +743,7 @@ const COMMANDS = [
   { name: 'self-install', fn: () => cmdSelfInstall(), desc: '安装（复制技能目录到 ~/.zcode/skills/wb-bridge + 一次性清扫旧形态痕迹；不写 AGENTS/钩子/全局运行时）' },
   { name: 'self-uninstall', fn: () => cmdSelfUninstall(), desc: '卸载（删技能目录+停守护+清扫；各项目 .wbx/ 含凭证保留）' },
   { name: 'export-bundle', fn: (o) => cmdExportBundle(o), desc: '分发打包（零凭证 zip + 自检；默认落 <git 根>/.wbx/export/）' },
-  { name: 'ui', fn: (o) => cmdUi(o), desc: '本地 Web UI（--detach 守护 / --stop / --status / 自启钩子）' },
+  { name: 'ui', fn: (o) => cmdUi(o), desc: '本地 Web UI（--detach 守护 / --stop / --status；每项目独立，被占可 --port 换端口）' },
   { name: 'doubao', fn: null, desc: '豆包桌面桥手工直通（参数原样转发 doubao.mjs，零落盘旁路）' },
 ];
 
@@ -858,10 +842,9 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                                                    候选仅由扫描枚举、凭证四目录任何路径不可达；
                                                    symlink/junction 跳过；删除失败记 skipped 不影响退出码
   node wbx.mjs ui      [--port 7788] [--no-open]   本地 Web UI（仅 127.0.0.1；状态/路由/免费模型选择/ask/fanout/历史/登录）
-                     [--detach]                    后台守护启动（幂等：已在跑则复用，绝不重复拉起；日志 ~/.wbx/logs/ui.log）
+                     [--detach]                    后台守护启动（幂等：同项目已在跑则复用；状态/日志随 <运行时根>/run|logs；
+                                                   守护每项目化——7788 被他人/他项目占用时报错退出，--port 换端口另起）
                      [--stop] / [--status]         停止守护进程（HTTP 优雅优先）/ 查看三态（运行中/残留/未运行）
-                     [--install-autostart]         装 ZCode SessionStart 钩子：新开会话自动拉起控制台（需全局形态）
-                     [--remove-autostart]          摘除自启钩子（config.json 其余键原样保留）
   node wbx.mjs self-install                         安装：复制技能目录到 ~/.zcode/skills/wb-bridge/（scripts+SKILL+
                                                     docs+doubao 可选+.wbx-install.json 版本自证 manifest）；
                                                     不写 AGENTS 块/自启钩子/全局运行时；检测到 v28 及更早旧形态
@@ -887,7 +870,7 @@ ${COMMANDS.map((c) => `  ${(c.name + ' ').padEnd(16)} ${c.desc}`).join('\n')}
 ${FLAGS.map((f) => `  ${f.name.padEnd(22)}${(f.alias || []).map((a) => `${a} `).join('').padEnd(8)}${f.val === 'bool' ? '开关' : f.val === 'int' ? '整数' : '取值'}`).join('\n')}
 
 退出码：0 成功 / 1 失败（含校验错误 die）；usage 命令自然排空不强制退出（Windows libuv 兼容特例）；
-ui --detach 恒 0（钩子路径须秒回，失败只落日志）；wbx-daemon 专用退出码 78（守护协议，不经本 CLI）。
+ui --detach 恒 0（脚本化拉起路径须秒回，失败只落日志）；wbx-daemon 专用退出码 78（守护协议，不经本 CLI）。
 
 环境变量（均可选）：WBX_HOME（运行时根）、WBX_CLI、WBX_CLINE（cline 二进制）、WBX_CODEX（codex 二进制）、
 WBX_MODEL、WBX_PROJECT_ROOT、WBX_PRODUCT_CONFIG（login 模板）`;
