@@ -12,6 +12,8 @@
 
 </div>
 
+<!-- 文件预算 ≤13312B（docs-governance ⑦e） -->
+
 > [!IMPORTANT]
 > 三个诚实声明，先说在前面：① 这是**个人非官方工具**，与 WorkBuddy、腾讯、智谱、Cline 均无关联；② 目前仅支持 **Windows**；③ 这是**临时工具**——它依附的免费策略随时可能变化，不再划算就卸载（见 [UNINSTALL.md](UNINSTALL.md)），不要恋战。
 
