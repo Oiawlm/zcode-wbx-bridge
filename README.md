@@ -65,7 +65,7 @@ flowchart LR
 git clone https://github.com/Oiawlm/zcode-wbx-bridge.git
 cd zcode-wbx-bridge
 
-:: 2) 一分钟安装：复制技能目录（原子复制到 ~/.zcode/skills/wb-bridge/，manifest v3 版本自证；也可手动复制整个 .zcodeskillswb-bridge）
+:: 2) 一分钟安装：复制技能目录（原子复制到 ~/.zcode/skills/wb-bridge/，manifest v3 版本自证；也可手动复制整个 .zcode\skills\wb-bridge）
 node .zcode\skills\wb-bridge\scripts\wbx.mjs self-install
 
 :: 3) 登录（国内版微信扫码；各一次，凭证约 55 天）
