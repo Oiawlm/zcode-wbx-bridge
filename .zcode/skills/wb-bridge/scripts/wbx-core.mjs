@@ -25,7 +25,7 @@ import {
   CLINE_HOME, CLINE_WORK_DIR, CODEX_HOME, CODEX_WORK_DIR, SCRATCH_ROOT, L0_CWD_DIR,
 } from './wbx-paths.mjs';
 
-export const WBX_VERSION = '6.15.1';
+export const WBX_VERSION = '6.16.0';
 
 // 双 lane 身份表（endpoint/platform 是兜底值，实际以模板为准）
 export const IDENTITIES = {

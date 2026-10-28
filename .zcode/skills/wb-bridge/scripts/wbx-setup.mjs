@@ -114,14 +114,15 @@ const skillEntryScript = () => path.join(GLOBAL_SKILL_DIR, 'scripts', 'wbx.mjs')
 // 项目级 skill → 用户级安装副本的文本适配。改写按结构而非整句字面量匹配：
 //   ① `<!-- wbx:project-only -->…<!-- /wbx:project-only -->` 标记段=项目形态专属内容，全局版整段删除
 //     （标记是 SKILL.md 作者与安装器之间的契约，段内文案怎么改都不影响安装）；
-//   ② 相对入口路径改写为安装期绝对路径（禁 `~`——PowerShell 对原生程序不展开）。
+//   ② 入口命令（`node <桥>/scripts/wbx.mjs` 占位形态，兼容旧相对路径串）改写为安装期绝对路径（禁 `~`——PowerShell 对原生程序不展开）。
 //     运行时路径不改写：v29 起安装副本与项目副本同为 cwd 派生（<git 根>/.wbx），文案同源。
 export function globalSkillText(sourceSkill) {
   const gscript = skillEntryScript();
   return sourceSkill
     .replace(/<!-- wbx:project-only -->[\s\S]*?<!-- \/wbx:project-only -->\n?/g, '')
+    .replace(/node "?<桥>[\\/]scripts[\\/]wbx\.mjs"?/g, `node "${gscript}"`)
     .replace(/node "?\.zcode[\\/]skills[\\/]wb-bridge[\\/]scripts[\\/]wbx\.mjs"?/g, `node "${gscript}"`)
-    .replace(/\.zcode[\\/]skills[\\/]wb-bridge[\\/]scripts[\\/]wbx\.mjs/g, gscript)
+    .replace(/(?:<桥>|\.zcode[\\/]skills[\\/]wb-bridge)[\\/]scripts[\\/]wbx\.mjs/g, gscript)
     + '\n> 注：本文件是用户级安装副本（唯一技能目录 ~/.zcode/skills/wb-bridge/，命令入口为安装期绝对路径；同目录 .wbx-install.json 为版本自证 manifest；运行时根随 cwd 所在项目派生）。本副本遮蔽同名项目级 skill。\n';
 }
 
