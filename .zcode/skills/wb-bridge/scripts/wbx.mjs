@@ -12,21 +12,21 @@
  * 默认路由三分：单发 auto=codex 就绪即优先、否则 ai 免费优先；fanout 批量缺省免费池（codex 点名才投）；
  * 失败/限流自动回退下一 lane（各一次，付费两档排后）。
  *
- * 约束：绝不写 ~/.workbuddy、~/.workbuddy-ai；凭证只存 .wbx/ 或 ~/.wbx/（均 gitignore），
+ * 约束：绝不写 ~/.workbuddy、~/.workbuddy-ai；凭证只存 <git 根>/.wbx/（已 gitignore），
  * 绝不打印其内容。
  */
 
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { SCRIPT_DIR, RUNTIME_ROOT, JOBS_DIR, LEGACY_TASKS_DIR, HOME, CODEX_HOME } from './wbx-paths.mjs';
+import { RUNTIME_ROOT, JOBS_DIR, HOME, CODEX_HOME } from './wbx-paths.mjs';
 import {
   WBX_VERSION,
   IDENTITIES, LANE_ORDER, STDIN_THRESHOLD, CONFIG_DEFS,
   UI_DEFAULT_PORT,
   clineReady, clineProvidersFile, clineHomeDir, runClineAuth,
   die, DieSignal, redact, brief, fmtMs,
-  ensureDirs, readStdin, migrateIfNeeded,
+  ensureDirs, readStdin,
   loadConfig, setConfig,
   resolveDefaultLane, parseLane, laneReady, resolveDoubaoDir,
   askOnce, resolveModel, fetchClineFreeModels, laneBalance,
@@ -34,7 +34,6 @@ import {
   listJobs, getJob,
   startLogin, pollLoginToken, fetchAccountInfo, persistLogin,
   doctorStatus,
-  USER_AGENTS_PATH, installUserBlock, uninstallUserBlock,
   openBrowser, exitWith,
 } from './wbx-core.mjs';
 import { selfInstall, selfUninstall, exportBundle } from './wbx-setup.mjs';
@@ -491,7 +490,7 @@ async function cmdHistory(opts) {
     const last = opts.last ?? 10;
     const jobs = listJobs().slice(0, last);
     if (!jobs.length) {
-      console.log(`（没有历史 job：${JOBS_DIR} 与旧 ${LEGACY_TASKS_DIR} 均为空）`);
+      console.log(`（没有历史 job：${JOBS_DIR} 为空）`);
       await exitWith(0);
     }
     const w = { time: 20, type: 8, total: 6, rate: 8, lanes: 16 };
@@ -500,7 +499,7 @@ async function cmdHistory(opts) {
       const t = j.createdAt ? new Date(j.createdAt).toLocaleString('zh-CN', { hour12: false }) : j.id;
       console.log([
         String(t).padEnd(w.time),
-        (j.type + (j.legacy ? '(旧)' : '')).padEnd(w.type),
+        j.type.padEnd(w.type),
         String(j.total ?? '?').padEnd(w.total),
         (j.successRate == null ? '?' : j.successRate + '%').padEnd(w.rate),
         fmtLaneDist(j.laneDist).padEnd(w.lanes),
@@ -511,10 +510,10 @@ async function cmdHistory(opts) {
     await exitWith(0);
   }
   const job = await getJob(arg);
-  if (!job) die(`找不到 job ${arg}（在 ${JOBS_DIR} 与旧 ${LEGACY_TASKS_DIR} 中均无）`);
+  if (!job) die(`找不到 job ${arg}（在 ${JOBS_DIR} 中无）`);
   const tasks = opts.task ? job.tasks.filter((t) => t.id === opts.task) : job.tasks;
   if (opts.task && !tasks.length) die(`job ${arg} 中没有任务 ${opts.task}（可用：${job.tasks.map((t) => t.id).join(', ')}）`);
-  console.error(`job ${job.id}  类型=${job.type}${job.legacy ? '（旧 tasks/ 兼容）' : ''}  状态=${job.status}  目录=${job.dir}`);
+  console.error(`job ${job.id}  类型=${job.type}  状态=${job.status}  目录=${job.dir}`);
   console.error(`任务数=${job.total ?? '?'}  成功率=${job.successRate == null ? '?' : job.successRate + '%'}  lane 分布=${fmtLaneDist(job.laneDist)}${job.durationMs != null ? `  总耗时=${fmtMs(job.durationMs)}` : ''}\n`);
   for (const t of tasks) {
     const r = t.record;
@@ -553,41 +552,23 @@ async function cmdClean(opts) {
   }
 }
 
-// ---------- 子命令：install-user / uninstall-user（v2 兼容，保留原语义） ----------
-async function cmdInstallUser() {
-  const p = await installUserBlock(path.join(SCRIPT_DIR, 'wbx.mjs'));
-  console.log(`[OK] 已注入/更新全局分派块 -> ${p}`);
-  console.error('生效范围：所有项目的 ZCode 会话（用户级 AGENTS.md）。移除：node wbx.mjs uninstall-user');
-  console.error('提示：要完整全局形态（用户级 skill 目录 + AGENTS 块 + ~/.wbx 运行时），用 wbx self-install');
-  await exitWith(0);
-}
-
-async function cmdUninstallUser() {
-  const r = await uninstallUserBlock();
-  console.log(r.removed
-    ? (r.fileDeleted ? `[OK] 已移除全局分派块；文件已空，连同 ${USER_AGENTS_PATH} 一起删除` : `[OK] 已移除全局分派块（保留 ${USER_AGENTS_PATH} 其余内容）`)
-    : `[OK] 无需移除（${r.reason === 'file-missing' ? `${USER_AGENTS_PATH} 不存在` : '没有 wbx 标记块'}）`);
-  await exitWith(0);
-}
-
 // ---------- 子命令：self-install / self-uninstall ----------
-async function cmdSelfInstall(opts) {
+async function cmdSelfInstall() {
   try {
-    const r = await selfInstall({ adopt: !!opts.adopt, keepProject: !opts.noKeepProject });
-    console.log(`[OK] 全局安装完成（v${WBX_VERSION}）：`);
+    const r = await selfInstall();
+    console.log(`[OK] 安装完成（v${WBX_VERSION}）：`);
     for (const line of r.report) console.log(`  - ${line}`);
-    console.error(`\n入口：node "${r.script}"（唯一技能目录 ~/.zcode/skills/wb-bridge/，.wbx-install.json 自证）`);
-    console.error('任何项目的 ZCode 会话现在都能主动分派（AGENTS 块 + 显式 /wb-bridge 技能调用；/wbx 斜杠命令已退役）。');
-    console.error('本项目桥后续也使用 ~/.wbx/ 全局运行时（凭证共享）。卸载：node wbx.mjs self-uninstall [--purge]');
+    console.error(`\n入口：node "${r.script}"（唯一技能目录 ~/.zcode/skills/wb-bridge/，.wbx-install.json 版本自证）`);
+    console.error('运行时随项目走：任何项目内 cwd 即得 <git 根>/.wbx（新项目零配置即用）。卸载：node wbx.mjs self-uninstall');
     await exitWith(0);
   } catch (e) {
     die(e.message);
   }
 }
 
-async function cmdSelfUninstall(opts) {
-  const r = await selfUninstall({ purge: !!opts.purge });
-  console.log('[OK] 全局卸载完成：');
+async function cmdSelfUninstall() {
+  const r = await selfUninstall();
+  console.log('[OK] 卸载完成：');
   for (const line of r.report) console.log(`  - ${line}`);
   await exitWith(0);
 }
@@ -606,23 +587,9 @@ async function cmdExportBundle(opts) {
   }
 }
 
-// ---------- 子命令：ui（守护化 + 自启钩子） ----------
+// ---------- 子命令：ui（守护化；每项目独立状态与日志） ----------
 async function cmdUi(opts) {
   const daemon = await import('./wbx-daemon.mjs');
-  if (opts.installAutostart) {
-    try {
-      const r = await daemon.installAutostart();
-      console.log(`[OK] ${r.message}`);
-    } catch (e) { die(e.message); }
-    await exitWith(0);
-  }
-  if (opts.removeAutostart) {
-    try {
-      const r = await daemon.removeAutostart();
-      console.log(`[OK] ${r.message}`);
-    } catch (e) { die(e.message); }
-    await exitWith(0);
-  }
   if (opts.stop) {
     const r = await daemon.stopUi({ port: opts.port ?? UI_DEFAULT_PORT });   // 自定端口的无状态实例也能探测到
     console.log(`${r.ok ? '[OK] ' : '[FAIL] '}${r.message}`);
@@ -640,8 +607,8 @@ async function cmdUi(opts) {
     await exitWith(0);
   }
   if (opts.detach) {
-    // 钩子路径（SessionStart 也走这里）：必须秒回且永远 exit 0，失败只打印/落日志。
-    // 输出走 stderr：宿主会把钩子 stdout 按 JSON 严格 schema 解析，保持 stdout 为空最稳。
+    // 必须秒回且永远 exit 0（脚本化拉起路径），失败只打印/落日志。
+    // 输出走 stderr：宿主按 stdout JSON 严格解析的场景保持 stdout 为空最稳。
     const r = await daemon.detachUi({ port: opts.port ?? UI_DEFAULT_PORT });
     console.error(`${r.ok ? '[OK] ' : '[FAIL] '}${r.message}`);
     await exitWith(0);
@@ -674,7 +641,7 @@ async function cmdDoubao(restArgs) {
   if (!dir) {
     die(
       '未找到豆包桥 doubao.mjs（已查：全局 ~/.zcode/skills/wb-bridge/doubao/ 与仓库 tools/doubao-bridge/）。\n' +
-      '全局形态：在装有本桥的源码仓里跑 wbx self-install，会把 tools/doubao-bridge/ 一并复制到 ~/.zcode/skills/wb-bridge/doubao/。\n' +
+      '安装副本：在装有本桥的源码仓里跑 wbx self-install，会把 tools/doubao-bridge/ 一并复制到 ~/.zcode/skills/wb-bridge/doubao/。\n' +
       '豆包桥是可选工具（Windows-only），缺失不影响其余 lane（ai/cn/cline）。'
     );
   }
@@ -717,8 +684,6 @@ const FLAGS = [
   { name: '--stop', val: 'bool' },
   { name: '--status', val: 'bool' },
   { name: '--daemon', val: 'bool' },
-  { name: '--install-autostart', val: 'bool' },
-  { name: '--remove-autostart', val: 'bool' },
   { name: '--out', val: 'str' },
   { name: '--json', val: 'bool' },
   { name: '--stdin', val: 'bool' },
@@ -726,9 +691,6 @@ const FLAGS = [
   { name: '--no-probe', val: 'bool' },
   { name: '--quick', val: 'bool' },
   { name: '--force', val: 'bool' },
-  { name: '--adopt', val: 'bool' },
-  { name: '--no-keep-project', val: 'bool' },
-  { name: '--purge', val: 'bool' },
   { name: '--version', alias: ['-v'], val: 'bool' },
   { name: '--help', alias: ['-h'], val: 'bool' },
 ];
@@ -778,12 +740,10 @@ const COMMANDS = [
   { name: 'config', fn: (o) => cmdConfig(o), desc: 'list | get <key> | set <key> <value>（存 config.json）' },
   { name: 'history', fn: (o) => cmdHistory(o), desc: '历史列表 / 完整回放双向对话' },
   { name: 'clean', fn: (o) => cmdClean(o), desc: '产物回收（缺省干跑报告零删；--apply 实删；--jobs/--scratch/--lane-cache 分域；--force 免确认）' },
-  { name: 'install-user', fn: () => cmdInstallUser(), desc: 'legacy：向 ~/.zcode/AGENTS.md 注入标记块' },
-  { name: 'uninstall-user', fn: () => cmdUninstallUser(), desc: 'legacy：移除用户级标记块' },
-  { name: 'self-install', fn: (o) => cmdSelfInstall(o), desc: '用户级全局安装（~/.zcode/skills/wb-bridge 单技能目录 + AGENTS 块 + ~/.wbx；旧布局自动迁移）' },
-  { name: 'self-uninstall', fn: (o) => cmdSelfUninstall(o), desc: '全局卸载（--purge 连凭证目录删）' },
-  { name: 'export-bundle', fn: (o) => cmdExportBundle(o), desc: '分发打包（零凭证 zip + 自检）' },
-  { name: 'ui', fn: (o) => cmdUi(o), desc: '本地 Web UI（--detach 守护 / --stop / --status / 自启钩子）' },
+  { name: 'self-install', fn: () => cmdSelfInstall(), desc: '安装（复制技能目录到 ~/.zcode/skills/wb-bridge + 一次性清扫旧形态痕迹；不写 AGENTS/钩子/全局运行时）' },
+  { name: 'self-uninstall', fn: () => cmdSelfUninstall(), desc: '卸载（删技能目录+停守护+清扫；各项目 .wbx/ 含凭证保留）' },
+  { name: 'export-bundle', fn: (o) => cmdExportBundle(o), desc: '分发打包（零凭证 zip + 自检；默认落 <git 根>/.wbx/export/）' },
+  { name: 'ui', fn: (o) => cmdUi(o), desc: '本地 Web UI（--detach 守护 / --stop / --status；每项目独立，被占可 --port 换端口）' },
   { name: 'doubao', fn: null, desc: '豆包桌面桥手工直通（参数原样转发 doubao.mjs，零落盘旁路）' },
 ];
 
@@ -803,7 +763,7 @@ lane：codex = Codex CLI（可选第五 lane·ChatGPT Plus 质量优先档：单
 cn→ai→cline→codex→doubao 各一次（免费 lane 失败不自动烧 Plus/会员额度，付费两档排后）。
 失败/限流自动跨 lane 回退（仍是 DeepSeek；cline 内部绝不换非 DeepSeek 模型顶替）；cline 未装/未登录
 直接跳过；doubao 调试口不在线时 ask 秒退失败自然跳过；codex 额度冷却期 laneReady=false 自动跳过。
-运行时根：WBX_HOME env -> ~/.wbx/（安装 manifest 自证=全局形态；WBX_FORM=global|project 逃生门） -> 项目 .wbx/
+运行时根：WBX_HOME env（测试注入） -> <git 根>/.wbx（从 cwd 向上找 .git，无则 cwd 兜底）——每项目独立。
 cline 隔离：桥的 cline 状态只在 <运行时根>/cline-home/（HOME 覆盖），绝不读写用户 ~/.cline。
 codex 隔离：CODEX_HOME=<运行时根>/codex-home（--ignore-user-config 运行）；凭证=login --identity codex
 一次性只读复制 ~/.codex/auth.json（唯一显式授权例外，绝不回写）。
@@ -882,18 +842,16 @@ doubao 零凭证：登录态由你在豆包客户端内自理；「wbx doubao �
                                                    候选仅由扫描枚举、凭证四目录任何路径不可达；
                                                    symlink/junction 跳过；删除失败记 skipped 不影响退出码
   node wbx.mjs ui      [--port 7788] [--no-open]   本地 Web UI（仅 127.0.0.1；状态/路由/免费模型选择/ask/fanout/历史/登录）
-                     [--detach]                    后台守护启动（幂等：已在跑则复用，绝不重复拉起；日志 ~/.wbx/logs/ui.log）
+                     [--detach]                    后台守护启动（幂等：同项目已在跑则复用；状态/日志随 <运行时根>/run|logs；
+                                                   守护每项目化——7788 被他人/他项目占用时报错退出，--port 换端口另起）
                      [--stop] / [--status]         停止守护进程（HTTP 优雅优先）/ 查看三态（运行中/残留/未运行）
-                     [--install-autostart]         装 ZCode SessionStart 钩子：新开会话自动拉起控制台（需全局形态）
-                     [--remove-autostart]          摘除自启钩子（config.json 其余键原样保留）
-  node wbx.mjs self-install [--adopt] [--no-keep-project]
-                                                   全局安装：唯一技能目录 ~/.zcode/skills/wb-bridge/（scripts+SKILL+
-                                                   docs+doubao 可选+.wbx-install.json 安装自证 manifest）+ AGENTS.md
-                                                   标记块 + ~/.wbx 运行时（--adopt 迁移项目凭证；检测到 v28 前旧布局
-                                                   ~/.zcode/wbx-bridge/ 时自动一次性迁移并时间戳备份，可续跑自愈）
-  node wbx.mjs self-uninstall [--purge]            全局卸载（--purge 连 ~/.wbx/ 凭证一起删，默认保留）
-  node wbx.mjs export-bundle [--out <dir|.zip>]    生成分发 zip（零凭证自检；含 INSTALL-README.md）
-  node wbx.mjs install-user | uninstall-user       向 ~/.zcode/AGENTS.md 注入/移除全局分派标记块（v2 兼容）
+  node wbx.mjs self-install                         安装：复制技能目录到 ~/.zcode/skills/wb-bridge/（scripts+SKILL+
+                                                    docs+doubao 可选+.wbx-install.json 版本自证 manifest）；
+                                                    不写 AGENTS 块/自启钩子/全局运行时；检测到 v28 及更早旧形态
+                                                    痕迹（AGENTS 块/钩子/旧目录/commands/wbx.md）时一次性清扫
+                                                    （幂等；~/.wbx 凭证绝不自动迁移，仅提示）
+  node wbx.mjs self-uninstall                       卸载（删技能目录+停守护+一次性清扫；各项目 .wbx/ 含凭证保留）
+  node wbx.mjs export-bundle [--out <dir|.zip>]     生成分发 zip（零凭证自检；含 INSTALL-README.md；默认落 <git 根>/.wbx/export/）
   node wbx.mjs doubao  <doubao.mjs 子命令与参数…>   豆包桌面桥手工直通（v6.3 可选工具·v13 兼第四 lane 的零落盘旁路·
                                                    Windows-only：status | new-task | configure | send | read | ask；
                                                    参数原样转发，子命令说明见 doubao.mjs 自身 usage；不经调度、
@@ -912,7 +870,7 @@ ${COMMANDS.map((c) => `  ${(c.name + ' ').padEnd(16)} ${c.desc}`).join('\n')}
 ${FLAGS.map((f) => `  ${f.name.padEnd(22)}${(f.alias || []).map((a) => `${a} `).join('').padEnd(8)}${f.val === 'bool' ? '开关' : f.val === 'int' ? '整数' : '取值'}`).join('\n')}
 
 退出码：0 成功 / 1 失败（含校验错误 die）；usage 命令自然排空不强制退出（Windows libuv 兼容特例）；
-ui --detach 恒 0（钩子路径须秒回，失败只落日志）；wbx-daemon 专用退出码 78（守护协议，不经本 CLI）。
+ui --detach 恒 0（脚本化拉起路径须秒回，失败只落日志）；wbx-daemon 专用退出码 78（守护协议，不经本 CLI）。
 
 环境变量（均可选）：WBX_HOME（运行时根）、WBX_CLI、WBX_CLINE（cline 二进制）、WBX_CODEX（codex 二进制）、
 WBX_MODEL、WBX_PROJECT_ROOT、WBX_PRODUCT_CONFIG（login 模板）`;
@@ -928,7 +886,6 @@ async function main() {
     if (opts.help) { console.log(HELP); await exitWith(0); }   // 显式 --help=正常输出（stdout/0）；裸调用=用法提示（stderr/1）
     console.error(HELP); await exitWith(1);
   }
-  migrateIfNeeded();
   const hit = COMMANDS.find((c) => c.name === cmd);
   if (!hit || !hit.fn) die(`未知子命令 ${cmd}（--help 查看用法）`);
   return hit.fn(opts);

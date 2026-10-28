@@ -1,27 +1,26 @@
 /**
- * wbx-daemon — wbx 控制台守护化生命周期 + ZCode 自启钩子
+ * wbx-daemon — wbx 控制台守护化生命周期
  *
  * 职责：
  *   - 纯函数集（状态解析/判陈旧/Host·Origin 白名单/判活决策）：零依赖零副作用，可独立测试
- *   - 状态文件 <运行时根>/run/ui.json：{pid, port, startedAt, token, version}
+ *   - 状态文件 <运行时根>/run/ui.json：{pid, port, startedAt, token, version}——守护每项目化（v29）：
+ *     UI 守护绑定「启动时解析的运行时根」，起于哪个项目服务哪个 .wbx/（状态与日志均在 RT/run|logs）。
  *     三条件判活（状态文件 + kill(pid,0) + GET /__health pid 匹配）+ startedAt 跨重启判废；
- *     二次启动永远复用绝不新起（幂等是自启钩子的关键性质）。
+ *     二次启动永远复用绝不新起（幂等）。
  *   - ui --detach / --stop / --status / 内部 --daemon（真服务由 wbx-ui.mjs 提供）
- *   - ui --install-autostart / --remove-autostart：对 ~/.zcode/cli/config.json 只做
- *     读-改-写合并（绝不删除/改写既有键；按 command 路径幂等去重；enabled 仅在我们
- *     引入首个配置钩子时置 true，并用 marker 文件记住，卸载时可精确还原）。
+ *   - 端口策略：默认 7788；同 RT 重复 --detach=幂等复用；被他人/他项目守护占用=明确报错退出
+ *     +提示 `--port` 旗标换端口（绝不误占、绝不杀未知 pid）。
  *
  * 安全红线：daemon 只绑 127.0.0.1；绝不 spawn shell（直接 node.exe + 参数向量）；
  * 绝不 kill 状态文件之外的未知 pid；token 只存 ui.json（gitignore），绝不打印。
  */
 
 import fs from 'node:fs';
-import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { SCRIPT_DIR, GLOBAL_SKILL_DIR, HOME, UI_RUN_DIR, UI_LOG_DIR, UI_STATE_FILE, UI_LOG_FILE } from './wbx-paths.mjs';
+import { SCRIPT_DIR, UI_RUN_DIR, UI_LOG_DIR, UI_STATE_FILE, UI_LOG_FILE } from './wbx-paths.mjs';
 import { WBX_VERSION, UI_DEFAULT_PORT, ensureDirs } from './wbx-core.mjs';
 
 // ---------- 纯函数集（守护判活 + 请求安全；契约见 internal 测试） ----------
@@ -151,13 +150,6 @@ export function appendUiLog(line) {
   } catch { /* 日志失败不致命 */ }
 }
 
-// config.json 写回（统一格式：JSON.stringify(cfg, null, 2) + 换行）
-const persist_ = async (configPath, cfg) => {
-  const tmp = configPath + '.wbx-tmp';
-  await fsp.writeFile(tmp, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
-  await fsp.rename(tmp, configPath);
-};
-
 // ---------- 探测 ----------
 
 export function pidAlive(pid) {
@@ -231,7 +223,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * 幂等拉起守护进程。任何失败都以 {ok:false, message} 返回（调用方负责打印），
- * 绝不抛异常——该路径同时是 ZCode SessionStart 钩子路径，必须永远快速且安全返回。
+ * 绝不抛异常——脚本化拉起路径必须永远快速且安全返回。
  * @returns {{ok:boolean, action?:'reused'|'started', message:string, pid?:number, port?:number, url?:string}}
  */
 export async function detachUi({ port = UI_DEFAULT_PORT } = {}) {
@@ -257,18 +249,19 @@ export async function detachUi({ port = UI_DEFAULT_PORT } = {}) {
       return { ok: false, message: msg };
     }
 
-    // spawn 守护进程：直接 node.exe + 参数向量，绝不 shell；stdio 全部落 ui.log
+    // spawn 守护进程：直接 node.exe + 参数向量，绝不 shell；stdio 全部落 ui.log。
+    // cwd=父进程 cwd：守护每项目化——子进程按同一 cwd 解析 <git 根>/.wbx，绑定启动时所在项目
+    //（WBX_HOME 注入时子进程继承 env，同根；绝不以 SCRIPT_DIR 为 cwd——技能目录不是项目根）。
     const logFd = prepareUiLog();
     const entry = path.join(SCRIPT_DIR, 'wbx.mjs');
     const child = spawn(process.execPath, [entry, 'ui', '--daemon', '--port', String(port), '--no-open'], {
-      detached: true, stdio: ['ignore', logFd, logFd], windowsHide: true, cwd: SCRIPT_DIR,
+      detached: true, stdio: ['ignore', logFd, logFd], windowsHide: true, cwd: process.cwd(),
     });
     const childPid = child.pid;
     child.unref();
     fs.closeSync(logFd);
 
-    // 等就绪：health OK / 子进程退出 / 超时（3.5s——本函数是 SessionStart 钩子路径，
-    // 钩子超时 5s，总预算必须留余量；正常冷启动约 1-2s）
+    // 等就绪：health OK / 子进程退出 / 超时（3.5s——脚本化拉起路径预算须留余量；正常冷启动约 1-2s）
     const outcome = await new Promise((resolve) => {
       let done = false;
       const fin = (v) => { if (!done) { done = true; clearInterval(iv); clearTimeout(guard); resolve(v); } };
@@ -287,10 +280,17 @@ export async function detachUi({ port = UI_DEFAULT_PORT } = {}) {
         message: `控制台已后台启动（pid ${outcome.health.pid}）：${url(port)}（日志：${UI_LOG_FILE}）` };
     }
     if (outcome.exited) {
-      // 子进程没起来：可能是竞态输了（另一实例刚好绑定成功）→ 复探复用；否则报错（端口被外程序占用等）
+      // 子进程没起来。端口上有活 wbx 实例时区分归属（每项目化）：本 RT 状态文件记录同 pid
+      // =同项目竞态赢家 → 复用；否则=他人/他项目守护占用 → 明确报错+--port 换端口提示。
       const again = await fetchHealth(port, 1000);
       if (again.ok) {
-        return reuse(again.pid, port);
+        const cur = readUiState();
+        if (cur.ok && cur.state.pid === again.pid) {
+          return reuse(again.pid, port);
+        }
+        const msg = `端口 ${port} 已被其他 wbx 控制台占用（pid ${again.pid}，可能是其他项目的守护进程${cur.ok ? '' : '；本项目状态文件无此实例'}）。处理：wbx ui --detach --port <其他端口> 另起本项目控制台（占用详情：netstat -ano | findstr :${port}）`;
+        appendUiLog(`[detach] ${new Date().toISOString()} occupied-by-other pid=${again.pid}`);
+        return { ok: false, message: msg };
       }
       let tail = '';
       try { tail = fs.readFileSync(UI_LOG_FILE, 'utf8').split('\n').slice(-6).join('\n').trim(); } catch { /* 无日志 */ }
@@ -338,7 +338,7 @@ export async function stopUi({ port = UI_DEFAULT_PORT } = {}) {
   const { ok, state } = readUiState();
   if (!ok) {
     const h = await fetchHealth(port);
-    if (h.ok) return { ok: false, message: `守护状态文件不存在，但 ${port} 端口有本控制台实例（pid ${h.pid}，可能是前台模式）——请在对应终端 Ctrl+C 退出` };
+    if (h.ok) return { ok: false, message: `守护状态文件不存在，但 ${port} 端口有本控制台实例（pid ${h.pid}，可能是前台模式或其他项目的守护——每项目守护各自管理）。处理：前台实例在对应终端 Ctrl+C 退出；其他项目实例请到该项目内运行 wbx ui --stop` };
     return { ok: true, message: '控制台未在运行（无状态文件）' };
   }
   // 1) HTTP 优雅关闭（带 token）
@@ -430,140 +430,3 @@ export async function daemonMain({ port = UI_DEFAULT_PORT } = {}) {
   // 服务自身 keep-alive；此处不返回
 }
 
-// ---------- ZCode SessionStart 自启钩子 ----------
-
-export const ZCODE_CLI_CONFIG = path.join(HOME, '.zcode', 'cli', 'config.json');
-export const AUTOSTART_MARKER = path.join(UI_RUN_DIR, 'autostart-enabled-by-wbx');
-const AUTOSTART_STATUS = 'wbx 控制台保活';
-
-export function globalWbxScript() { return path.join(GLOBAL_SKILL_DIR, 'scripts', 'wbx.mjs'); }
-
-/** 我们的钩子条目（type:'process' 参数向量，无 shell；全局形态脚本绝对路径）。 */
-function buildHookEntry() {
-  return {
-    type: 'process',
-    command: process.execPath,
-    args: [globalWbxScript(), 'ui', '--detach', '--no-open'],
-    timeoutMs: 5000,
-    statusMessage: AUTOSTART_STATUS,
-  };
-}
-
-function isOurHookEntry(e) {
-  return !!(e && typeof e === 'object' && Array.isArray(e.args)
-    && e.args[0] === globalWbxScript() && e.args[1] === 'ui' && e.args[2] === '--detach');
-}
-
-function entryEq(a, b) {
-  return JSON.stringify([a.type, a.command, a.args, a.timeoutMs, a.statusMessage])
-    === JSON.stringify([b.type, b.command, b.args, b.timeoutMs, b.statusMessage]);
-}
-
-/**
- * 安装自启钩子：读-改-写合并 ~/.zcode/cli/config.json。
- * 合并铁律：绝不删除/改写既有键；既有结构类型异常则中止不动文件；按 command 路径幂等去重；
- * hooks.enabled 仅在「我们引入首个配置钩子」且原值非 true 时置 true（marker 记录，卸载可精确还原）。
- * @returns {{installed:boolean, message:string}}
- */
-export async function installAutostart({ configPath = ZCODE_CLI_CONFIG } = {}) {
-  const scriptPath = globalWbxScript();
-  if (!fs.existsSync(scriptPath)) {
-    throw new Error(`全局形态未安装（缺 ${scriptPath}）：自启钩子必须指向全局形态脚本。先运行：wbx self-install`);
-  }
-  let cfg = {};
-  if (fs.existsSync(configPath)) {
-    try { cfg = JSON.parse(await fsp.readFile(configPath, 'utf8')); } catch (e) {
-      throw new Error(`读取 ${configPath} 失败（${e.message}）——为避免破坏既有配置，已中止，未做任何写入`);
-    }
-  }
-  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error(`${configPath} 根结构不是 JSON 对象，已中止`);
-
-  const hooks = (cfg.hooks && typeof cfg.hooks === 'object' && !Array.isArray(cfg.hooks)) ? cfg.hooks : undefined;
-  const events = hooks && (hooks.events && typeof hooks.events === 'object' && !Array.isArray(hooks.events)) ? hooks.events : undefined;
-  const sessionStart = events && Array.isArray(events.SessionStart) ? events.SessionStart : undefined;
-  // 既有键类型异常（非预期结构）→ 中止，绝不猜测重排
-  if (cfg.hooks !== undefined && !hooks) throw new Error('config.json 的 hooks 键存在但不是对象——已中止（不破坏未知结构）');
-  if (hooks && hooks.events !== undefined && !events) throw new Error('config.json 的 hooks.events 键存在但不是对象——已中止（不破坏未知结构）');
-  if (events && events.SessionStart !== undefined && !sessionStart) throw new Error('config.json 的 hooks.events.SessionStart 键存在但不是数组——已中止（不破坏未知结构）');
-
-  const existing = (sessionStart || []).flatMap((g) => (g && Array.isArray(g.hooks)) ? g.hooks : []);
-  const ours = existing.find(isOurHookEntry);
-  const entry = buildHookEntry();
-
-  const target = hooks ?? (cfg.hooks = {});
-  const ev = events ?? (target.events = {});
-  const list = sessionStart ?? (ev.SessionStart = []);
-  if (ours) {
-    if (entryEq(ours, entry)) return { installed: false, message: `自启钩子已存在且一致（${configPath}），无需重复安装` };
-    // 更新我们自己的旧条目（仅此情形允许改写）
-    const idx = list.findIndex((g) => g && Array.isArray(g.hooks) && g.hooks.some((h) => h === ours));
-    const ourGroup = list[idx];
-    const hIdx = ourGroup.hooks.indexOf(ours);
-    ourGroup.hooks[hIdx] = entry;
-    await persist_(configPath, cfg);
-    return { installed: true, message: `自启钩子已更新（路径/参数与当前全局形态对齐）：${configPath}` };
-  }
-  list.push({ matcher: '^startup$', hooks: [entry] });
-
-  // enabled 逻辑：仅当 enabled 键「缺失」且此刻无其他钩子（我们引入首个配置钩子）才置 true；
-  // 用户显式 enabled:false（无论有无其他钩子）一律不翻转，如实告警。
-  const hadEnabled = Object.prototype.hasOwnProperty.call(target, 'enabled');
-  const otherHooksExist = Object.values(ev).some((v) => Array.isArray(v) && v.some((g) => g && Array.isArray(g.hooks) && g.hooks.some((h) => !isOurHookEntry(h))));
-  if (!hadEnabled) {
-    if (otherHooksExist) {
-      await persist_(configPath, cfg);
-      return { installed: true, message: `钩子已写入 ${configPath}，但存在其他钩子而 hooks.enabled 未设置——未擅自开启。要启用请手动置 hooks.enabled=true` };
-    }
-    target.enabled = true;
-    fs.mkdirSync(UI_RUN_DIR, { recursive: true });
-    fs.writeFileSync(AUTOSTART_MARKER, JSON.stringify({ enabledBefore: 'absent', at: new Date().toISOString() }) + '\n', 'utf8');
-  } else if (target.enabled !== true) {
-    await persist_(configPath, cfg);
-    return { installed: true, message: `钩子已写入 ${configPath}，但 hooks.enabled 当前显式为 ${String(target.enabled)}（用户意图，未擅自翻转）。要启用请手动置 hooks.enabled=true` };
-  }
-  fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  await persist_(configPath, cfg);
-  const enNote = hadEnabled ? '' : '（hooks.enabled 由本命令首次开启，已记录 marker，--remove-autostart 时可还原）';
-  return { installed: true, message: `自启钩子已安装：新开 ZCode 会话即自动拉起控制台（浏览器开 http://127.0.0.1:${UI_DEFAULT_PORT}）${enNote}` };
-}
-
-/**
- * 摘除我们的钩子：精确移除我们写入的条目；enabled 若是我们加的（marker 在且 events 已空）则还原；
- * 结构清空到什么都没有时连 hooks 键一起移除，恢复到安装前的形状。
- * @returns {{removed:boolean, message:string}}
- */
-export async function removeAutostart({ configPath = ZCODE_CLI_CONFIG } = {}) {
-  if (!fs.existsSync(configPath)) return { removed: false, message: `未安装（${configPath} 不存在）` };
-  let cfg;
-  try { cfg = JSON.parse(await fsp.readFile(configPath, 'utf8')); } catch (e) {
-    throw new Error(`读取 ${configPath} 失败（${e.message}）——已中止，未做任何写入`);
-  }
-  const hooks = cfg && typeof cfg === 'object' && cfg.hooks && typeof cfg.hooks === 'object' ? cfg.hooks : null;
-  const events = hooks && hooks.events && typeof hooks.events === 'object' ? hooks.events : null;
-  const list = events && Array.isArray(events.SessionStart) ? events.SessionStart : null;
-  if (!list || !list.some((g) => g && Array.isArray(g.hooks) && g.hooks.some(isOurHookEntry))) {
-    return { removed: false, message: `未安装（${configPath} 的 SessionStart 里没有 wbx 钩子）` };
-  }
-  for (const g of list) {
-    if (g && Array.isArray(g.hooks)) g.hooks = g.hooks.filter((h) => !isOurHookEntry(h));
-  }
-  const cleaned = list.filter((g) => g && Array.isArray(g.hooks) && g.hooks.length > 0);
-  if (cleaned.length) events.SessionStart = cleaned;
-  else delete events.SessionStart;
-
-  const eventsEmpty = !events || Object.keys(events).length === 0;
-  if (eventsEmpty) {
-    delete hooks.events;
-    // enabled 若是我们加的（marker 记录 enabledBefore），按记录还原：原本缺失→删键
-    if (fs.existsSync(AUTOSTART_MARKER)) {
-      let enabledBefore = 'absent';
-      try { enabledBefore = JSON.parse(fs.readFileSync(AUTOSTART_MARKER, 'utf8')).enabledBefore ?? 'absent'; } catch { /* 按缺失处理 */ }
-      if (enabledBefore === 'absent') delete hooks.enabled;
-      else if (typeof enabledBefore === 'boolean') hooks.enabled = enabledBefore;
-      fs.rmSync(AUTOSTART_MARKER, { force: true });
-    }
-    if (!Object.keys(hooks).length) delete cfg.hooks; // hooks 清空则整个移除，恢复原状
-  }
-  await persist_(configPath, cfg);
-  return { removed: true, message: `自启钩子已摘除${eventsEmpty ? '（钩子结构已清空的键一并还原）' : '（其他既有钩子原样保留）'}：${configPath}` };
-}

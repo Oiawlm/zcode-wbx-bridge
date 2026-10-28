@@ -508,7 +508,7 @@ const LANE_ORDER_UI=['__WBX_LANE_ORDER_UI__'];   // 自 core LANE_ORDER 派生�
 const FAN_LANE_LABELS=Object.assign({},LANE_LABEL,{codex:'Codex（点名）'});   // 除 codex 点名外全部继承 LANE_LABEL（字典单源化第一步，v23 评审）
 function fanLaneOptions(sel){var o='<option value="">自动（免费池）</option>';LANE_ORDER_UI.forEach(function(k){o+='<option value="'+k+'"'+(sel===k?' selected':'')+'>'+FAN_LANE_LABELS[k]+'</option>'});return o}
 const BS=String.fromCharCode(92); // 反斜杠常量（模板字符串安全，不写反斜杠字面量）
-const WBX_PS='node "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'scripts'+BS+'wbx.mjs'; // 全局入口命令前缀（cmd 写法）
+const WBX_PS='node "%USERPROFILE%'+BS+'.zcode'+BS+'skills'+BS+'wb-bridge'+BS+'scripts'+BS+'wbx.mjs'; // 安装副本入口命令前缀（cmd 写法；与 wbx-ui WBX_ENTRY_CMD 同源）
 function lsGet(k){try{return localStorage.getItem(k)}catch(e){return null}}   // 隐私模式等存储不可用：降级不抛
 function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){/* 不阻塞主流程 */}}
 function laneLabel(k){return LANE_LABEL[k]||k||''}
@@ -698,7 +698,7 @@ async function loadStatus(){
   try{
     const s=await api('GET','/api/status');
     CUR=s;
-    $('hdr-meta').textContent='v'+s.version+' · '+(s.form==='global'?'全局形态':'项目形态')+' · '+shortRoot(s.runtimeRoot);
+    $('hdr-meta').textContent='v'+s.version+' · '+shortRoot(s.runtimeRoot);
     $('hdr-meta').title=String(s.runtimeRoot||'');
     $('status-error').hidden=true;
     renderOvw(s);
@@ -903,7 +903,7 @@ function doubaoCardHtml(l){
   const badge='<span class="badge neutral" id="doubao-badge">检测中…</span>';
   const askCmd=WBX_PS+'" ask --as doubao "任务文本"';
   const doubaoAskCmd=WBX_PS+'" doubao ask "任务文本"';
-  const launchCmd='powershell -ExecutionPolicy Bypass -File "%USERPROFILE%'+BS+'.zcode'+BS+'wbx-bridge'+BS+'doubao'+BS+'launch.ps1" -Force';
+  const launchCmd='powershell -ExecutionPolicy Bypass -File "%USERPROFILE%'+BS+'.zcode'+BS+'skills'+BS+'wb-bridge'+BS+'doubao'+BS+'launch.ps1" -Force';
   const stCmd=WBX_PS+'" doubao status';
   const ntCmd=WBX_PS+'" doubao new-task';
   const cfgCmd=WBX_PS+'" doubao configure';
@@ -926,14 +926,14 @@ function doubaoCardHtml(l){
     +'<p class="hint">调度入口（第四 lane，进历史记录；免费 lane 优先，豆包排回退链最末）'+hint2+'。</p>'
     +'<details aria-expanded="false"><summary>使用说明与排障</summary><div class="dbd">'
     +'<p class="hint">诚实声明（三处必读）：① 这是临时工具——依托豆包客户端当前 UI 结构（data-testid 锚点）工作，客户端升级随时可能失效；② Windows-only——依赖 Windows 进程模型、netstat 与 PowerShell，未在其他平台验证；③ 非官方——豆包官方未公开桌面端编程接口，本工具走 Chromium 官方调试开关（CDP）驱动已登录客户端，与字节跳动无关，不属于任何受支持的集成方式。</p>'
-    +'<p class="hint">前置条件：Windows 10/11 + Node.js ≥ 18（playwright-core 已随 doubao/ 目录复制，无需下载浏览器）；豆包桌面端已登录（登录态由你在豆包 GUI 内自理，本工具不做任何凭证自动化，脚本与文档零凭证）；豆包需以调试端口运行。工具位置：全局形态 ~/.zcode/wbx-bridge/doubao/（self-install 复制，v6.3 起）；本仓库开发形态 tools/doubao-bridge/。</p>'
+    +'<p class="hint">前置条件：Windows 10/11 + Node.js ≥ 18（playwright-core 已随 doubao/ 目录复制，无需下载浏览器）；豆包桌面端已登录（登录态由你在豆包 GUI 内自理，本工具不做任何凭证自动化，脚本与文档零凭证）；豆包需以调试端口运行。工具位置：安装副本 ~/.zcode/skills/wb-bridge/doubao/（self-install 复制）；本仓库开发形态 tools/doubao-bridge/。</p>'
     +'<p class="hint">启动方式（检测到豆包已运行时，需 -Force 才会结束它们；请先保存豆包里未发送的草稿）：</p>'
     +'<div class="copyline"><span class="t">'+esc(launchCmd)+'</span>'+copyBtn(launchCmd)+'</div>'
     +'<div class="warn-box">调试口开放期间=本地攻击面：本机任意进程可经 9225 接管已登录客户端；launch.ps1 已校验只绑 127.0.0.1。用完正常退出豆包、再普通启动，即恢复无调试态。</div>'
     +'<p class="hint">手工直通（零落盘旁路：不经调度、不入历史，个人对话用这条；分步命令同 doubao.mjs）：</p>'
     +'<div class="copyline"><span class="t">'+esc(doubaoAskCmd)+'</span>'+copyBtn(doubaoAskCmd)+'</div>'
     +'<p class="hint">装过 self-install 后任何项目任何目录可用。一条命令=新工作任务→显式配 Pro+推理「高」→发送→取回结果；本仓库开发形态仍可 cd tools/doubao-bridge/ 后 node doubao.mjs …。</p>'
-    +'<p class="hint">桥脚本位置（doubao.mjs 双候选：全局 ~/.zcode/wbx-bridge/doubao/ → 仓库 tools/doubao-bridge/）：</p>'
+    +'<p class="hint">桥脚本位置（doubao.mjs 双候选：安装副本 ~/.zcode/skills/wb-bridge/doubao/ → 仓库 tools/doubao-bridge/）：</p>'
     +'<div class="copyline"><span class="t">'+esc(l.bridgeDir||'未找到 doubao.mjs')+'</span>'+(l.bridgeDir?copyBtn(l.bridgeDir):'')+'</div>'
     +'<p class="hint">分步命令速查（全局入口 = '+WBX_PS+'"，下同；仓库形态=cd tools/doubao-bridge/ 后 node doubao.mjs）：</p>'
     +'<div class="copyline"><span class="t">'+esc(stCmd)+'</span>'+copyBtn(stCmd)+'</div>'

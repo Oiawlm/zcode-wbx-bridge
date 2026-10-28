@@ -38,7 +38,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
-import { RUNTIME_ROOT, JOBS_DIR, bridgeForm } from './wbx-paths.mjs';
+import { RUNTIME_ROOT, JOBS_DIR } from './wbx-paths.mjs';
 import {
   WBX_VERSION,
   LANE_ORDER, CONFIG_DEFS, UI_DEFAULT_PORT, crc32,
@@ -334,7 +334,6 @@ async function hStatus(req, res, m, u) {
   }
   sendJson(res, 200, {
     version: WBX_VERSION, runtimeRoot: RUNTIME_ROOT,
-    form: bridgeForm(),
     config: cfg, defaultLane: cfg['default-lane'], effectiveLane: resolveDefaultLane(),
     readyCount: lanes.filter((l) => l.ready && !l.disabled).length,
     lanes, clineFreeModels, clineFreeModelsNote,

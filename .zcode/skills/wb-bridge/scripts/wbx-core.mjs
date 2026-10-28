@@ -2,12 +2,13 @@
  * wbx-core — wbx 桥核心库（CLI 壳 wbx.mjs 与 Web UI wbx-ui.mjs 共用的可复用逻辑）
  *
  * 关键概念：
- *   - 运行时根（runtime root）解析：WBX_HOME env → ~/.wbx/（~/.zcode/wbx-bridge 存在
- *     即全局形态）→ 项目 .wbx/（项目形态，v2 现状）。
+ *   - 运行时根（runtime root）解析（v29 纯 Skill 形态）：WBX_HOME env → <git 根>/.wbx
+ *     （git 根=从 process.cwd() 向上最近含 .git 的目录；无则 fallback cwd）——每项目独立运行时，
+ *     派生单点见 ./wbx-paths.mjs。
  *   - config.json（存运行时根）：default-lane / disabled-lanes / parallel-per-lane /
  *     model / cli-path。
  *   - 统一 job 模型：每次 ask/fanout 落 <运行时根>/jobs/<id>/（manifest.json +
- *     tasks-input.json + <taskId>.json + summary.md）；旧 .wbx/tasks/ 只读兼容。
+ *     tasks-input.json + <taskId>.json + summary.md）。
  *
  * 红线：凭证（accessToken/refreshToken）绝不进入日志、文档、HTTP 响应、导出产物。
  */
@@ -20,15 +21,11 @@ import https from 'node:https';
 import path from 'node:path';
 import {
   PROJECT_ROOT, HOME, GLOBAL_SKILL_DIR, RUNTIME_ROOT, JOBS_DIR, SESSIONS_DIR, PRODUCT_DIR,
-  CONFIG_FILE, LEGACY_TASKS_DIR, LEGACY_JOBS_DIR, detectInstall,
+  CONFIG_FILE, SCRIPT_DIR, findGitRoot, readInstallManifest,
   CLINE_HOME, CLINE_WORK_DIR, CODEX_HOME, CODEX_WORK_DIR, SCRATCH_ROOT, L0_CWD_DIR,
 } from './wbx-paths.mjs';
 
 export const WBX_VERSION = '6.15.1';
-
-// ---------- v1 迁移源（项目 .wbx/ 旧凭证/旧产品配置；路径派生单点见 ./wbx-paths.mjs） ----------
-const OLD_SESSION_PATH = path.join(PROJECT_ROOT, '.wbx', 'session.json');        // v1 凭证（迁移源）
-const OLD_PRODUCT_PATH = path.join(PROJECT_ROOT, '.wbx', 'product-config.json'); // v1 产品配置（迁移源）
 
 // 双 lane 身份表（endpoint/platform 是兜底值，实际以模板为准）
 export const IDENTITIES = {
@@ -151,7 +148,7 @@ export function clineReady() {
 // 以调试口 9225 驱动桌面端，不读写任何豆包账号信息。目录双候选解析与 wbx.mjs cmdDoubao 同款。
 export function resolveDoubaoDir() {
   const candidates = [
-    path.join(GLOBAL_SKILL_DIR, 'doubao'),             // 全局形态：~/.zcode/skills/wb-bridge/doubao/（self-install 复制，v28-A 布局）
+    path.join(GLOBAL_SKILL_DIR, 'doubao'),             // 安装副本：~/.zcode/skills/wb-bridge/doubao/（self-install 复制）
     path.join(PROJECT_ROOT, 'tools', 'doubao-bridge'), // 仓库形态：桥源码仓的 v12 交付物
   ];
   return candidates.find((d) => fs.existsSync(path.join(d, 'doubao.mjs'))) || null;
@@ -1562,36 +1559,8 @@ export function parseLane(v) {
   return LANE_ORDER.includes(k) ? k : null;
 }
 
-// v1 -> v2 一次性迁移：session.json / product-config.json -> sessions/<id>.json / product/<id>.json
-function migrateLegacy() {
-  const oldS = fs.existsSync(OLD_SESSION_PATH);
-  const oldP = fs.existsSync(OLD_PRODUCT_PATH);
-  if (!oldS && !oldP) return null;
-  let id = 'cn';
-  try {
-    if (oldS) {
-      const j = JSON.parse(fs.readFileSync(OLD_SESSION_PATH, 'utf8'));
-      if (String(j?.platform || '').includes('workbuddy-ai')) id = 'ai';
-    } else {
-      const j = JSON.parse(fs.readFileSync(OLD_PRODUCT_PATH, 'utf8'));
-      const plat = String(j?.authentication?.attributes?.platform || j?.platform || '');
-      if (plat.includes('workbuddy-ai')) id = 'ai';
-    }
-  } catch { /* 解析失败按 cn 处理，内容原样搬运 */ }
-  fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-  fs.mkdirSync(PRODUCT_DIR, { recursive: true });
-  if (oldS && !fs.existsSync(IDENTITIES[id].sessionPath)) fs.copyFileSync(OLD_SESSION_PATH, IDENTITIES[id].sessionPath);
-  if (oldP && !fs.existsSync(IDENTITIES[id].productPath)) fs.copyFileSync(OLD_PRODUCT_PATH, IDENTITIES[id].productPath);
-  if (oldS) fs.rmSync(OLD_SESSION_PATH, { force: true });
-  if (oldP) fs.rmSync(OLD_PRODUCT_PATH, { force: true });
-  return id;
-}
-
-export function migrateIfNeeded() {
-  const mig = migrateLegacy();
-  if (mig) console.error(`[MIGRATE] 检测到 v1 单 lane 凭证，已迁移 -> sessions/${mig}.json + product/${mig}.json（旧文件已删除）`);
-  return mig;
-}
+// v1 单 lane 凭证迁移已随 v29 纯 Skill 化退役（运行时根恒为 <git 根>/.wbx，旧 session.json/
+// product-config.json 残留由 doctor 布局校验提示，不自动搬运）。
 
 // ---------- 进程与 HTTP ----------
 // taskkill 若不在进程退出前等待完成，会触发 libuv 断言（win32 async.c），
@@ -2387,7 +2356,7 @@ function jobIdToDate(id) {
   return new Date(+m[1].slice(0, 4), +m[1].slice(4, 6) - 1, +m[1].slice(6, 8), +m[2], +m[3], +m[4]);
 }
 
-export function summarizeJob(id, dir, { legacy = false } = {}) {
+export function summarizeJob(id, dir) {
   const manifestPath = path.join(dir, 'manifest.json');
   let manifest = null;
   try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { /* 旧格式无 manifest */ }
@@ -2408,7 +2377,7 @@ export function summarizeJob(id, dir, { legacy = false } = {}) {
   }
   const when = jobIdToDate(id) || (manifest?.createdAt ? new Date(manifest.createdAt) : null);
   return {
-    id, dir, legacy, type,
+    id, dir, type,
     createdAt: when ? when.toISOString() : null,
     status: manifest?.status || (recs.length ? 'done' : '?'),
     total: recs.length || (hasInput ? null : 0),
@@ -2418,10 +2387,10 @@ export function summarizeJob(id, dir, { legacy = false } = {}) {
   };
 }
 
-// job 目录三根枚举（新 jobs + 两个 legacy 只读根）单源：listJobs 共用，seen 去重防双计
+// job 目录枚举单源：listJobs 共用（v29 起 jobs/ 唯一根——v2 tasks/ 兼容读已随纯 Skill 化退役）
 function* jobRoots() {
   const seen = new Set();
-  for (const root of [JOBS_DIR, LEGACY_TASKS_DIR, LEGACY_JOBS_DIR]) {
+  for (const root of [JOBS_DIR]) {
     if (!root || seen.has(root) || !fs.existsSync(root)) continue;
     seen.add(root);
     let entries = [];
@@ -2429,16 +2398,16 @@ function* jobRoots() {
     for (const e of entries) {
       const dir = path.join(root, e);
       try { if (!fs.statSync(dir).isDirectory()) continue; } catch { continue; }
-      yield { key: e, dir, legacy: root !== JOBS_DIR };
+      yield { key: e, dir };
     }
   }
 }
 
-// job 列表：jobs/*（新）+ 项目 .wbx/tasks/*（v2 旧）+ 项目 .wbx/jobs/*（项目形态时期，只读兼容）
+// job 列表：<运行时根>/jobs/*
 export function listJobs() {
   const rows = [];
-  for (const { key, dir, legacy } of jobRoots()) {
-    rows.push(summarizeJob(key, dir, { legacy }));
+  for (const { key, dir } of jobRoots()) {
+    rows.push(summarizeJob(key, dir));
   }
   rows.sort((a, b) => String(b.id).localeCompare(String(a.id)));
   return rows;
@@ -2447,10 +2416,10 @@ export function listJobs() {
 export async function getJob(jobId) {
   // 安全：jobId 只允许 [A-Za-z0-9-_]，防路径穿越
   if (!/^[A-Za-z0-9_-]+$/.test(jobId)) return null;
-  const candidates = [path.join(JOBS_DIR, jobId), path.join(LEGACY_TASKS_DIR, jobId), path.join(LEGACY_JOBS_DIR, jobId)];
+  const candidates = [path.join(JOBS_DIR, jobId)];
   for (const dir of candidates) {
     if (!fs.existsSync(dir)) continue;
-    const summary = summarizeJob(jobId, dir, { legacy: !dir.startsWith(JOBS_DIR) });
+    const summary = summarizeJob(jobId, dir);
     let manifest = null, tasksInput = null, summaryMd = null;
     try { manifest = JSON.parse(await fsp.readFile(path.join(dir, 'manifest.json'), 'utf8')); } catch { /* 旧格式 */ }
     try { tasksInput = JSON.parse(await fsp.readFile(path.join(dir, 'tasks-input.json'), 'utf8')); } catch { /* 无输入文件 */ }
@@ -3067,17 +3036,16 @@ export async function persistLogin(ctx, authToken, account) {
 export async function doctorStatus({ probe = true, onLine = null, quick = false } = {}) {
   if (quick) probe = false;
   ensureDirs();
-  migrateIfNeeded();
   const say = (m) => { if (onLine) onLine(m); };
   const steps = [];
   const laneRows = [];
   let fail = 0;
   const cfg = loadConfig();
-  // 形态判定（v28-A 起单点=安装 manifest 自证；异常明确 FAIL，绝不静默降级）
-  let inst;
-  try { inst = detectInstall(); }
-  catch (e) { inst = { form: 'unknown', source: `manifest 异常：${e && e.message}`, installRoot: null }; }
-  const form = inst.form;
+  // 根解析（v29 纯 Skill 形态）：WBX_HOME 注入 → <git 根>/.wbx（cwd 向上找 .git，无则 cwd 兜底）。
+  // 派生单点=wbx-paths.mjs；此处仅报告（findGitRoot 同源探测，不二次派生路径）。
+  const envNote = process.env.WBX_HOME ? 'WBX_HOME 指定'
+    : process.env.WBX_PROJECT_ROOT ? 'WBX_PROJECT_ROOT 指定'
+    : (findGitRoot() ? 'git 根解析' : 'cwd 兜底（未找到 .git）');
 
   const step = (name, good, detail) => {
     steps.push({ name, good, detail });
@@ -3105,14 +3073,67 @@ export async function doctorStatus({ probe = true, onLine = null, quick = false 
     step('cli', cliExists, cliExists ? cliPath : `入口不存在（${cliPath}）；App 升级后路径可能变化 -> 修复：wbx config set cli-path "<新路径>"`);
   }
 
-  // 3) 运行时布局 + 根解析表（v28-A：form/installRoot/runtime/scratch/jobs 一屏可见）
-  const formNote = process.env.WBX_HOME ? 'WBX_HOME 指定' : (form === 'global' ? '全局形态' : form === 'project' ? '项目形态' : '形态判定失败');
-  step('runtime', form !== 'unknown',
-    `${formNote}（${inst.source}）：${RUNTIME_ROOT}{/sessions,/product,/config/<lane>,/jobs}${form === 'global' && !process.env.WBX_HOME ? '' : '（不入 git）'}\n` +
-    `    根解析表：form=${form}  installRoot=${inst.installRoot || '(项目形态无安装根)'}\n` +
+  // 3) 运行时布局 + 根解析表（v29：每项目运行时；runtime/projectRoot/scratch/jobs 一屏可见）
+  step('runtime', true,
+    `每项目运行时（${envNote}）：${RUNTIME_ROOT}{/sessions,/product,/config/<lane>,/jobs}（不入 git）\n` +
+    `    根解析表：runtime=${RUNTIME_ROOT}  projectRoot=${PROJECT_ROOT}\n` +
     `    runtime=${RUNTIME_ROOT}  scratch=${SCRATCH_ROOT}  jobs=${JOBS_DIR}`);
 
-  // 3b) 产物生命周期（v28B）：三键生效值 + 三域体积概览（静态只读，--quick 亦显示；回收预览走 wbx clean 干跑）
+  // 3a) 运行副本 manifest（v3 仅版本自证；v2 旧自证形态 → 一次性升级提示，不拦截运行）
+  const mRead = readInstallManifest(SCRIPT_DIR);
+  if (mRead.status === 'ok' && mRead.note) {
+    steps.push({ name: 'manifest', good: null, detail: mRead.note });
+    say(`[INFO] manifest ${mRead.note}`);
+  }
+
+  // 3b) 锁定布局校验（v29：.wbx/ 条目闭集——jobs/sessions/product/config(.json)/cline-home/codex-home/
+  //     scratch/l0-cwd/run/logs/export/codex-quota.json/login-url-*.txt；闭集外条目=WARN 提示不 FAIL）
+  {
+    const ALLOWED = new Set(['jobs', 'sessions', 'product', 'config', 'config.json', 'cline-home', 'codex-home', 'scratch', 'l0-cwd', 'run', 'logs', 'export', 'codex-quota.json']);
+    const isAllowed = (n) => ALLOWED.has(n) || /^login-url-(ai|cn)\.txt$/.test(n);
+    let entries = [];
+    try { entries = fs.readdirSync(RUNTIME_ROOT); } catch { /* 尚未创建（首次运行） */ }
+    const unknown = entries.filter((n) => !isAllowed(n));
+    if (unknown.length) {
+      const detail = unknown.map((n) => n === 'tasks'
+        ? 'tasks（v2 fanout 旧结果目录——兼容读已随 v29 退役，确认无需回放后可删）'
+        : `${n}（锁定布局闭集外，非本桥产物？请确认来源后手动清理）`).join('、');
+      steps.push({ name: 'layout', good: null, detail: `未知条目：${detail}` });
+      say(`[WARN] layout  未知条目：${detail}`);
+    } else {
+      step('layout', null, `条目均在锁定布局闭集内（${entries.length} 项）`);
+    }
+  }
+
+  // 3c) 家目录残留一次性提示（v29 迁移期；纯文件读，--quick 亦显示；只提示不代做——凭证绝不自动迁移）
+  {
+    const notes = [];
+    const oldGlobalRt = path.join(HOME, '.wbx');
+    if (fs.existsSync(oldGlobalRt)) {
+      const oldHasCred = LANE_ORDER.some((l) => fs.existsSync(path.join(oldGlobalRt, 'sessions', `${l}.json`)));
+      const curHasCred = LANE_ORDER.some((l) => fs.existsSync(path.join(SESSIONS_DIR, `${l}.json`)));
+      if (oldHasCred && !curHasCred) {
+        notes.push(`检测到旧全局运行时 ~/.wbx/ 凭证且本项目 .wbx/ 无凭证：v29 起运行时随项目——到本项目重新 wbx login --identity cn|ai，或自行复制 ~/.wbx/{sessions,product} 到本项目 .wbx/（凭证绝不自动迁移，由你自决）`);
+      }
+    }
+    try {
+      if (fs.readFileSync(path.join(HOME, '.zcode', 'AGENTS.md'), 'utf8').includes('<!-- wbx:begin -->')) {
+        notes.push('检测到 ~/.zcode/AGENTS.md 旧标记块（v29 安装不再写入）：重跑 wbx self-install 一次性清扫（或 wbx self-uninstall）');
+      }
+    } catch { /* 文件不存在 */ }
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(HOME, '.zcode', 'cli', 'config.json'), 'utf8'));
+      const list = j?.hooks?.events?.SessionStart;
+      const hasHook = Array.isArray(list) && list.some((g) => g && Array.isArray(g.hooks) && g.hooks.some((h) => h && Array.isArray(h.args) && h.args[1] === 'ui' && h.args[2] === '--detach' && typeof h.args[0] === 'string' && /[\\/]wbx\.mjs$/.test(h.args[0])));
+      if (hasHook) notes.push('检测到 ~/.zcode/cli/config.json 旧自启钩子条目（v29 已退役）：重跑 wbx self-install 一次性清扫');
+    } catch { /* 不存在/不可解析 */ }
+    if (notes.length) {
+      steps.push({ name: 'residue', good: null, detail: notes.join('；') });
+      for (const n of notes) say(`[INFO] residue  ${n}`);
+    }
+  }
+
+  // 3d) 产物生命周期（v28B）：三键生效值 + 三域体积概览（静态只读，--quick 亦显示；回收预览走 wbx clean 干跑）
   {
     const sizeOf = (p) => (fs.existsSync(p) ? dirSizeBytes(p) : 0);
     const laneCacheBytes = LANE_CACHE_LANES.reduce((a, l) => a + LANE_CACHE_SUBDIRS.reduce((b, s) => b + sizeOf(path.join(RUNTIME_ROOT, 'config', l, s)), 0), 0);
@@ -3315,8 +3336,8 @@ export async function doctorStatus({ probe = true, onLine = null, quick = false 
         // WARN 而非 FAIL：拉起属用户侧动作，不影响 ai/cn/cline 主通道（doctor 保持只读、绝不带 ensure 副作用）
         steps.push({ name: 'lane-doubao', good: null, detail: probeDetail });
         const autoNote = loadConfig()['doubao-autostart'] === false
-          ? `拉起：powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"（详情：wbx doubao status）`
-          : `派发到达豆包 lane 时将自动拉起/重启（doubao-autostart=true；现在手动拉起：powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"，详情：wbx doubao status）`;
+          ? `拉起：powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\skills\\wb-bridge\\doubao\\launch.ps1"（详情：wbx doubao status）`
+          : `派发到达豆包 lane 时将自动拉起/重启（doubao-autostart=true；现在手动拉起：powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\skills\\wb-bridge\\doubao\\launch.ps1"，详情：wbx doubao status）`;
         say(`[WARN] 桌面端   ${probeDetail}。${autoNote}`);
       }
       laneRows.push({ ...dinfo, probe: { good: online, detail: probeDetail } });
@@ -3376,61 +3397,9 @@ export async function doctorStatus({ probe = true, onLine = null, quick = false 
   if (!ready.length) fail++;   // 探测失败计数只在步骤级（聚合补加会使 ai/cn 失败双计，v23 评审 P3）
 
   return {
-    ok: fail === 0, fail, form, runtimeRoot: RUNTIME_ROOT, version: WBX_VERSION,
-    installRoot: inst.installRoot, installSource: inst.source,
+    ok: fail === 0, fail, runtimeRoot: RUNTIME_ROOT, projectRoot: PROJECT_ROOT, version: WBX_VERSION,
     cliPath, steps, lanes: laneRows, config: cfg, readyLanes: ready,
     nightWindow: nightWindowState(),   // v24：结构化窗口字段（UI /api/doctor 消费，与 cn 段行同源）
   };
 }
 
-// ---------- 用户级 AGENTS.md 标记块（install-user / self-install 共用） ----------
-export const USER_AGENTS_PATH = path.join(HOME, '.zcode', 'AGENTS.md');
-export const USER_BLOCK_BEGIN = '<!-- wbx:begin -->';
-export const USER_BLOCK_END = '<!-- wbx:end -->';
-
-// 用户级块=跨项目最小指针版（v22 三层注入分工：全局只留指针，lane 细节归各仓库 AGENTS/SKILL——
-// 消除用户级块与仓库规则面约 90% 的双注入重复；v28-A 收拢：入口指向唯一技能目录，≤10 行）
-export function userBlockText(bridgeScriptPath) {
-  const wbx = `node "${bridgeScriptPath}"`;
-  return [
-    USER_BLOCK_BEGIN,
-    '## wbx 外部算力桥（默认分派：自包含子任务派外部五 lane 子代理）',
-    `- 自检：\`${wbx} doctor --quick\`（<10s 静态检查；排障用全量 doctor）`,
-    `- 单条：\`${wbx} ask --file <p.txt>\`（--as codex|ai|cn|cline|doubao 点名，失败自动回退）`,
-    `- 批量：\`${wbx} fanout --file <tasks.json>\`（任务可用 files:[路径] 拼材料）`,
-    `- 控制台：\`${wbx} ui --detach\`（http://127.0.0.1:7788；--stop 停止）`,
-    '- 准则与红线以各仓库 AGENTS.md / .zcode/skills/wb-bridge/SKILL.md 为准（涉密绝不外包；结果必校验）。',
-    USER_BLOCK_END,
-  ].join('\n');
-}
-
-const USER_BLOCK_RE = () => new RegExp(escapeRegExp(USER_BLOCK_BEGIN) + '[\\s\\S]*?' + escapeRegExp(USER_BLOCK_END), 'g');
-
-export async function installUserBlock(bridgeScriptPath) {
-  await fsp.mkdir(path.dirname(USER_AGENTS_PATH), { recursive: true });
-  const block = userBlockText(bridgeScriptPath);
-  let cur = '';
-  try { cur = await fsp.readFile(USER_AGENTS_PATH, 'utf8'); } catch { /* 新建 */ }
-  let next;
-  if (cur.includes(USER_BLOCK_BEGIN)) {
-    next = cur.replace(USER_BLOCK_RE(), '').replace(/\s+$/, '') + '\n\n' + block + '\n';
-  } else {
-    next = (cur ? cur.replace(/\s+$/, '') + '\n\n' : '') + block + '\n';
-  }
-  await fsp.writeFile(USER_AGENTS_PATH, next, 'utf8');
-  return USER_AGENTS_PATH;
-}
-
-export async function uninstallUserBlock() {
-  let cur = '';
-  try { cur = await fsp.readFile(USER_AGENTS_PATH, 'utf8'); }
-  catch { return { removed: false, reason: 'file-missing' }; }
-  if (!cur.includes(USER_BLOCK_BEGIN)) return { removed: false, reason: 'no-block' };
-  const next = cur.replace(USER_BLOCK_RE(), '').replace(/\n{3,}/g, '\n\n').trim();
-  if (!next) {
-    await fsp.rm(USER_AGENTS_PATH, { force: true });
-    return { removed: true, fileDeleted: true };
-  }
-  await fsp.writeFile(USER_AGENTS_PATH, next + '\n', 'utf8');
-  return { removed: true };
-}
