@@ -21,7 +21,7 @@ import https from 'node:https';
 import path from 'node:path';
 import {
   PROJECT_ROOT, HOME, GLOBAL_SKILL_DIR, RUNTIME_ROOT, JOBS_DIR, SESSIONS_DIR, PRODUCT_DIR,
-  CONFIG_FILE, findGitRoot,
+  CONFIG_FILE, SCRIPT_DIR, findGitRoot, readInstallManifest,
   CLINE_HOME, CLINE_WORK_DIR, CODEX_HOME, CODEX_WORK_DIR, SCRATCH_ROOT, L0_CWD_DIR,
 } from './wbx-paths.mjs';
 
@@ -3079,7 +3079,61 @@ export async function doctorStatus({ probe = true, onLine = null, quick = false 
     `    根解析表：runtime=${RUNTIME_ROOT}  projectRoot=${PROJECT_ROOT}\n` +
     `    runtime=${RUNTIME_ROOT}  scratch=${SCRATCH_ROOT}  jobs=${JOBS_DIR}`);
 
-  // 3b) 产物生命周期（v28B）：三键生效值 + 三域体积概览（静态只读，--quick 亦显示；回收预览走 wbx clean 干跑）
+  // 3a) 运行副本 manifest（v3 仅版本自证；v2 旧自证形态 → 一次性升级提示，不拦截运行）
+  const mRead = readInstallManifest(SCRIPT_DIR);
+  if (mRead.status === 'ok' && mRead.note) {
+    steps.push({ name: 'manifest', good: null, detail: mRead.note });
+    say(`[INFO] manifest ${mRead.note}`);
+  }
+
+  // 3b) 锁定布局校验（v29：.wbx/ 条目闭集——jobs/sessions/product/config(.json)/cline-home/codex-home/
+  //     scratch/l0-cwd/run/logs/export/codex-quota.json/login-url-*.txt；闭集外条目=WARN 提示不 FAIL）
+  {
+    const ALLOWED = new Set(['jobs', 'sessions', 'product', 'config', 'config.json', 'cline-home', 'codex-home', 'scratch', 'l0-cwd', 'run', 'logs', 'export', 'codex-quota.json']);
+    const isAllowed = (n) => ALLOWED.has(n) || /^login-url-(ai|cn)\.txt$/.test(n);
+    let entries = [];
+    try { entries = fs.readdirSync(RUNTIME_ROOT); } catch { /* 尚未创建（首次运行） */ }
+    const unknown = entries.filter((n) => !isAllowed(n));
+    if (unknown.length) {
+      const detail = unknown.map((n) => n === 'tasks'
+        ? 'tasks（v2 fanout 旧结果目录——兼容读已随 v29 退役，确认无需回放后可删）'
+        : `${n}（锁定布局闭集外，非本桥产物？请确认来源后手动清理）`).join('、');
+      steps.push({ name: 'layout', good: null, detail: `未知条目：${detail}` });
+      say(`[WARN] layout  未知条目：${detail}`);
+    } else {
+      step('layout', null, `条目均在锁定布局闭集内（${entries.length} 项）`);
+    }
+  }
+
+  // 3c) 家目录残留一次性提示（v29 迁移期；纯文件读，--quick 亦显示；只提示不代做——凭证绝不自动迁移）
+  {
+    const notes = [];
+    const oldGlobalRt = path.join(HOME, '.wbx');
+    if (fs.existsSync(oldGlobalRt)) {
+      const oldHasCred = LANE_ORDER.some((l) => fs.existsSync(path.join(oldGlobalRt, 'sessions', `${l}.json`)));
+      const curHasCred = LANE_ORDER.some((l) => fs.existsSync(path.join(SESSIONS_DIR, `${l}.json`)));
+      if (oldHasCred && !curHasCred) {
+        notes.push(`检测到旧全局运行时 ~/.wbx/ 凭证且本项目 .wbx/ 无凭证：v29 起运行时随项目——到本项目重新 wbx login --identity cn|ai，或自行复制 ~/.wbx/{sessions,product} 到本项目 .wbx/（凭证绝不自动迁移，由你自决）`);
+      }
+    }
+    try {
+      if (fs.readFileSync(path.join(HOME, '.zcode', 'AGENTS.md'), 'utf8').includes('<!-- wbx:begin -->')) {
+        notes.push('检测到 ~/.zcode/AGENTS.md 旧标记块（v29 安装不再写入）：重跑 wbx self-install 一次性清扫（或 wbx self-uninstall）');
+      }
+    } catch { /* 文件不存在 */ }
+    try {
+      const j = JSON.parse(fs.readFileSync(path.join(HOME, '.zcode', 'cli', 'config.json'), 'utf8'));
+      const list = j?.hooks?.events?.SessionStart;
+      const hasHook = Array.isArray(list) && list.some((g) => g && Array.isArray(g.hooks) && g.hooks.some((h) => h && Array.isArray(h.args) && h.args[1] === 'ui' && h.args[2] === '--detach' && typeof h.args[0] === 'string' && /[\\/]wbx\.mjs$/.test(h.args[0])));
+      if (hasHook) notes.push('检测到 ~/.zcode/cli/config.json 旧自启钩子条目（v29 已退役）：重跑 wbx self-install 一次性清扫');
+    } catch { /* 不存在/不可解析 */ }
+    if (notes.length) {
+      steps.push({ name: 'residue', good: null, detail: notes.join('；') });
+      for (const n of notes) say(`[INFO] residue  ${n}`);
+    }
+  }
+
+  // 3d) 产物生命周期（v28B）：三键生效值 + 三域体积概览（静态只读，--quick 亦显示；回收预览走 wbx clean 干跑）
   {
     const sizeOf = (p) => (fs.existsSync(p) ? dirSizeBytes(p) : 0);
     const laneCacheBytes = LANE_CACHE_LANES.reduce((a, l) => a + LANE_CACHE_SUBDIRS.reduce((b, s) => b + sizeOf(path.join(RUNTIME_ROOT, 'config', l, s)), 0), 0);
@@ -3282,8 +3336,8 @@ export async function doctorStatus({ probe = true, onLine = null, quick = false 
         // WARN 而非 FAIL：拉起属用户侧动作，不影响 ai/cn/cline 主通道（doctor 保持只读、绝不带 ensure 副作用）
         steps.push({ name: 'lane-doubao', good: null, detail: probeDetail });
         const autoNote = loadConfig()['doubao-autostart'] === false
-          ? `拉起：powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"（详情：wbx doubao status）`
-          : `派发到达豆包 lane 时将自动拉起/重启（doubao-autostart=true；现在手动拉起：powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\wbx-bridge\\doubao\\launch.ps1"，详情：wbx doubao status）`;
+          ? `拉起：powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\skills\\wb-bridge\\doubao\\launch.ps1"（详情：wbx doubao status）`
+          : `派发到达豆包 lane 时将自动拉起/重启（doubao-autostart=true；现在手动拉起：powershell -ExecutionPolicy Bypass -File "%USERPROFILE%\\.zcode\\skills\\wb-bridge\\doubao\\launch.ps1"，详情：wbx doubao status）`;
         say(`[WARN] 桌面端   ${probeDetail}。${autoNote}`);
       }
       laneRows.push({ ...dinfo, probe: { good: online, detail: probeDetail } });
