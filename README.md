@@ -12,13 +12,15 @@
 
 </div>
 
+<!-- 文件预算 ≤13312B（docs-governance ⑦e） -->
+
 > [!IMPORTANT]
 > 三个诚实声明，先说在前面：① 这是**个人非官方工具**，与 WorkBuddy、腾讯、智谱、Cline 均无关联；② 目前仅支持 **Windows**；③ 这是**临时工具**——它依附的免费策略随时可能变化，不再划算就卸载（见 [UNINSTALL.md](UNINSTALL.md)），不要恋战。
 
 
 ## 这是什么
 
-wbx 是本地命令行桥：把一次提问或一批任务按既定策略分派给**五条外部 AI 通道**（当作 ZCode 的子代理高频调用）——**codex**=Codex CLI（ChatGPT Plus 质量优先档，单发默认优先、额度耗尽自动让位）；**ai**=WorkBuddy 国际版（免费）；**cn**=国内版（近免费）；**cline**=Cline CLI（免费孪生）；**doubao**=豆包桌面端（会员额度）。免费与近免费 lane 底座为 DeepSeek V4.1 Flash。
+wbx 是本地命令行桥，整个桥打包为**一个可分发的 ZCode 技能目录**——复制即装、删即卸：把一次提问或一批任务按既定策略分派给**五条外部 AI 通道**（当作 ZCode 的子代理高频调用）——**codex**=Codex CLI（ChatGPT Plus 质量优先档，单发默认优先、额度耗尽自动让位）；**ai**=WorkBuddy 国际版（免费）；**cn**=国内版（近免费）；**cline**=Cline CLI（免费·限时轮换+每日配额）；**doubao**=豆包桌面端（会员额度）。免费与近免费 lane 底座为 DeepSeek V4.1 Flash。
 
 ```mermaid
 flowchart LR
@@ -26,7 +28,7 @@ flowchart LR
     W --> C["codex<br/>ChatGPT Plus 质量优先档"]
     W --> A["ai<br/>WorkBuddy 国际版（免费）"]
     W --> N["cn<br/>WorkBuddy 国内版（近免费）"]
-    W --> L["cline<br/>Cline CLI（免费孪生）"]
+    W --> L["cline<br/>Cline CLI（免费·限时轮换）"]
     W --> D["doubao<br/>豆包桌面端（会员额度）"]
 ```
 
@@ -37,7 +39,7 @@ flowchart LR
 - **路由自动化**：单发质量档优先、批量免费池、回退链与额度冷却自动让位——全程托管，语义见下方「两个常见澄清」。
 - **能力分级（caps）**：缺省纯文本零回退，可选联网只读白名单（带来源清单），越权声明即报错——绝不静默降档。
 - **本地控制台**：网页端四页签（状态/调用/历史/登录），浅深双主题，PWA 可安装，五通道状态一目了然。
-- **装得上退得净**：桥本体纯 Node ESM 零第三方依赖；`self-uninstall` 一键还原，安装物全部登记可查。
+- **纯 Skill 分发**：安装=复制一个技能目录（`self-install` 一条命令或手动复制），运行时全落各项目 `.wbx/`、家目录零写入（技能目录除外）；桥本体纯 Node ESM 零第三方依赖，`self-uninstall` 一键还原、安装物全部登记可查。
 
 ### cn lane 夜间免费档（v24）
 
@@ -65,7 +67,7 @@ flowchart LR
 git clone https://github.com/Oiawlm/zcode-wbx-bridge.git
 cd zcode-wbx-bridge
 
-:: 2) 在本仓库目录：全局安装（唯一技能目录 ~/.zcode/skills/wb-bridge/ + AGENTS 块 + ~/.wbx/）
+:: 2) 一分钟安装：复制技能目录（原子复制到 ~/.zcode/skills/wb-bridge/，manifest v3 版本自证；也可手动复制整个 .zcode\skills\wb-bridge）
 node .zcode\skills\wb-bridge\scripts\wbx.mjs self-install
 
 :: 3) 登录（国内版微信扫码；各一次，凭证约 55 天）
@@ -78,14 +80,14 @@ node "%USERPROFILE%\.zcode\skills\wb-bridge\scripts\wbx.mjs" login --identity ai
 node "%USERPROFILE%\.zcode\skills\wb-bridge\scripts\wbx.mjs" doctor --quick
 ```
 
-装完即用：任何项目的 ZCode 会话直接说「帮我调研 A、B、C」就会自动分派，也可显式调用 `/wb-bridge` 技能（`/wbx` 斜杠命令已于 v28 退役）。（self-install 已把 wbx 调用块写入用户级 `~/.zcode/AGENTS.md`，故任何项目皆可；检测到 v28 前旧布局会自动迁移；卸载时随 `self-uninstall` 一并清除。）
+装完即用：不写 AGENTS 注入、不装自启钩子、无全局运行时——任何项目的 ZCode 会话直接说「帮我调研 A、B、C」即可按技能触发条件自动分派，也可显式调用 `/wb-bridge` 技能。运行时全落**当前项目** `.wbx/`（在哪个项目里用，就落在哪个项目）。装过旧版本的机器，`self-install` 升级时自动一次性清扫旧形态痕迹（凭证绝不自动迁移，见 [UNINSTALL.md](UNINSTALL.md) 迁移指引）。
 
 ## 核心命令
 
 | 命令 | 用途 |
 |---|---|
 | `wbx ask --file p.txt` | 单发（stdout=结果；`--as codex\|ai\|cn\|cline\|doubao` 点名；`--caps "net,read"` 联网只读） |
-| `wbx fanout --file tasks.json` | 批量并行（任务可用 `files:[路径]` 拼材料、`"as":"codex"` 点名；结果落 `<运行时根>/jobs/<jobId>/`（默认 `~/.wbx/`；未跑 self-install 时为项目 `.wbx/`）） |
+| `wbx fanout --file tasks.json` | 批量并行（任务可用 `files:[路径]` 拼材料、`"as":"codex"` 点名；结果落 `<项目>/.wbx/jobs/<jobId>/`） |
 | `wbx doctor [--quick]` | 自检（`--quick` 秒级快检；全量含各 lane 模型探测） |
 | `wbx ui --detach` | 本地控制台 http://127.0.0.1:7788（状态/调用/历史/登录四页签，浅深双主题） |
 
@@ -120,19 +122,19 @@ node "%USERPROFILE%\.zcode\skills\wb-bridge\scripts\wbx.mjs" doctor --quick
 
 ## 安全与卸载（一句话版）
 
-- 凭证只存 `<运行时根>`（默认 `~/.wbx/`），绝不入日志/文档/导出包；不写 `~/.workbuddy*`、不读写 `~/.cline`；涉密不外包。
-- 一键还原：`wbx self-uninstall [--purge]`；安装物登记表见 [UNINSTALL.md](UNINSTALL.md)。
+- 凭证只存各项目 `.wbx/`（哪个项目登录就落哪个项目），绝不入日志/文档/导出包；不写 `~/.workbuddy*`、不读写 `~/.cline`；涉密不外包。
+- 一键还原：`wbx self-uninstall`（删技能目录+停守护+旧痕迹清扫），各项目 `.wbx/` 按需自删；安装物登记表见 [UNINSTALL.md](UNINSTALL.md)。
 
-运行时布局（全部为隔离目录，卸载即净）：
+运行时布局（全部落当前项目 `.wbx/`，隔离目录、删即净；全量布局见 [SKILL.md](.zcode/skills/wb-bridge/SKILL.md)）：
 
 | 路径 | 内容 |
 |---|---|
-| `~/.wbx/sessions · product · config/` | 各通道凭证与登录模板（安装/登录时生成） |
-| `~/.wbx/jobs/<jobId>/` | 每次调度的任务记录与结果（可整目录删除，不影响运行） |
-| `~/.wbx/cline-home/`、`~/.wbx/codex-home/` | cline / codex 隔离运行时（HOME/USERPROFILE、CODEX_HOME 覆盖实现隔离；绝不读写用户 `~/.cline`，`~/.codex` 仅一次性只读复制 auth.json 一例） |
+| `<项目>/.wbx/sessions · product · config/` | 各通道凭证与登录模板（登录时生成） |
+| `<项目>/.wbx/jobs/<jobId>/` | 每次调度的任务记录与结果（可整目录删除，不影响运行） |
+| `<项目>/.wbx/cline-home/`、`codex-home/` | cline / codex 隔离运行时（HOME/USERPROFILE、CODEX_HOME 覆盖实现隔离；绝不读写用户 `~/.cline`，`~/.codex` 仅一次性只读复制 auth.json 一例） |
 
 ## 更多文档
 
-[WBX.md](WBX.md)（技术总文档）· [HISTORY.md](HISTORY.md)（版本史归档）· [UI-SPEC.md](UI-SPEC.md)（控制台设计契约）· [CONTRIBUTING.md](CONTRIBUTING.md)（白名单与提交纪律）· [SECURITY.md](SECURITY.md)（安全问题与上报渠道）
+[.zcode/skills/wb-bridge/SKILL.md](.zcode/skills/wb-bridge/SKILL.md)（技能使用说明/完整工作流）· [WBX.md](WBX.md)（技术总文档）· [HISTORY.md](HISTORY.md)（版本史归档）· [UI-SPEC.md](UI-SPEC.md)（控制台设计契约）· [CONTRIBUTING.md](CONTRIBUTING.md)（白名单与提交纪律）· [SECURITY.md](SECURITY.md)（安全问题与上报渠道）
 
 再次强调（三处诚实声明见文首）：本工具**依赖第三方服务与 CLI**（WorkBuddy / DeepSeek / Cline / 豆包 / Codex），其服务条款、免费与定价策略、数据流向以各自官方约定为准——你通过本桥发送的内容会经过这些第三方服务；免费窗口随时可能变化，不再划算时请直接卸载（[UNINSTALL.md](UNINSTALL.md)）。使用本工具产生的任何费用、账号风险由使用者自行承担。

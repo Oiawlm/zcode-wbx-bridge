@@ -2,6 +2,18 @@
 
 本文件只记**用户可感知**的变更，每版 ≤15 行；格式参考 Keep a Changelog（新增/变更/修复）。
 历史版本（6.10.0 及更早）的完整条目已原文迁入 [HISTORY.md](HISTORY.md)（v22 历史外置定案），不在本文件重复维护。
+<!-- 文件预算 ≤20480B（docs-governance ⑦f）-->
+## [6.16.0] - 2026-10-28
+
+v29 轮：纯 Skill 化——安装=复制一个技能目录，运行时全落各项目 `.wbx/`，家目录零写入（技能目录除外）（定案=internal/goal-v29/SPEC.md；E1 代码实现 ∥ E2 文档面 → E4 终稿发布）。
+
+- **变更** 安装面收敛：删除用户级 AGENTS 标记块注入（install-user/uninstall-user 命令退役）、UI 自启钩子（`ui --install/--remove-autostart` 入口移除）、`~/.wbx/` 全局运行时与 WBX_FORM 双形态判定；安装足迹=唯一技能目录 + manifest v3（仅版本自证），幂等重装收口。
+- **变更** 运行时落项目：根解析=WBX_HOME→`<git 根>/.wbx/`（从 cwd 向上最近 .git、realpath 归一）；export-bundle 默认落点改 `.wbx/export/`（`--out` 可覆盖）；旧 `~/.wbx/` 凭证绝不自动迁移，doctor 输出一次性 INFO 指引。
+- **新增** self-install 升级清扫：探测 v28 全局形态痕迹（v2 manifest/旧目录/AGENTS 块/钩子条目）一次性幂等清扫，逐项报告成功/跳过/失败。
+- **变更** 控制台守护每项目化（绑定启动时解析的项目运行时根、同项目幂等复用），端口被他项目占用时明确报错，新增 `ui --port` 旗标。
+- **变更** glm-prompt-crafter 提示词工艺库分家独立仓库，不再随本桥分发。
+- **变更** 文档面收口：SKILL.md 按官方 Agent Skills 最佳实践重写（description 触发驱动发现+运行时落点表）；UNINSTALL.md 缩写至 60 行内；README/AGENTS/WBX/UI-SPEC 同步纯 Skill 形态。
+
 
 ## [6.15.1] - 2026-10-26
 
