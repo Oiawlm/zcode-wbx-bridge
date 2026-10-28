@@ -641,7 +641,7 @@ async function cmdDoubao(restArgs) {
   if (!dir) {
     die(
       '未找到豆包桥 doubao.mjs（已查：全局 ~/.zcode/skills/wb-bridge/doubao/ 与仓库 tools/doubao-bridge/）。\n' +
-      '全局形态：在装有本桥的源码仓里跑 wbx self-install，会把 tools/doubao-bridge/ 一并复制到 ~/.zcode/skills/wb-bridge/doubao/。\n' +
+      '安装副本：在装有本桥的源码仓里跑 wbx self-install，会把 tools/doubao-bridge/ 一并复制到 ~/.zcode/skills/wb-bridge/doubao/。\n' +
       '豆包桥是可选工具（Windows-only），缺失不影响其余 lane（ai/cn/cline）。'
     );
   }

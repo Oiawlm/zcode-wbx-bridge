@@ -148,7 +148,7 @@ export function clineReady() {
 // 以调试口 9225 驱动桌面端，不读写任何豆包账号信息。目录双候选解析与 wbx.mjs cmdDoubao 同款。
 export function resolveDoubaoDir() {
   const candidates = [
-    path.join(GLOBAL_SKILL_DIR, 'doubao'),             // 全局形态：~/.zcode/skills/wb-bridge/doubao/（self-install 复制，v28-A 布局）
+    path.join(GLOBAL_SKILL_DIR, 'doubao'),             // 安装副本：~/.zcode/skills/wb-bridge/doubao/（self-install 复制）
     path.join(PROJECT_ROOT, 'tools', 'doubao-bridge'), // 仓库形态：桥源码仓的 v12 交付物
   ];
   return candidates.find((d) => fs.existsSync(path.join(d, 'doubao.mjs'))) || null;

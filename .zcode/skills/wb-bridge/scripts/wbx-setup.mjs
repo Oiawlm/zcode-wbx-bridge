@@ -435,7 +435,11 @@ export async function selfInstall() {
   try { await copyDir(path.join(srcSkillDir, 'examples'), path.join(staging, 'examples')); } catch { /* 无 examples */ }
   await fsp.mkdir(path.join(staging, 'docs'), { recursive: true });
   for (const d of DOC_FILES) {
-    await copyIfExists(path.join(PROJECT_ROOT, d), path.join(staging, 'docs', d));
+    const dest = path.join(staging, 'docs', d);
+    // 源候选：分发包/安装副本自带 docs/（分发单元自足——从解压目录安装即命中）→ 源码仓根（仅源码仓 cwd 形态命中）
+    if (!await copyIfExists(path.join(srcSkillDir, 'docs', d), dest)) {
+      await copyIfExists(path.join(PROJECT_ROOT, d), dest);
+    }
   }
   report.push(`技能目录内容就绪 -> ${staging}{scripts×${CORE_SCRIPTS.length}, SKILL.md${fs.existsSync(path.join(staging, 'PROMPTS.md')) ? ', PROMPTS.md' : ''}${fs.existsSync(path.join(staging, 'examples')) ? ', examples' : ''}${fs.existsSync(path.join(staging, 'docs')) ? ', docs' : ''}}`);
 
